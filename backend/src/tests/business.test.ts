@@ -481,9 +481,21 @@ async function runStaticRoutingTests() {
   const landingPrices = readFileSync(path.join(projectRoot, "landing-public/prices.html"), "utf8");
   const frontendIndex = readFileSync(path.join(projectRoot, "frontend/dist/index.html"), "utf8");
   assert.match(landingIndex, /Сервис помощи для семьи, дома и близких/);
+  assert.match(landingIndex, /assets\/zabota-landing-logo\.png/);
+  assert.match(landingIndex, /<a class="logo" href="\/">Забота Рядом<\/a>/);
+  assert.doesNotMatch(landingIndex, /href="index\.html"/);
+  assert.doesNotMatch(landingIndex, /медицинские услуги/i);
   assert.match(landingPrices, /Цены/);
   assert.match(frontendIndex, /<div id="root"><\/div>/);
   assert.match(frontendIndex, /\/app\/assets\//);
+
+  const landingHtmlFiles = readdirSync(path.join(projectRoot, "landing-public")).filter((fileName) =>
+    fileName.endsWith(".html")
+  );
+  for (const fileName of landingHtmlFiles) {
+    const html = readFileSync(path.join(projectRoot, "landing-public", fileName), "utf8");
+    assert.doesNotMatch(html, /href=["'](?:https?:\/\/zabota-ugorsk\.ru)?\/?index\.html["']/i);
+  }
 
   const originalNodeEnv = env.nodeEnv;
   env.nodeEnv = "production";

@@ -724,12 +724,14 @@ async function main() {
   });
 
   console.log("Seed completed");
-  console.table([
-    { role: "superadmin", email: "admin@zabota.local", password },
-    { role: "client", email: "client@zabota.local", password },
-    { role: "performer", email: "performer@zabota.local", password },
-    { role: "performer", email: "performer2@zabota.local", password }
-  ]);
+  if (process.env.SEED_DEMO_DATA === "true" && (process.env.NODE_ENV !== "production" || process.env.DEMO_MODE === "true")) {
+    console.table([
+      { role: "superadmin", email: "admin@zabota.local", password },
+      { role: "client", email: "client@zabota.local", password },
+      { role: "performer", email: "performer@zabota.local", password },
+      { role: "performer", email: "performer2@zabota.local", password }
+    ]);
+  }
 }
 
 async function seedSettings() {

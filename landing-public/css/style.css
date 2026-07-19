@@ -80,13 +80,18 @@ a {
 
 .landing-cover {
   width: 100%;
+  padding: clamp(12px, 2.4vw, 26px) clamp(12px, 3vw, 34px) 0;
   background: #f7f3ed;
 }
 
 .landing-cover img {
   display: block;
-  width: 100%;
+  width: min(100%, 1680px);
+  max-height: min(72vh, 760px);
   height: auto;
+  margin: 0 auto;
+  object-fit: contain;
+  border-radius: 12px;
 }
 
 .hero,
@@ -1115,6 +1120,33 @@ legend {
   grid-template-columns: 1fr;
 }
 
+.centered-instruction-list {
+  counter-reset: instruction-step;
+  grid-template-columns: minmax(0, 820px);
+  justify-content: center;
+  max-width: 920px;
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.centered-instruction-list li {
+  counter-increment: instruction-step;
+  grid-template-columns: 42px minmax(0, 1fr);
+  width: 100%;
+}
+
+.centered-instruction-list li::before {
+  content: counter(instruction-step);
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  color: var(--primary-dark);
+  font-weight: 700;
+  background: #e7f2ec;
+  border-radius: 999px;
+}
+
 .payment-placeholder {
   margin: 20px 0;
   padding: 22px;
@@ -1201,6 +1233,15 @@ legend {
 
   .hero {
     min-height: auto;
+  }
+
+  .landing-cover {
+    padding: 10px 10px 0;
+  }
+
+  .landing-cover img {
+    max-height: 58vh;
+    border-radius: 8px;
   }
 
   .lead {

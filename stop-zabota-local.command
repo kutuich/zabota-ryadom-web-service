@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-CONTAINER_NAME="zabota-ryadom-local"
+CONTAINER_NAME="zabota-web-local"
 
 echo "Забота Рядом 2.0: остановка локального Docker preview"
 

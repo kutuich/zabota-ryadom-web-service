@@ -192,11 +192,14 @@ assert.match(landingAuth, /Желательно указать для связи
 assert.match(landingAuth, /Принимаю пользовательское соглашение заказчика/);
 assert.match(landingAuth, /Принимаю условия использования сервиса помощником/);
 assert.match(landingAuth, /Хочу получать информационные сообщения/);
+assert.match(landingAuth, /app-auth-logo\.png/);
+assert.match(landingAuth, /auth-brand-panel/);
 assert.doesNotMatch(landingAuth, /Тестовые входы/);
 assert.doesNotMatch(landingAuth, /admin@zabota\.local/);
 assert.doesNotMatch(landingAuth, /client@zabota\.local/);
 assert.doesNotMatch(landingAuth, /performer@zabota\.local/);
 assert.doesNotMatch(landingAuth, /useState\("password123"\)/);
+assert.doesNotMatch(landingAuth, /медицинские услуги/i);
 
 const consentPanel = read("components/ConsentDocumentsPanel.tsx");
 assert.match(consentPanel, /Принять обязательные документы/);
@@ -338,6 +341,7 @@ const forbiddenUserLabels = [
   "исполнитель",
   "Комиссия",
   "комиссия",
+  "медицинские услуги",
   "Карта-заглушка",
   "демо-карта",
   "Зона тарифов"

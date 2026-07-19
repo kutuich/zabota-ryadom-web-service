@@ -1,7 +1,8 @@
-import { HeartHandshake, LogIn, UserRound, UsersRound } from "lucide-react";
+import { LogIn, UserRound, UsersRound } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import appAuthLogo from "../assets/app-auth-logo.png";
 
 const requiredConsents = [
   "terms",
@@ -98,13 +99,9 @@ export function LandingAuthPage() {
   }
 
   return (
-    <main className="landing">
-      <section className="landing__hero">
-        <div className="brand-mark">
-          <HeartHandshake size={34} />
-        </div>
-        <h1>Забота Рядом</h1>
-        <p>Локальный сервис помощи для семьи, дома и близких</p>
+    <main className="landing auth-page">
+      <section className="landing__hero auth-brand-panel" aria-label="Забота Рядом">
+        <img className="auth-brand-panel__image" src={appAuthLogo} alt="Забота Рядом" />
       </section>
 
       <section className="auth-stack" aria-label="Вход и регистрация">
@@ -136,6 +133,14 @@ export function LandingAuthPage() {
         </div>
 
       <form className="auth-panel" onSubmit={submit}>
+        <div className="auth-panel__header">
+          <h2>{mode === "login" ? "Добро пожаловать!" : role === "client" ? "Регистрация заказчика" : "Регистрация помощника"}</h2>
+          <p>
+            {mode === "login"
+              ? "Войдите в свой аккаунт для продолжения."
+              : "Заполните данные профиля и подтвердите необходимые документы."}
+          </p>
+        </div>
         <div className="segmented">
           <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
             <LogIn size={16} />
@@ -172,68 +177,70 @@ export function LandingAuthPage() {
           </>
         ) : (
           <>
-            <label>
-              Имя
-              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} autoComplete="name" />
-            </label>
-            <label>
-              Телефон
-              <input
-                value={phone}
-                onChange={(event) => setPhone(event.target.value)}
-                placeholder="+7 (___) ___-**-**"
-                inputMode="tel"
-                autoComplete="tel"
-                required
-              />
-              <span className="field-help">Введите российский номер телефона. Мы сохраним его в едином формате.</span>
-            </label>
-            <label>
-              Email
-              <input
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                autoComplete="email"
-              />
-              <span className="field-help">
-                {role === "client"
-                  ? "Необязательно. Можно добавить позже в профиле."
-                  : "Желательно указать для связи и восстановления доступа. Можно добавить позже."}
-              </span>
-            </label>
-            <label>
-              Город
-              <select value={cityId} onChange={(event) => setCityId(event.target.value)}>
-                <option value="">Выберите город</option>
-                {bootstrap?.cities.map((city) => (
-                  <option key={city.id} value={city.id}>
-                    {city.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Пароль
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                autoComplete="new-password"
-                minLength={8}
-              />
-            </label>
-            <label>
-              Повторите пароль
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-                autoComplete="new-password"
-                minLength={8}
-              />
-            </label>
-            <fieldset className="span-2 checkbox-grid consent-checkboxes">
+            <div className="auth-form-grid">
+              <label>
+                Имя
+                <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} autoComplete="name" />
+              </label>
+              <label>
+                Телефон
+                <input
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value)}
+                  placeholder="+7 (___) ___-**-**"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  required
+                />
+                <span className="field-help">Введите российский номер телефона. Мы сохраним его в едином формате.</span>
+              </label>
+              <label>
+                Email
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="email"
+                />
+                <span className="field-help">
+                  {role === "client"
+                    ? "Необязательно. Можно добавить позже в профиле."
+                    : "Желательно указать для связи и восстановления доступа. Можно добавить позже."}
+                </span>
+              </label>
+              <label>
+                Город
+                <select value={cityId} onChange={(event) => setCityId(event.target.value)}>
+                  <option value="">Выберите город</option>
+                  {bootstrap?.cities.map((city) => (
+                    <option key={city.id} value={city.id}>
+                      {city.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Пароль
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete="new-password"
+                  minLength={8}
+                />
+              </label>
+              <label>
+                Повторите пароль
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  autoComplete="new-password"
+                  minLength={8}
+                />
+              </label>
+            </div>
+            <fieldset className="checkbox-grid consent-checkboxes">
               <legend>Обязательные документы и согласия</legend>
               {(role === "client" ? customerLegalConsents : helperLegalConsents).map((item) => (
                 <label className="checkbox-row" key={item.type}>
@@ -273,7 +280,7 @@ export function LandingAuthPage() {
                       checked={helperNoMedicalConfirmed}
                       onChange={(event) => setHelperNoMedicalConfirmed(event.target.checked)}
                     />
-                    <span>Подтверждаю, что не буду выполнять медицинские услуги через сервис.</span>
+                    <span>Подтверждаю, что не буду выполнять медицинские процедуры через сервис.</span>
                   </label>
                 </>
               )}
@@ -293,7 +300,10 @@ export function LandingAuthPage() {
         )}
 
         {error && <p className="error-text">{error}</p>}
-        <button className="primary-button primary-button--wide" type="submit">
+        <button
+          className={`primary-button primary-button--wide auth-submit ${mode === "login" ? "auth-submit--login" : "auth-submit--register"}`}
+          type="submit"
+        >
           {mode === "login" ? "Войти" : `Зарегистрироваться как ${role === "client" ? "заказчик" : "помощник"}`}
         </button>
         {mode === "login" ? (

@@ -39,12 +39,14 @@ export async function seedDemoDatabase({ reset }: { reset: boolean }) {
 
   const counts = await collectCounts(reset);
   console.log(reset ? "Demo database reset completed" : "Demo seed completed");
-  console.table([
-    { role: users.admin.role, email: users.admin.email, password },
-    { role: users.client.role, email: users.client.email, password },
-    { role: users.performer.role, email: users.performer.email, password },
-    { role: users.performer2.role, email: users.performer2.email, password }
-  ]);
+  if (process.env.SEED_DEMO_DATA === "true" && (process.env.NODE_ENV !== "production" || process.env.DEMO_MODE === "true")) {
+    console.table([
+      { role: users.admin.role, email: users.admin.email, password },
+      { role: users.client.role, email: users.client.email, password },
+      { role: users.performer.role, email: users.performer.email, password },
+      { role: users.performer2.role, email: users.performer2.email, password }
+    ]);
+  }
   console.table([counts]);
   return counts;
 }

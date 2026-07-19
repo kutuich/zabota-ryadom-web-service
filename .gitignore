@@ -18,10 +18,12 @@ build/
 .env.*
 !.env.example
 !.env.preview.example
+!.env.local.docker.example
 !.env.production.example
 !.env.tbank.test.example
 
 # Databases and runtime data
+.local-data/
 *.db
 *.db-journal
 *.sqlite
@@ -50,3 +52,6 @@ pnpm-debug.log*
 
 # Local exported documents / drafts
 *.pdf
+
+# Design source inputs
+design-input/

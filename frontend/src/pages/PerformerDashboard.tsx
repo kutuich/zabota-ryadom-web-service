@@ -656,7 +656,7 @@ function PerformerRequestDetails({ request }: { request: ClientRequest }) {
         <span>Что входит</span><strong>{pricing?.included?.join(", ") || "Состав работ нужно согласовать в чате по заявке."}</strong>
         <span>Что не входит</span><strong>{pricing?.excluded?.join(", ") || "Медицинские процедуры и действия вне согласованного объёма."}</strong>
         <span>Что нужно согласовать</span><strong>Точный объём работ, время, длительность, адресные детали и итоговую оплату помощнику.</strong>
-        <span>Ограничения</span><strong>Сервис не оказывает медицинские услуги: инъекции, капельницы, перевязки, лечение, диагностика и назначения запрещены.</strong>
+        <span>Ограничения</span><strong>Сервис не выполняет медицинские процедуры: инъекции, капельницы, перевязки, лечение, диагностика и назначения запрещены.</strong>
       </div>
       {mapUrl && (
         <a className="secondary-button" href={mapUrl} target="_blank" rel="noreferrer">
