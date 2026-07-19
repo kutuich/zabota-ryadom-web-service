@@ -65,6 +65,7 @@ TBANK_API_URL=https://securepay.tinkoff.ru/v2
 TBANK_SUCCESS_URL=http://localhost:4000/app/balance/payment-success
 TBANK_FAIL_URL=http://localhost:4000/app/balance/payment-fail
 TBANK_NOTIFICATION_URL=http://localhost:4000/api/payments/tbank/webhook
+SEED_DEMO_DATA=true
 ```
 
 Для Яндекс.Карт добавьте ключ в `YANDEX_MAPS_API_KEY` и, если карта будет рендериться на заказчике, в `VITE_YANDEX_MAPS_API_KEY`.
@@ -235,7 +236,9 @@ Startup внутри контейнера выполняет:
 
 1. создание папки под SQLite-файл;
 2. `prisma db push`;
-3. seed только если таблица пользователей пустая;
+3. seed только если таблица пользователей пустая и явно включён один из режимов:
+   `SEED_DEMO_DATA=true` для локального demo preview или `PRODUCTION_ADMIN_EMAIL`,
+   `PRODUCTION_ADMIN_PASSWORD`, `PRODUCTION_ADMIN_PHONE` для чистого production bootstrap;
 4. запуск backend на `0.0.0.0:$PORT`.
 
 Это защищает preview от бесконечного создания seed-дублей при каждом рестарте контейнера.
@@ -319,7 +322,8 @@ Render требует, чтобы web service слушал `0.0.0.0` и порт
 - `Dockerfile` - multi-stage Docker-сборка frontend/backend/Prisma.
 - `.dockerignore` - исключения для Docker build context.
 - `.env.preview.example` - переменные окружения для Docker preview.
-- `scripts/start-preview.mjs` - безопасный Docker startup: `prisma db push`, seed пустой базы, запуск backend.
+- `scripts/start-preview.mjs` - безопасный Docker startup: `prisma db push`, demo seed только при `SEED_DEMO_DATA=true`, production admin bootstrap из env, запуск backend.
+- `scripts/bootstrap-production-admin.mjs` - создание первого production superadmin из `PRODUCTION_ADMIN_*` в пустой базе.
 - `backend/src/services/paymentAdapter.ts` - mock payment adapter и основа адаптера под платёжную форму Т-Банка.
 - `backend/src/services/pricingService.ts` - расчёт ориентировочной стоимости.
 - `backend/src/services/matchingService.ts` - подбор подходящих заявок для помощника.

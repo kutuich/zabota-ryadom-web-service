@@ -463,6 +463,7 @@ async function run() {
   assert.equal(publicNumber, `ZR-${year}-0008`);
 
   await runStaticRoutingTests();
+  await runProductionStartupTests();
   await runAuthPhoneTests();
   await runPaymentRouteTests();
 
@@ -525,6 +526,37 @@ async function runStaticRoutingTests() {
   } finally {
     env.nodeEnv = originalNodeEnv;
   }
+}
+
+async function runProductionStartupTests() {
+  const projectRoot = testProjectRoot();
+  const startupScript = readFileSync(path.join(projectRoot, "scripts/start-preview.mjs"), "utf8");
+  const productionBootstrapScript = readFileSync(path.join(projectRoot, "scripts/bootstrap-production-admin.mjs"), "utf8");
+  const productionEnvExample = readFileSync(path.join(projectRoot, ".env.production.example"), "utf8");
+
+  assert.match(startupScript, /process\.env\.SEED_DEMO_DATA === "true"/);
+  assert.match(startupScript, /backend\/dist\/prisma\/seed\.js/);
+  assert.match(startupScript, /scripts\/bootstrap-production-admin\.mjs/);
+  assert.match(startupScript, /PRODUCTION_ADMIN_EMAIL/);
+  assert.match(startupScript, /PRODUCTION_ADMIN_PASSWORD/);
+  assert.match(startupScript, /PRODUCTION_ADMIN_PHONE/);
+
+  assert.match(productionBootstrapScript, /normalizeRussianPhone/);
+  assert.match(productionBootstrapScript, /role: "superadmin"/);
+  assert.match(productionBootstrapScript, /rolesJson: JSON\.stringify\(\["superadmin"\]\)/);
+  assert.match(productionBootstrapScript, /emailVerifiedAt/);
+  assert.match(productionBootstrapScript, /phoneVerifiedAt/);
+  assert.doesNotMatch(productionBootstrapScript, /admin@zabota\.local/);
+  assert.doesNotMatch(productionBootstrapScript, /client@zabota\.local/);
+  assert.doesNotMatch(productionBootstrapScript, /performer@zabota\.local/);
+  assert.doesNotMatch(productionBootstrapScript, /password123/);
+
+  assert.match(productionEnvExample, /SEED_DEMO_DATA=false/);
+  assert.match(productionEnvExample, /PRODUCTION_ADMIN_EMAIL=/);
+  assert.match(productionEnvExample, /PRODUCTION_ADMIN_PASSWORD=/);
+  assert.match(productionEnvExample, /PRODUCTION_ADMIN_PHONE=/);
+  assert.doesNotMatch(productionEnvExample, /admin@zabota\.local/);
+  assert.doesNotMatch(productionEnvExample, /password123/);
 }
 
 async function runPaymentRouteTests() {

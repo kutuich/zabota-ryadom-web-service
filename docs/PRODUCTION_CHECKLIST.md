@@ -11,8 +11,10 @@
 - [ ] Перед production загрузками доработан `UPLOADS_DIR`, потому что текущий код пишет в `backend/uploads`.
 - [ ] `JWT_SECRET` заменён на production secret.
 - [ ] `PAYMENT_PROVIDER=mock`.
+- [ ] `SEED_DEMO_DATA=false`.
+- [ ] `PRODUCTION_ADMIN_EMAIL`, `PRODUCTION_ADMIN_PASSWORD`, `PRODUCTION_ADMIN_PHONE` заданы перед первым запуском.
 - [ ] T-Bank выключен.
-- [ ] Demo/admin пароль нужно заменить.
+- [ ] Начальный пароль администратора нужно заменить после первого входа.
 - [ ] Есть backup перед обновлениями.
 - [ ] Проверена регистрация заказчика.
 - [ ] Проверена регистрация помощника.

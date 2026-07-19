@@ -34,12 +34,12 @@ export function LandingAuthPage() {
   const { bootstrap, login, register } = useAuth();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [role, setRole] = useState<"client" | "performer">("client");
-  const [phoneOrEmail, setPhoneOrEmail] = useState("client@zabota.local");
-  const [phone, setPhone] = useState("+79000000010");
+  const [phoneOrEmail, setPhoneOrEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [password, setPassword] = useState("password123");
-  const [confirmPassword, setConfirmPassword] = useState("password123");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [cityId, setCityId] = useState("");
   const [acceptedLegal, setAcceptedLegal] = useState<Record<string, boolean>>(defaultAcceptedLegal);
   const [marketingAccepted, setMarketingAccepted] = useState(false);
@@ -313,7 +313,6 @@ export function LandingAuthPage() {
             <button className="link-button" type="button" onClick={() => setMode("login")}>Войти</button>
           </p>
         )}
-        <p className="privacy-note">Тестовые входы: admin@zabota.local, client@zabota.local, performer@zabota.local.</p>
       </form>
       </section>
     </main>

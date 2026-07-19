@@ -35,6 +35,10 @@
 - `DEFAULT_MIN_TOP_UP_AMOUNT=150` - минимальное пополнение.
 - `PAYMENT_PROVIDER=mock` - для первого запуска оставить mock.
 - `PAYMENT_RECEIPT_ENABLED=false` - онлайн-касса пока не включена.
+- `SEED_DEMO_DATA=false` - demo/test пользователи, заявки, чаты и платежи не создаются автоматически.
+- `PRODUCTION_ADMIN_EMAIL` - email первого администратора, если база пустая.
+- `PRODUCTION_ADMIN_PASSWORD` - пароль первого администратора, если база пустая.
+- `PRODUCTION_ADMIN_PHONE` - телефон первого администратора, если база пустая.
 - `TBANK_TERMINAL_KEY` - заполнять только перед включением Т-Банка.
 - `TBANK_PASSWORD` - заполнять только перед включением Т-Банка.
 - `TBANK_API_URL=https://securepay.tinkoff.ru/v2` - API URL Т-Банка.
@@ -66,7 +70,7 @@
 4. Проверить `/api/health`.
 5. Открыть `/`.
 6. Открыть `/app`.
-7. Войти `admin@zabota.local / password123`.
+7. Войти под администратором из `PRODUCTION_ADMIN_EMAIL / PRODUCTION_ADMIN_PASSWORD`.
 8. Сразу сменить пароль администратора, если такая функция есть.
 9. Если смены пароля ещё нет, считать это обязательной доработкой после деплоя.
 
@@ -86,6 +90,10 @@ docker run --rm \
   -e DATABASE_URL=file:/data/zabota.db \
   -e UPLOADS_DIR=/data/uploads \
   -e PAYMENT_PROVIDER=mock \
+  -e SEED_DEMO_DATA=false \
+  -e PRODUCTION_ADMIN_EMAIL=admin@example.com \
+  -e PRODUCTION_ADMIN_PASSWORD=replace-with-initial-admin-password \
+  -e PRODUCTION_ADMIN_PHONE=+79000000001 \
   -e CORS_ORIGIN=http://localhost:4014 \
   -e JWT_SECRET=replace-with-long-random-production-secret \
   zabota-web-service:deploy-check
@@ -109,6 +117,7 @@ docker run --rm \
 ## 6. Что не включать на первом запуске
 
 - `PAYMENT_PROVIDER=tbank`;
+- `SEED_DEMO_DATA=true`;
 - реальные платежи;
 - SMS;
 - email SMTP;

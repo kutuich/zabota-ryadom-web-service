@@ -20,8 +20,15 @@ const usersCount = await prisma.user.count();
 await prisma.$disconnect();
 
 if (usersCount === 0) {
-  console.log("Database is empty. Running seed once.");
-  run("node", ["backend/dist/prisma/seed.js"]);
+  if (process.env.SEED_DEMO_DATA === "true") {
+    console.log("Database is empty and SEED_DEMO_DATA=true. Running demo seed once.");
+    run("node", ["backend/dist/prisma/seed.js"]);
+  } else if (hasProductionAdminEnv()) {
+    console.log("Database is empty. Creating production administrator from environment.");
+    run("node", ["scripts/bootstrap-production-admin.mjs"]);
+  } else {
+    console.log("Database is empty. Demo seed is disabled and production administrator env is incomplete. Skipping seed.");
+  }
 } else {
   console.log(`Database already has ${usersCount} users. Skipping seed.`);
 }
@@ -66,4 +73,12 @@ function sqlitePathFromDatabaseUrl(databaseUrl) {
 
 function stripSurroundingQuotes(value) {
   return value.replace(/^["']|["']$/g, "");
+}
+
+function hasProductionAdminEnv() {
+  return Boolean(
+    process.env.PRODUCTION_ADMIN_EMAIL?.trim()
+    && process.env.PRODUCTION_ADMIN_PASSWORD?.trim()
+    && process.env.PRODUCTION_ADMIN_PHONE?.trim()
+  );
 }
