@@ -1,0 +1,31 @@
+{
+  "name": "zabota-ryadom-web-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Zabota Ryadom 2.0 web application",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "dependencies": {
+    "prisma": "^6.1.0"
+  },
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w backend\" \"npm run dev -w frontend\"",
+    "start": "npm run start:prod",
+    "start:prod": "node scripts/start-preview.mjs",
+    "build": "npm run build -w backend && npm run build -w frontend",
+    "check": "npm run check -w backend && npm run check -w frontend",
+    "test": "npm run test -w backend && npm run test -w frontend",
+    "visual:audit": "node scripts/visual-audit.mjs",
+    "db:generate": "prisma generate --schema backend/prisma/schema.prisma",
+    "db:push": "prisma db push --schema backend/prisma/schema.prisma",
+    "db:seed": "node --import tsx backend/prisma/seed.ts",
+    "db:seed-demo": "node --import tsx backend/prisma/seedDemo.ts",
+    "db:reset-demo": "node --import tsx backend/prisma/resetDemo.ts"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "playwright": "^1.61.1"
+  }
+}

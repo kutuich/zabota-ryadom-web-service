@@ -1,0 +1,1457 @@
+import { Check, MessageCircle, Plus, Star } from "lucide-react";
+import { FormEvent, useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { api } from "../api/client";
+import { BalancePanel } from "../components/BalancePanel";
+import { ChatPanel } from "../components/ChatPanel";
+import { ConsentDocumentsPanel } from "../components/ConsentDocumentsPanel";
+import { ContactDetails } from "../components/ContactDetails";
+import { EmptyState } from "../components/EmptyState";
+import { RequestCard } from "../components/RequestCard";
+import { PriceSummary } from "../components/PriceSummary";
+import { Shell } from "../components/Shell";
+import { StatusBadge } from "../components/StatusBadge";
+import { useAuth } from "../context/AuthContext";
+import type { Chat, ClientRequest, KnowledgeArticle, PricingQuote } from "../types";
+import { labelCriminalRecord, labelStatus, requestDisplayTitle } from "../utils/labels";
+import { chatPathForRole, clientNavigation, sectionTitleForPath } from "../routes/navigation";
+import { formatDateRu, formatTimeRu } from "../utils/dateTime";
+
+export function ClientDashboard() {
+  const { bootstrap, user } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const activeTab = clientTabFromPath(location.pathname);
+  const routeChatId = chatIdFromPath(location.pathname, "/app/client/chats");
+  const [requests, setRequests] = useState<ClientRequest[]>([]);
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [complaints, setComplaints] = useState<any[]>([]);
+  const [articles, setArticles] = useState<KnowledgeArticle[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+  const [formErrors, setFormErrors] = useState<string[]>([]);
+  const [supportForm, setSupportForm] = useState({ type: "message", reason: "", description: "", requestId: "" });
+  const [reviewForm, setReviewForm] = useState({ requestId: "", toUserId: "", rating: 5, text: "", likedText: "", improvementText: "" });
+  const [editingRequest, setEditingRequest] = useState<ClientRequest | null>(null);
+  const [editForm, setEditForm] = useState({
+    contactName: user?.displayName ?? "",
+    contactPhone: user?.phone ?? "",
+    helpFor: "",
+    additionalActions: [] as string[],
+    dependentState: [] as string[],
+    dependentAge: "",
+    scheduleType: "once",
+    regularPeriod: "",
+    repeatedVisitsAllowed: false,
+    hygieneLevel: "none",
+    physicalLoadLevel: "none",
+    taskVolumeLevel: "basic",
+    urgencyFlags: [] as string[],
+    transportOption: "city",
+    title: "",
+    description: "",
+    addressText: "",
+    addressStreet: "",
+    addressHouse: "",
+    addressApartment: "",
+    addressEntrance: "",
+    addressFloor: "",
+    addressIntercom: "",
+    addressComment: "",
+    district: "",
+    categoryId: "",
+    cityId: user?.cityId ?? "",
+    date: "",
+    timeFrom: "",
+    timeTo: "",
+    expectedDurationHours: 2,
+    urgency: "normal",
+    hasPets: false,
+    physicalHelpLevel: "",
+    paymentComment: "",
+    comment: ""
+  });
+  const [form, setForm] = useState({
+    contactName: user?.displayName ?? "",
+    contactPhone: user?.phone ?? "",
+    helpFor: "",
+    additionalActions: [] as string[],
+    dependentState: [] as string[],
+    dependentAge: "",
+    scheduleType: "once",
+    regularPeriod: "",
+    repeatedVisitsAllowed: false,
+    hygieneLevel: "none",
+    physicalLoadLevel: "none",
+    taskVolumeLevel: "basic",
+    urgencyFlags: [] as string[],
+    transportOption: "city",
+    title: "",
+    description: "",
+    addressText: "",
+    addressStreet: "",
+    addressHouse: "",
+    addressApartment: "",
+    addressEntrance: "",
+    addressFloor: "",
+    addressIntercom: "",
+    addressComment: "",
+    district: "",
+    categoryId: "",
+    cityId: user?.cityId ?? "",
+    date: "",
+    timeFrom: "",
+    timeTo: "",
+    expectedDurationHours: 2,
+    urgency: "normal",
+    hasElderlyPerson: false,
+    hasChild: false,
+    hasLimitedMobility: false,
+    physicalHelpLevel: "",
+    needsCooking: false,
+    needsCleaning: false,
+    needsWalk: false,
+    needsHygieneHelp: false,
+    hasPets: false,
+    paymentComment: "",
+    comment: ""
+  });
+  const [quote, setQuote] = useState<PricingQuote | null>(null);
+  const [editQuote, setEditQuote] = useState<PricingQuote | null>(null);
+
+  async function load() {
+    const [requestRows, chatRows, complaintRows, articleRows] = await Promise.all([
+      api.requests(),
+      api.chats(),
+      api.complaints(),
+      api.knowledge("client")
+    ]);
+    setRequests(requestRows);
+    setChats(chatRows);
+    setComplaints(complaintRows);
+    setArticles(articleRows);
+  }
+
+  useEffect(() => {
+    load().catch((error) => setMessage(error.message));
+  }, []);
+
+  useEffect(() => {
+    setActiveChatId(routeChatId);
+  }, [routeChatId]);
+
+  useEffect(() => {
+    const categoryId = form.categoryId;
+    if (!categoryId) return;
+    const handle = window.setTimeout(() => {
+      api.priceQuote(buildPricingPayload(form)).then(setQuote).catch(() => setQuote(null));
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [
+    bootstrap?.categories,
+    form.categoryId,
+    form.expectedDurationHours,
+    form.scheduleType,
+    form.additionalActions,
+    form.dependentState,
+    form.helpFor,
+    form.hygieneLevel,
+    form.physicalLoadLevel,
+    form.taskVolumeLevel,
+    form.urgencyFlags,
+    form.transportOption,
+    form.date,
+    form.timeFrom,
+    form.hasPets
+  ]);
+
+  useEffect(() => {
+    if (!editingRequest || !editForm.categoryId) {
+      setEditQuote(null);
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      api.priceQuote(buildPricingPayload(editForm)).then(setEditQuote).catch(() => setEditQuote(null));
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [
+    editingRequest,
+    editForm.categoryId,
+    editForm.expectedDurationHours,
+    editForm.scheduleType,
+    editForm.additionalActions,
+    editForm.dependentState,
+    editForm.helpFor,
+    editForm.hygieneLevel,
+    editForm.physicalLoadLevel,
+    editForm.taskVolumeLevel,
+    editForm.urgencyFlags,
+    editForm.transportOption,
+    editForm.date,
+    editForm.timeFrom,
+    editForm.hasPets
+  ]);
+
+  async function createRequest(event: FormEvent) {
+    event.preventDefault();
+    setMessage("");
+    const errors = validateRequestForm();
+    setFormErrors(errors);
+    if (errors.length > 0) {
+      setMessage("Заполните обязательные поля.");
+      return;
+    }
+    try {
+      const cityName = bootstrap?.cities.find((city) => city.id === (form.cityId || user?.cityId))?.name ?? "";
+      const hasLimitedMobility = derivedHasLimitedMobility(form);
+      const needsHygieneHelp = derivedNeedsHygiene(form);
+      const needsCooking = form.additionalActions.some((action) => ["simple_cooking", "full_cooking"].includes(action));
+      const needsCleaning = form.additionalActions.some((action) => ["light_cleaning", "laundry", "ironing", "bed_linen"].includes(action));
+      const needsWalk = form.additionalActions.includes("walk");
+      const request = await api.createRequest({
+        ...form,
+        additionalActions: buildSavedActions(form),
+        categoryId: form.categoryId,
+        cityId: form.cityId || user?.cityId,
+        helpFor: form.helpFor || undefined,
+        dependentAge: form.dependentAge ? Number(form.dependentAge) : undefined,
+        approximateAddressText: [cityName, form.district || "примерный район"].filter(Boolean).join(", "),
+        addressText: "",
+        addressStreet: form.addressStreet,
+        addressHouse: form.addressHouse,
+        addressApartment: form.addressApartment,
+        addressEntrance: form.addressEntrance,
+        addressFloor: form.addressFloor,
+        addressIntercom: form.addressIntercom,
+        addressComment: form.addressComment,
+        expectedDurationHours: Number(form.expectedDurationHours),
+        hasElderlyPerson: form.helpFor === "elderly",
+        hasChild: form.helpFor === "child",
+        hasLimitedMobility,
+        needsCooking,
+        needsCleaning,
+        needsWalk,
+        needsHygieneHelp,
+        hygieneLevel: form.hygieneLevel,
+        physicalLoadLevel: form.physicalLoadLevel,
+        taskVolumeLevel: form.taskVolumeLevel,
+        urgencyFlags: form.urgencyFlags,
+        isRemoteAddress: form.transportOption === "separate",
+        transportOption: form.transportOption,
+        urgency: form.scheduleType === "urgent" ? "urgent" : form.scheduleType === "regular" ? "regular" : form.urgency,
+        comment: [
+          form.comment,
+          form.addressComment ? `Комментарий к адресу: ${form.addressComment}` : "",
+          form.paymentComment ? `Комментарий по оплате: ${form.paymentComment}` : ""
+        ]
+          .filter(Boolean)
+          .join("\n")
+      });
+      await api.publishRequest(request.id);
+      setMessage("Заявка создана и опубликована.");
+      navigate("/app/client/requests");
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Ошибка создания заявки");
+    }
+  }
+
+  async function accept(responseId: string) {
+    try {
+      const result = await api.acceptResponse(responseId);
+      setMessage("Чат по заявке открыт. Обсудите дату, время, объём работ и условия выполнения.");
+      await load();
+      navigate(chatPathForRole("client", result.chat.id));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не удалось принять отклик");
+    }
+  }
+
+  async function complete(request: ClientRequest) {
+    await api.completeRequest(request.id);
+    await load();
+  }
+
+  function openRequestEditor(request: ClientRequest) {
+    setEditingRequest(request);
+    const additionalActions = parseJsonArray(request.additionalActionsJson);
+    const dependentState = parseJsonArray(request.dependentStateJson);
+    const pricingOptions = extractStoredPricingOptions(additionalActions, request.physicalHelpLevel);
+    const parsedAddress = splitLegacyAddress(request);
+    const addressComment = request.addressComment ?? extractCommentLine(request.comment, "Комментарий к адресу:");
+    const paymentComment = extractCommentLine(request.comment, "Комментарий по оплате:");
+    setEditForm({
+      contactName: request.contactName ?? user?.displayName ?? "",
+      contactPhone: request.contactPhone ?? user?.phone ?? "",
+      helpFor: request.helpFor ?? "",
+      additionalActions: additionalActions.filter((action) => additionalActionOptions.some((option) => option.value === action)),
+      dependentState,
+      dependentAge: request.dependentAge ? String(request.dependentAge) : "",
+      scheduleType: request.scheduleType ?? "once",
+      regularPeriod: request.regularPeriod ?? "",
+      repeatedVisitsAllowed: Boolean(request.repeatedVisitsAllowed),
+      hygieneLevel: pricingOptions.hygieneLevel,
+      physicalLoadLevel: pricingOptions.physicalLoadLevel,
+      taskVolumeLevel: pricingOptions.taskVolumeLevel,
+      urgencyFlags: pricingOptions.urgencyFlags,
+      transportOption: pricingOptions.transportOption,
+      title: request.title,
+      description: request.description,
+      addressText: request.addressText ?? "",
+      addressStreet: request.addressStreet ?? parsedAddress.street,
+      addressHouse: request.addressHouse ?? parsedAddress.house,
+      addressApartment: request.addressApartment ?? "",
+      addressEntrance: request.addressEntrance ?? "",
+      addressFloor: request.addressFloor ?? "",
+      addressIntercom: request.addressIntercom ?? "",
+      addressComment,
+      district: request.district ?? "",
+      categoryId: request.categoryId,
+      cityId: request.cityId,
+      date: request.date ? request.date.slice(0, 10) : "",
+      timeFrom: request.timeFrom ?? "",
+      timeTo: request.timeTo ?? "",
+      expectedDurationHours: request.expectedDurationHours ?? 2,
+      urgency: request.urgency ?? "normal",
+      hasPets: request.hasPets,
+      physicalHelpLevel: request.physicalHelpLevel ?? "",
+      paymentComment,
+      comment: stripGeneratedCommentLines(request.comment)
+    });
+  }
+
+  async function saveRequestEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!editingRequest) return;
+    const editErrors = [
+      !editForm.cityId ? "Укажите город." : "",
+      !editForm.addressStreet.trim() ? "Укажите улицу." : "",
+      !editForm.addressHouse.trim() ? "Укажите дом." : ""
+    ].filter(Boolean);
+    if (editErrors.length > 0) {
+      setMessage(editErrors.join(" "));
+      return;
+    }
+    const cityName = bootstrap?.cities.find((city) => city.id === (editForm.cityId || user?.cityId))?.name ?? "";
+    const hasLimitedMobility = derivedHasLimitedMobility(editForm);
+    const needsHygieneHelp = derivedNeedsHygiene(editForm);
+    const needsCooking = editForm.additionalActions.some((action) => ["simple_cooking", "full_cooking"].includes(action));
+    const needsCleaning = editForm.additionalActions.some((action) => ["light_cleaning", "laundry", "ironing", "bed_linen"].includes(action));
+    const needsWalk = editForm.additionalActions.includes("walk");
+    const updated = await api.updateRequest(editingRequest.id, {
+      ...editForm,
+      additionalActions: buildSavedActions(editForm),
+      categoryId: editForm.categoryId,
+      cityId: editForm.cityId || user?.cityId,
+      helpFor: editForm.helpFor || undefined,
+      dependentAge: editForm.dependentAge ? Number(editForm.dependentAge) : undefined,
+      approximateAddressText: [cityName, editForm.district || "примерный район"].filter(Boolean).join(", "),
+      addressText: "",
+      addressStreet: editForm.addressStreet,
+      addressHouse: editForm.addressHouse,
+      addressApartment: editForm.addressApartment,
+      addressEntrance: editForm.addressEntrance,
+      addressFloor: editForm.addressFloor,
+      addressIntercom: editForm.addressIntercom,
+      addressComment: editForm.addressComment,
+      expectedDurationHours: Number(editForm.expectedDurationHours),
+      hasElderlyPerson: editForm.helpFor === "elderly",
+      hasChild: editForm.helpFor === "child",
+      hasLimitedMobility,
+      needsCooking,
+      needsCleaning,
+      needsWalk,
+      needsHygieneHelp,
+      hygieneLevel: editForm.hygieneLevel,
+      physicalLoadLevel: editForm.physicalLoadLevel,
+      taskVolumeLevel: editForm.taskVolumeLevel,
+      urgencyFlags: editForm.urgencyFlags,
+      isRemoteAddress: editForm.transportOption === "separate",
+      transportOption: editForm.transportOption,
+      urgency: editForm.scheduleType === "urgent" ? "urgent" : editForm.scheduleType === "regular" ? "regular" : editForm.urgency,
+      timeTo: editForm.timeTo || undefined,
+      comment: [
+        editForm.comment,
+        editForm.addressComment ? `Комментарий к адресу: ${editForm.addressComment}` : "",
+        editForm.paymentComment ? `Комментарий по оплате: ${editForm.paymentComment}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n")
+    });
+    setEditingRequest(null);
+    setMessage(`Заявка ${updated.publicNumber ?? ""} обновлена.`);
+    await load();
+  }
+
+  function openRequestChat(request: ClientRequest) {
+    const chatId = request.chat?.id ?? request.chats?.[0]?.id;
+    if (!chatId) {
+      setMessage("По этой заявке чат ещё не открыт.");
+      return;
+    }
+    navigate(chatPathForRole("client", chatId));
+  }
+
+  async function submitReview(event: FormEvent) {
+    event.preventDefault();
+    if (!reviewForm.requestId || !reviewForm.toUserId || !reviewForm.text.trim()) {
+      setMessage("Заполните оценку и комментарий к отзыву.");
+      return;
+    }
+    await api.createReview(reviewForm.requestId, {
+      toUserId: reviewForm.toUserId,
+      rating: Number(reviewForm.rating),
+      text: reviewForm.text,
+      likedText: reviewForm.likedText,
+      improvementText: reviewForm.improvementText
+    });
+    setReviewForm({ requestId: "", toUserId: "", rating: 5, text: "", likedText: "", improvementText: "" });
+    setMessage("Отзыв сохранён.");
+    await load();
+  }
+
+  async function sendSupport(event: FormEvent) {
+    event.preventDefault();
+    if (!supportForm.reason.trim()) {
+      setMessage("Укажите тему обращения.");
+      return;
+    }
+    await api.createComplaint({
+      type: supportForm.type,
+      requestId: supportForm.requestId || undefined,
+      reason: supportForm.reason,
+      description: supportForm.description
+    });
+    setSupportForm({ type: "message", reason: "", description: "", requestId: "" });
+    setMessage("Обращение отправлено администратору.");
+    await load();
+  }
+
+  function validateRequestForm() {
+    const errors: string[] = [];
+    if (!form.cityId && !user?.cityId) errors.push("Укажите город.");
+    if (!form.categoryId) errors.push("Выберите категорию услуги");
+    if (!form.title.trim()) errors.push("Коротко опишите, какая помощь нужна");
+    if (!form.description.trim()) errors.push("Опишите задачу");
+    if (!form.addressStreet.trim()) errors.push("Укажите улицу.");
+    if (!form.addressHouse.trim()) errors.push("Укажите дом.");
+    if (!form.date) errors.push("Укажите дату");
+    if (!form.timeFrom) errors.push("Укажите время");
+    if (!Number(form.expectedDurationHours)) errors.push("Укажите длительность");
+    if (form.helpFor === "child" && !form.dependentAge) errors.push("Укажите возраст ребёнка");
+    return errors;
+  }
+
+  return (
+    <Shell title={sectionTitleForPath(location.pathname, clientNavigation)} navigation={clientNavigation}>
+      {message && <p className="notice">{message}</p>}
+
+      {activeTab === "Мои заявки" && (
+        <div className="list">
+          {requests.filter((request) => request.status !== "completed").map((request) => (
+            <RequestCard key={request.id} request={request} onTitleClick={() => openRequestEditor(request)}>
+              <button className="secondary-button" type="button" onClick={() => openRequestEditor(request)}>
+                Редактировать
+              </button>
+              <button className="secondary-button" type="button" onClick={() => openRequestChat(request)}>
+                <MessageCircle size={18} />
+                Перейти в чат
+              </button>
+              {request.responses && request.responses.length > 0 && (
+                <div className="response-list">
+                  {request.responses.map((response) => (
+                    <div key={response.id} className="response-row">
+                      <div>
+                        <strong>{response.performer?.displayName ?? "Помощник"}</strong>
+                        <div className="trust-row">
+                          <StatusBadge tone={response.performer?.childcareWarning ? "danger" : "success"}>
+                            {labelCriminalRecord(response.performer?.criminalRecordCertificateStatus)}
+                          </StatusBadge>
+                          <span>рейтинг {response.performer?.rating ?? 0}</span>
+                          <span>{response.performer?.completedJobsCount ?? 0} заявок</span>
+                        </div>
+                      </div>
+                      {response.status === "pending" && (
+                        <button className="primary-button" type="button" onClick={() => accept(response.id)}>
+                  <MessageCircle size={18} />
+                  Открыть чат по заявке
+                </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {request.status === "in_progress" && (
+                <button className="secondary-button" type="button" onClick={() => complete(request)}>
+                  <Check size={18} />
+                  Завершить заявку
+                </button>
+              )}
+              {request.status === "completed" && request.selectedPerformerId && (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setReviewForm({ ...reviewForm, requestId: request.id, toUserId: request.selectedPerformerId ?? "" })}
+                >
+                  <Star size={18} />
+                  Оценить помощника
+                </button>
+              )}
+            </RequestCard>
+          ))}
+          {requests.filter((request) => request.status !== "completed").length === 0 && (
+            <EmptyState
+              title="Активных заявок пока нет."
+              action={<button className="primary-button" type="button" onClick={() => navigate("/app/client/requests/new")}>Создать заявку</button>}
+            />
+          )}
+        </div>
+      )}
+
+      {activeTab === "Выполненные заявки" && (
+        <div className="list">
+          {requests.filter((request) => request.status === "completed").map((request) => (
+            <RequestCard key={request.id} request={request} onTitleClick={() => openRequestEditor(request)}>
+              <button className="secondary-button" type="button" onClick={() => openRequestChat(request)}>
+                <MessageCircle size={18} />
+                Перейти в чат
+              </button>
+              {request.selectedPerformerId && (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setReviewForm({ ...reviewForm, requestId: request.id, toUserId: request.selectedPerformerId ?? "" })}
+                >
+                  <Star size={18} />
+                  Оценить помощника
+                </button>
+              )}
+            </RequestCard>
+          ))}
+          {requests.filter((request) => request.status === "completed").length === 0 && <EmptyState title="Выполненных заявок пока нет." />}
+        </div>
+      )}
+
+      {reviewForm.requestId && (
+        <form className="form-grid" onSubmit={submitReview}>
+          <h3 className="span-2">
+            Оценить помощника по заявке {requests.find((request) => request.id === reviewForm.requestId)?.publicNumber ?? ""}
+          </h3>
+          <p className="privacy-note span-2">Ваш отзыв поможет другим заказчикам выбрать помощника.</p>
+          <label>
+            Оценка
+            <select value={reviewForm.rating} onChange={(event) => setReviewForm({ ...reviewForm, rating: Number(event.target.value) })}>
+              {[5, 4, 3, 2, 1].map((rating) => <option key={rating} value={rating}>{rating}</option>)}
+            </select>
+          </label>
+          <label className="span-2">
+            Комментарий
+            <textarea value={reviewForm.text} onChange={(event) => setReviewForm({ ...reviewForm, text: event.target.value })} />
+          </label>
+          <label className="span-2">
+            Что понравилось
+            <input value={reviewForm.likedText} onChange={(event) => setReviewForm({ ...reviewForm, likedText: event.target.value })} />
+          </label>
+          <label className="span-2">
+            Что можно улучшить
+            <input value={reviewForm.improvementText} onChange={(event) => setReviewForm({ ...reviewForm, improvementText: event.target.value })} />
+          </label>
+          <button className="primary-button span-2" type="submit">Сохранить отзыв</button>
+        </form>
+      )}
+
+      {activeTab === "Создать заявку" && (
+        <form className="form-grid" onSubmit={createRequest}>
+          <h2 className="form-section-title span-2">Контакты и направление помощи</h2>
+          {formErrors.length > 0 && (
+            <div className="notice span-2">
+              <strong>Заполните поля:</strong>
+              <ul>
+                {formErrors.map((error) => <li key={error}>{error}</li>)}
+              </ul>
+            </div>
+          )}
+          <label>
+            Город
+            <select value={form.cityId} onChange={(event) => setForm({ ...form, cityId: event.target.value })}>
+              <option value="">Выберите город</option>
+              {bootstrap?.cities.map((city) => (
+                <option key={city.id} value={city.id}>
+                  {city.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Имя
+            <input value={form.contactName} onChange={(event) => setForm({ ...form, contactName: event.target.value })} />
+          </label>
+          <label>
+            Телефон
+            <input value={form.contactPhone} onChange={(event) => setForm({ ...form, contactPhone: event.target.value })} />
+          </label>
+          <label>
+            Категория
+            <select
+              value={form.categoryId}
+              onChange={(event) => setForm({ ...form, categoryId: event.target.value })}
+            >
+              <option value="">Выберите категорию</option>
+              {bootstrap?.categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Кому нужна помощь
+            <select value={form.helpFor} onChange={(event) => setForm({ ...form, helpFor: event.target.value })}>
+              <option value="">Выберите вариант</option>
+              <option value="elderly">Пожилому человеку</option>
+              <option value="child">Ребёнку</option>
+              <option value="limited_mobility">Маломобильному человеку</option>
+              <option value="home_family">Для дома / семьи</option>
+              <option value="other">Другое</option>
+            </select>
+          </label>
+          <label className="span-2">
+            Коротко опишите, какая помощь нужна
+            <input
+              value={form.title}
+              onChange={(event) => setForm({ ...form, title: event.target.value })}
+              placeholder="Например: Помощь с уборкой и приготовлением еды"
+            />
+          </label>
+          <h2 className="form-section-title span-2">Адрес выполнения</h2>
+          <label>
+            Улица
+            <input value={form.addressStreet} onChange={(event) => setForm({ ...form, addressStreet: event.target.value })} placeholder="Например: ул. Мира" />
+          </label>
+          <label>
+            Дом
+            <input value={form.addressHouse} onChange={(event) => setForm({ ...form, addressHouse: event.target.value })} placeholder="Например: 1" />
+          </label>
+          <label>
+            Квартира
+            <input value={form.addressApartment} onChange={(event) => setForm({ ...form, addressApartment: event.target.value })} />
+          </label>
+          <label>
+            Подъезд
+            <input value={form.addressEntrance} onChange={(event) => setForm({ ...form, addressEntrance: event.target.value })} />
+          </label>
+          <label>
+            Этаж
+            <input value={form.addressFloor} onChange={(event) => setForm({ ...form, addressFloor: event.target.value })} />
+          </label>
+          <label>
+            Домофон
+            <input value={form.addressIntercom} onChange={(event) => setForm({ ...form, addressIntercom: event.target.value })} />
+          </label>
+          <label className="span-2">
+            Комментарий к адресу
+            <input
+              value={form.addressComment}
+              onChange={(event) => setForm({ ...form, addressComment: event.target.value })}
+              placeholder="Например: подъезд, этаж, домофон, ориентир. Эта информация скрыта до подтверждения заявки."
+            />
+          </label>
+          <label>
+            Район или ориентир
+            <input
+              value={form.district}
+              onChange={(event) => setForm({ ...form, district: event.target.value })}
+              placeholder="Например: Центр"
+            />
+          </label>
+          <p className="privacy-note span-2">
+            Точный адрес, квартира, подъезд, этаж и домофон будут скрыты от помощников до согласования условий и перехода заявки в работу.
+          </p>
+          <h2 className="form-section-title span-2">Задачи и состояние подопечного</h2>
+          <label className="span-2">
+            Описание
+            <textarea
+              value={form.description}
+              onChange={(event) => setForm({ ...form, description: event.target.value })}
+            />
+          </label>
+          <fieldset className="span-2 checkbox-grid">
+            <legend>Дополнительные действия</legend>
+            {additionalActionOptions.map((option) => (
+              <label className="checkbox-row" key={option.value}>
+                <input
+                  type="checkbox"
+                  checked={form.additionalActions.includes(option.value)}
+                  onChange={() => setForm({ ...form, additionalActions: toggleValue(form.additionalActions, option.value) })}
+                />
+                <span>
+                  {option.label}
+                  {option.description && <small>{option.description}</small>}
+                </span>
+              </label>
+            ))}
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={form.hasPets}
+                onChange={(event) => setForm({ ...form, hasPets: event.target.checked })}
+              />
+              Есть домашние животные
+            </label>
+          </fieldset>
+          <fieldset className="span-2 checkbox-grid">
+            <legend>Состояние подопечного</legend>
+            {dependentStateOptions.map((option) => (
+              <label className="checkbox-row" key={option.value}>
+                <input
+                  type="checkbox"
+                  checked={form.dependentState.includes(option.value)}
+                  onChange={() => setForm({ ...form, dependentState: toggleValue(form.dependentState, option.value) })}
+                />
+                {option.label}
+              </label>
+            ))}
+          </fieldset>
+          <label>
+            Возраст подопечного
+            <input
+              type="number"
+              min={0}
+              value={form.dependentAge}
+              onChange={(event) => setForm({ ...form, dependentAge: event.target.value })}
+              placeholder="Например: 72"
+            />
+          </label>
+          <label>
+            Уровень гигиенической помощи
+            <select value={form.hygieneLevel} onChange={(event) => setForm({ ...form, hygieneLevel: event.target.value })}>
+              {hygieneLevelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label>
+            Уровень физической помощи
+            <select
+              value={form.physicalLoadLevel}
+              onChange={(event) => setForm({ ...form, physicalLoadLevel: event.target.value, physicalHelpLevel: event.target.value })}
+            >
+              {physicalLevelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label>
+            Объём задач
+            <select value={form.taskVolumeLevel} onChange={(event) => setForm({ ...form, taskVolumeLevel: event.target.value })}>
+              {taskVolumeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label>
+            Адрес и транспорт
+            <select value={form.transportOption} onChange={(event) => setForm({ ...form, transportOption: event.target.value })}>
+              <option value="city">В пределах города</option>
+              <option value="separate">Удалённый адрес / СНТ / дача</option>
+            </select>
+            <small>Транспорт для СНТ, дач и удалённых адресов согласуется отдельно.</small>
+          </label>
+          <h2 className="form-section-title span-2">Дата, время и регулярность</h2>
+          <label>
+            График помощи
+            <select value={form.scheduleType} onChange={(event) => setForm({ ...form, scheduleType: event.target.value })}>
+              <option value="once">Разово</option>
+              <option value="regular">Регулярно</option>
+              <option value="urgent">Срочно</option>
+            </select>
+          </label>
+          <label>
+            Дата
+            <input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} />
+            <small>{form.date ? `Выбранная дата: ${formatDateRu(form.date)}` : "Формат даты: дд.мм.гггг"}</small>
+          </label>
+          <label className="span-2">
+            Период, если регулярно
+            <input
+              value={form.regularPeriod}
+              onChange={(event) => setForm({ ...form, regularPeriod: event.target.value })}
+              placeholder="Например: 2 раза в неделю в течение месяца"
+            />
+          </label>
+          <label className="checkbox-row span-2">
+            <input
+              type="checkbox"
+              checked={form.repeatedVisitsAllowed}
+              onChange={(event) => setForm({ ...form, repeatedVisitsAllowed: event.target.checked })}
+            />
+            Возможны повторные визиты
+          </label>
+          <label>
+            С
+            <input
+              type="time"
+              value={form.timeFrom}
+              onChange={(event) => setForm({ ...form, timeFrom: event.target.value })}
+            />
+            <small>{form.timeFrom ? `Время: ${formatTimeRu(form.timeFrom)}` : "Формат времени: 10:00"}</small>
+          </label>
+          <label>
+            До
+            <input type="time" value={form.timeTo} onChange={(event) => setForm({ ...form, timeTo: event.target.value })} />
+            <small>{form.timeTo ? `Время: ${formatTimeRu(form.timeTo)}` : "Формат времени: 12:00"}</small>
+          </label>
+          <label>
+            Длительность, часов
+            <input
+              type="number"
+              min={1}
+              step={0.5}
+              value={form.expectedDurationHours}
+              onChange={(event) => setForm({ ...form, expectedDurationHours: Number(event.target.value) })}
+            />
+          </label>
+          <fieldset className="span-2 checkbox-grid">
+            <legend>Дополнительные условия времени</legend>
+            {urgencyFlagOptions.map((option) => (
+              <label className="checkbox-row" key={option.value}>
+                <input
+                  type="checkbox"
+                  checked={form.urgencyFlags.includes(option.value)}
+                  onChange={() => setForm({ ...form, urgencyFlags: toggleValue(form.urgencyFlags, option.value) })}
+                />
+                <span>{option.label}<small>{option.description}</small></span>
+              </label>
+            ))}
+          </fieldset>
+          <h2 className="form-section-title span-2">Рекомендуемая стоимость</h2>
+          <section className="span-2">
+            <PriceSummary pricing={quote} role="client" />
+            {quote && (
+              <details className="details-box">
+                <summary>Подробности расчёта</summary>
+                <ul>
+                  <li>Пакет визита: {quote.packageName}</li>
+                  <li>Почему выбран этот пакет: {quote.packageDescription}</li>
+                  <li>Рекомендуемая оплата помощнику: {quote.performerPaymentAmount} ₽</li>
+                  <li>Сервисный сбор заказчика: {quote.clientServiceFeeAmount} ₽</li>
+                  <li>Ориентировочные общие расходы: {quote.clientTotalExpense} ₽</li>
+                  <li>Расчётная длительность: {quote.billableHours} ч</li>
+                  {quote.included.length > 0 && <li>Что входит: {quote.included.slice(0, 6).join(", ")}</li>}
+                  {quote.excluded.length > 0 && <li>Что не входит: {quote.excluded.slice(0, 6).join(", ")}</li>}
+                  {quote.increaseFactors.length > 0 && <li>Что может изменить стоимость: {quote.increaseFactors.join(", ")}</li>}
+                  {quote.additions.map((item) => (
+                    <li key={item.label}>
+                      {item.label}: {item.amount > 0 ? `+${item.amount} ₽` : "без надбавки"}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </section>
+          <label className="span-2">
+            Комментарий по оплате
+            <input
+              value={form.paymentComment}
+              onChange={(event) => setForm({ ...form, paymentComment: event.target.value })}
+              placeholder="Например: если объём помощи изменится, согласуем сумму до начала визита"
+            />
+          </label>
+          <label className="span-2">
+            Комментарий
+            <textarea value={form.comment} onChange={(event) => setForm({ ...form, comment: event.target.value })} />
+          </label>
+          <h2 className="form-section-title span-2">Проверка и публикация</h2>
+          <button className="primary-button span-2" type="submit">
+            <Plus size={18} />
+            Создать и опубликовать
+          </button>
+          <p className="privacy-note span-2">
+            Инъекции, капельницы, перевязки, лечение, диагностика и другие медицинские процедуры не публикуются.
+          </p>
+        </form>
+      )}
+
+      {activeTab === "Мой баланс" && <BalancePanel />}
+
+      {activeTab === "Мой профиль" && (
+        <section className="panel-grid panel-grid--compact">
+          <ContactDetails user={user} />
+          <div className="metric">
+            <span>Имя</span>
+            <strong>{user?.displayName ?? "Не указано"}</strong>
+          </div>
+          <div className="metric">
+            <span>Телефон</span>
+            <strong>{user?.phone ?? "Не указан"}</strong>
+          </div>
+          <div className="metric">
+            <span>Город</span>
+            <strong>{bootstrap?.cities.find((city) => city.id === user?.cityId)?.name ?? "Не выбран"}</strong>
+          </div>
+          <div className="metric">
+            <span>Основной баланс</span>
+            <strong>{user?.balance ?? 0} ₽</strong>
+          </div>
+          <div className="metric">
+            <span>Бонусный баланс</span>
+            <strong>{user?.bonusBalance ?? 0} ₽</strong>
+          </div>
+          <div className="metric">
+            <span>Доступно для заявок</span>
+            <strong>{(user?.balance ?? 0) + (user?.bonusBalance ?? 0)} ₽</strong>
+          </div>
+          <div className="metric">
+            <span>Заявок всего</span>
+            <strong>{requests.length}</strong>
+          </div>
+          <div className="metric">
+            <span>Активных обращений</span>
+            <strong>{complaints.filter((complaint) => !["resolved", "rejected"].includes(complaint.status)).length}</strong>
+          </div>
+          <section className="plain-section span-2">
+            <h2>Профиль заказчика</h2>
+            <p className="privacy-note">Редактирование профиля будет доступно позже.</p>
+          </section>
+          <ConsentDocumentsPanel />
+        </section>
+      )}
+
+      {activeTab === "Чаты" && (
+        <div className="split">
+          <aside className="side-list">
+            <strong>Активные чаты</strong>
+            {chats.filter((chat) => !chat.archivedAt && !["not_agreed", "archived", "completed"].includes(chat.status)).map((chat) => (
+              <button key={chat.id} type="button" onClick={() => navigate(chatPathForRole("client", chat.id))}>
+                {requestDisplayTitle(chat.request)}
+              </button>
+            ))}
+            <strong>Архивные чаты</strong>
+            {chats.filter((chat) => chat.archivedAt || ["not_agreed", "archived", "completed"].includes(chat.status)).map((chat) => (
+              <button key={chat.id} type="button" onClick={() => navigate(chatPathForRole("client", chat.id))}>
+                {requestDisplayTitle(chat.request)}
+              </button>
+            ))}
+          </aside>
+          {activeChatId ? <ChatPanel chatId={activeChatId} /> : <p className="empty-text">Нет открытых чатов.</p>}
+        </div>
+      )}
+
+      {activeTab === "Мои обращения" && (
+        <div className="list">
+          <form className="form-grid" onSubmit={sendSupport}>
+            <label>
+              Тип обращения
+              <select value={supportForm.type} onChange={(event) => setSupportForm({ ...supportForm, type: event.target.value })}>
+                <option value="message">Сообщение</option>
+                <option value="question">Вопрос</option>
+                <option value="complaint">Жалоба</option>
+                <option value="suggestion">Предложение</option>
+                <option value="payment_problem">Проблема с оплатой</option>
+                <option value="request_problem">Проблема с заявкой</option>
+                <option value="client_problem">Проблема с заказчиком</option>
+                <option value="performer_problem">Проблема с помощником</option>
+                <option value="technical_problem">Техническая проблема</option>
+                <option value="other">Другое</option>
+              </select>
+            </label>
+            <label>
+              Связано с заявкой
+              <select value={supportForm.requestId} onChange={(event) => setSupportForm({ ...supportForm, requestId: event.target.value })}>
+                <option value="">Не связано</option>
+                {requests.map((request) => <option key={request.id} value={request.id}>{request.publicNumber} — {request.title}</option>)}
+              </select>
+            </label>
+            <label className="span-2">
+              Тема
+              <input value={supportForm.reason} onChange={(event) => setSupportForm({ ...supportForm, reason: event.target.value })} />
+            </label>
+            <label className="span-2">
+              Сообщение
+              <textarea value={supportForm.description} onChange={(event) => setSupportForm({ ...supportForm, description: event.target.value })} />
+            </label>
+            <button className="primary-button span-2" type="submit">Отправить администратору</button>
+          </form>
+          <div className="data-table">
+          <h3>Активные обращения</h3>
+          {complaints.filter((complaint) => !["resolved", "rejected"].includes(complaint.status)).map((complaint) => (
+            <div className="data-row" key={complaint.id}>
+              <strong>{complaint.publicNumber ?? "обращение"} — {complaint.reason}</strong>
+              <span>{complaint.request?.publicNumber ?? "без заявки"}</span>
+              <StatusBadge tone="info">{labelStatus(complaint.status)}</StatusBadge>
+              <span>{complaint.adminResponse ?? complaint.adminComment ?? "Ответ администратора пока не добавлен"}</span>
+            </div>
+          ))}
+          <h3>Архив обращений</h3>
+          {complaints.filter((complaint) => ["resolved", "rejected"].includes(complaint.status)).map((complaint) => (
+            <div className="data-row" key={complaint.id}>
+              <strong>{complaint.publicNumber ?? "обращение"} — {complaint.reason}</strong>
+              <span>{complaint.request?.publicNumber ?? "без заявки"}</span>
+              <StatusBadge tone="info">{labelStatus(complaint.status)}</StatusBadge>
+              <span>{complaint.adminResponse ?? complaint.adminComment ?? "Ответ администратора пока не добавлен"}</span>
+            </div>
+          ))}
+          {complaints.length === 0 && <p className="empty-text">Обращений пока нет.</p>}
+          </div>
+        </div>
+      )}
+
+      {activeTab === "Помощь / FAQ" && (
+        <div className="list">
+          {articles.map((article) => (
+            <article className="card" key={article.id}>
+              <p className="eyebrow">{article.category}</p>
+              <h3>{article.title}</h3>
+              <p>{article.content}</p>
+            </article>
+          ))}
+        </div>
+      )}
+
+      {activeTab === "Согласия" && (
+        <ConsentDocumentsPanel />
+      )}
+
+      {editingRequest && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <section className="modal-panel">
+            <div className="card__head">
+              <h2>Редактировать заявку {editingRequest.publicNumber}</h2>
+              <button className="secondary-button" type="button" onClick={() => setEditingRequest(null)}>Закрыть</button>
+            </div>
+            {editingRequest.status === "in_progress" ? (
+              <p className="notice">Заявка уже в работе. Для изменения условий создайте запрос на изменение.</p>
+            ) : ["completed", "archived"].includes(editingRequest.status) ? (
+              <p className="notice">Выполненную или архивную заявку редактировать нельзя. История остаётся доступной для просмотра.</p>
+            ) : (
+              <form className="form-grid" onSubmit={saveRequestEdit}>
+                <h3 className="form-section-title span-2">Кому и какая помощь нужна</h3>
+                <label>
+                  Город
+                  <select value={editForm.cityId} onChange={(event) => setEditForm({ ...editForm, cityId: event.target.value })}>
+                    <option value="">Выберите город</option>
+                    {bootstrap?.cities.map((city) => (
+                      <option key={city.id} value={city.id}>{city.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Категория
+                  <select value={editForm.categoryId} onChange={(event) => setEditForm({ ...editForm, categoryId: event.target.value })}>
+                    <option value="">Выберите категорию</option>
+                    {bootstrap?.categories.map((category) => (
+                      <option key={category.id} value={category.id}>{category.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Кому нужна помощь
+                  <select value={editForm.helpFor} onChange={(event) => setEditForm({ ...editForm, helpFor: event.target.value })}>
+                    <option value="">Выберите вариант</option>
+                    <option value="elderly">Пожилому человеку</option>
+                    <option value="child">Ребёнку</option>
+                    <option value="limited_mobility">Маломобильному человеку</option>
+                    <option value="home_family">Для дома / семьи</option>
+                    <option value="other">Другое</option>
+                  </select>
+                </label>
+                <label className="span-2">
+                  Коротко опишите, какая помощь нужна
+                  <input value={editForm.title} onChange={(event) => setEditForm({ ...editForm, title: event.target.value })} />
+                </label>
+                <h3 className="form-section-title span-2">Адрес выполнения</h3>
+                <label>
+                  Улица
+                  <input value={editForm.addressStreet} onChange={(event) => setEditForm({ ...editForm, addressStreet: event.target.value })} />
+                </label>
+                <label>
+                  Дом
+                  <input value={editForm.addressHouse} onChange={(event) => setEditForm({ ...editForm, addressHouse: event.target.value })} />
+                </label>
+                <label>
+                  Квартира
+                  <input value={editForm.addressApartment} onChange={(event) => setEditForm({ ...editForm, addressApartment: event.target.value })} />
+                </label>
+                <label>
+                  Подъезд
+                  <input value={editForm.addressEntrance} onChange={(event) => setEditForm({ ...editForm, addressEntrance: event.target.value })} />
+                </label>
+                <label>
+                  Этаж
+                  <input value={editForm.addressFloor} onChange={(event) => setEditForm({ ...editForm, addressFloor: event.target.value })} />
+                </label>
+                <label>
+                  Домофон
+                  <input value={editForm.addressIntercom} onChange={(event) => setEditForm({ ...editForm, addressIntercom: event.target.value })} />
+                </label>
+                <label className="span-2">
+                  Комментарий к адресу
+                  <input value={editForm.addressComment} onChange={(event) => setEditForm({ ...editForm, addressComment: event.target.value })} />
+                </label>
+                <label>
+                  Район или ориентир
+                  <input value={editForm.district} onChange={(event) => setEditForm({ ...editForm, district: event.target.value })} />
+                </label>
+                <p className="privacy-note span-2">
+                  Точный адрес, квартира, подъезд, этаж и домофон будут скрыты от помощников до согласования условий и перехода заявки в работу.
+                </p>
+                <h3 className="form-section-title span-2">Задачи и состояние подопечного</h3>
+                <label className="span-2">
+                  Описание
+                  <textarea value={editForm.description} onChange={(event) => setEditForm({ ...editForm, description: event.target.value })} />
+                </label>
+                <fieldset className="span-2 checkbox-grid">
+                  <legend>Дополнительные действия</legend>
+                  {additionalActionOptions.map((option) => (
+                    <label className="checkbox-row" key={option.value}>
+                      <input
+                        type="checkbox"
+                        checked={editForm.additionalActions.includes(option.value)}
+                        onChange={() => setEditForm({ ...editForm, additionalActions: toggleValue(editForm.additionalActions, option.value) })}
+                      />
+                      <span>
+                        {option.label}
+                        {option.description && <small>{option.description}</small>}
+                      </span>
+                    </label>
+                  ))}
+                  <label className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      checked={editForm.hasPets}
+                      onChange={(event) => setEditForm({ ...editForm, hasPets: event.target.checked })}
+                    />
+                    Есть домашние животные
+                  </label>
+                </fieldset>
+                <fieldset className="span-2 checkbox-grid">
+                  <legend>Состояние подопечного</legend>
+                  {dependentStateOptions.map((option) => (
+                    <label className="checkbox-row" key={option.value}>
+                      <input
+                        type="checkbox"
+                        checked={editForm.dependentState.includes(option.value)}
+                        onChange={() => setEditForm({ ...editForm, dependentState: toggleValue(editForm.dependentState, option.value) })}
+                      />
+                      {option.label}
+                    </label>
+                  ))}
+                </fieldset>
+                <label>
+                  Возраст подопечного
+                  <input
+                    type="number"
+                    min={0}
+                    value={editForm.dependentAge}
+                    onChange={(event) => setEditForm({ ...editForm, dependentAge: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Уровень гигиенической помощи
+                  <select value={editForm.hygieneLevel} onChange={(event) => setEditForm({ ...editForm, hygieneLevel: event.target.value })}>
+                    {hygieneLevelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Уровень физической помощи
+                  <select
+                    value={editForm.physicalLoadLevel}
+                    onChange={(event) => setEditForm({ ...editForm, physicalLoadLevel: event.target.value, physicalHelpLevel: event.target.value })}
+                  >
+                    {physicalLevelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Объём задач
+                  <select value={editForm.taskVolumeLevel} onChange={(event) => setEditForm({ ...editForm, taskVolumeLevel: event.target.value })}>
+                    {taskVolumeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Адрес и транспорт
+                  <select value={editForm.transportOption} onChange={(event) => setEditForm({ ...editForm, transportOption: event.target.value })}>
+                    <option value="city">В пределах города</option>
+                    <option value="separate">Удалённый адрес / СНТ / дача</option>
+                  </select>
+                  <small>Транспорт для СНТ, дач и удалённых адресов согласуется отдельно.</small>
+                </label>
+                <h3 className="form-section-title span-2">Дата, время и регулярность</h3>
+                <label>
+                  График помощи
+                  <select value={editForm.scheduleType} onChange={(event) => setEditForm({ ...editForm, scheduleType: event.target.value })}>
+                    <option value="once">Разово</option>
+                    <option value="regular">Регулярно</option>
+                    <option value="urgent">Срочно</option>
+                  </select>
+                </label>
+                <label>
+                  Дата
+                  <input type="date" value={editForm.date} onChange={(event) => setEditForm({ ...editForm, date: event.target.value })} />
+                  <small>{editForm.date ? `Выбранная дата: ${formatDateRu(editForm.date)}` : "Формат даты: дд.мм.гггг"}</small>
+                </label>
+                <label className="span-2">
+                  Период, если регулярно
+                  <input value={editForm.regularPeriod} onChange={(event) => setEditForm({ ...editForm, regularPeriod: event.target.value })} />
+                </label>
+                <label className="checkbox-row span-2">
+                  <input
+                    type="checkbox"
+                    checked={editForm.repeatedVisitsAllowed}
+                    onChange={(event) => setEditForm({ ...editForm, repeatedVisitsAllowed: event.target.checked })}
+                  />
+                  Возможны повторные визиты
+                </label>
+                <label>
+                  С
+                  <input type="time" value={editForm.timeFrom} onChange={(event) => setEditForm({ ...editForm, timeFrom: event.target.value })} />
+                  <small>{editForm.timeFrom ? `Время: ${formatTimeRu(editForm.timeFrom)}` : "Формат времени: 10:00"}</small>
+                </label>
+                <label>
+                  До
+                  <input type="time" value={editForm.timeTo} onChange={(event) => setEditForm({ ...editForm, timeTo: event.target.value })} />
+                  <small>{editForm.timeTo ? `Время: ${formatTimeRu(editForm.timeTo)}` : "Формат времени: 12:00"}</small>
+                </label>
+                <label>
+                  Длительность, часов
+                  <input type="number" min={1} step={0.5} value={editForm.expectedDurationHours} onChange={(event) => setEditForm({ ...editForm, expectedDurationHours: Number(event.target.value) })} />
+                </label>
+                <fieldset className="span-2 checkbox-grid">
+                  <legend>Дополнительные условия времени</legend>
+                  {urgencyFlagOptions.map((option) => (
+                    <label className="checkbox-row" key={option.value}>
+                      <input
+                        type="checkbox"
+                        checked={editForm.urgencyFlags.includes(option.value)}
+                        onChange={() => setEditForm({ ...editForm, urgencyFlags: toggleValue(editForm.urgencyFlags, option.value) })}
+                      />
+                      <span>{option.label}<small>{option.description}</small></span>
+                    </label>
+                  ))}
+                </fieldset>
+                <h3 className="form-section-title span-2">Обновлённый расчёт</h3>
+                <section className="span-2">
+                  <PriceSummary pricing={editQuote} fallbackPayment={editingRequest.priceEstimateAmount} role="client" />
+                </section>
+                <label className="span-2">
+                  Комментарий по оплате
+                  <input value={editForm.paymentComment} onChange={(event) => setEditForm({ ...editForm, paymentComment: event.target.value })} />
+                </label>
+                <label className="span-2">
+                  Комментарий
+                  <textarea value={editForm.comment} onChange={(event) => setEditForm({ ...editForm, comment: event.target.value })} />
+                </label>
+                <button className="primary-button span-2" type="submit">Сохранить изменения</button>
+              </form>
+            )}
+          </section>
+        </div>
+      )}
+    </Shell>
+  );
+}
+
+const additionalActionOptions = [
+  { value: "light_cleaning", label: "лёгкая уборка", description: "Влияет на бытовой формат визита." },
+  { value: "laundry", label: "стирка", description: "Расширяет бытовой объём." },
+  { value: "ironing", label: "глажка", description: "Расширяет бытовой объём." },
+  { value: "bed_linen", label: "смена постельного", description: "Может повысить объём бытового визита." },
+  { value: "simple_cooking", label: "простая еда в рамках визита", description: "Добавляет 200 ₽ к оплате помощнику, если согласована дополнительно." },
+  { value: "full_cooking", label: "полноценная готовка", description: "Переводит заявку в формат готовки." },
+  { value: "food_help", label: "помощь с едой", description: "Влияет на уходовый формат." },
+  { value: "clothes_help", label: "помощь с одеждой", description: "Влияет на уровень физической поддержки." },
+  { value: "wash_help", label: "помощь умыться", description: "Лёгкая гигиена влияет на формат ухода." },
+  { value: "toilet_help", label: "помощь с туалетом", description: "Поднимает уровень ухода." },
+  { value: "diaper_change", label: "смена подгузника", description: "Не отдельная услуга, но повышает формат визита." },
+  { value: "washing", label: "подмывание", description: "Повышает уровень ухода и требует согласования." },
+  { value: "movement_help", label: "помощь при передвижении", description: "Влияет на физическую нагрузку." },
+  { value: "escort", label: "сопровождение", description: "Переводит заявку в формат сопровождения." },
+  { value: "walk", label: "прогулка", description: "Учитывается как сопровождение." },
+  { value: "errands", label: "покупки / поручения", description: "Учитывается как поручение или сопровождение." },
+  { value: "companionship", label: "присмотр и общение", description: "Влияет на длительный присмотр." },
+  { value: "hygiene", label: "бытовая гигиеническая помощь", description: "Повышает формат уходового визита." }
+];
+
+const hygieneLevelOptions = [
+  { value: "none", label: "Нет гигиенической помощи" },
+  { value: "hygieneLight", label: "Лёгкая гигиена" },
+  { value: "hygieneHousehold", label: "Бытовая гигиеническая помощь" },
+  { value: "hygieneIntimate", label: "Интимная гигиена / подмывание" }
+];
+
+const physicalLevelOptions = [
+  { value: "none", label: "Нет физической помощи" },
+  { value: "physicalLight", label: "Лёгкая физическая поддержка" },
+  { value: "physicalMedium", label: "Средняя физическая помощь" },
+  { value: "physicalHeavy", label: "Тяжёлая физическая помощь" }
+];
+
+const taskVolumeOptions = [
+  { value: "minimal", label: "Минимальный объём, корректировка -150 ₽" },
+  { value: "basic", label: "Базовый объём" },
+  { value: "extended", label: "Расширенный объём, +150 ₽" },
+  { value: "manual", label: "Требуется ручная корректировка" }
+];
+
+const urgencyFlagOptions = [
+  { value: "urgent", label: "Срочно сегодня/завтра", description: "+200 ₽ к рекомендуемой оплате" },
+  { value: "evening", label: "Вечер после 18:00", description: "+200 ₽ к рекомендуемой оплате" },
+  { value: "weekend", label: "Выходной", description: "+200 ₽ к рекомендуемой оплате" },
+  { value: "holiday", label: "Праздник", description: "+400 ₽ к рекомендуемой оплате" }
+];
+
+const dependentStateOptions = [
+  { value: "independent", label: "Самостоятельный" },
+  { value: "light_support", label: "Нужна лёгкая поддержка" },
+  { value: "regular_help", label: "Нужна регулярная помощь" },
+  { value: "limited_mobility", label: "Маломобильный" },
+  { value: "bedridden", label: "Лежачий" },
+  { value: "fall_risk", label: "Есть риск падения" },
+  { value: "hygiene_help", label: "Нужна гигиеническая помощь" },
+  { value: "toilet_help", label: "Нужна помощь с туалетом" },
+  { value: "diaper_help", label: "Нужна помощь с подгузником" },
+  { value: "child", label: "Ребёнок" }
+];
+
+function toggleValue(values: string[], value: string) {
+  return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+}
+
+function buildPricingPayload(form: {
+  categoryId: string;
+  expectedDurationHours: number | string;
+  scheduleType: string;
+  date?: string;
+  timeFrom?: string;
+  helpFor: string;
+  additionalActions: string[];
+  dependentState: string[];
+  hygieneLevel?: string;
+  physicalLoadLevel?: string;
+  physicalHelpLevel?: string;
+  taskVolumeLevel?: string;
+  urgencyFlags?: string[];
+  transportOption?: string;
+  hasPets: boolean;
+}) {
+  const additionalActions = buildSavedActions(form);
+  return {
+    categoryId: form.categoryId,
+    expectedDurationHours: Number(form.expectedDurationHours) || 1,
+    durationHours: Number(form.expectedDurationHours) || 1,
+    scheduleType: form.scheduleType,
+    date: form.date || undefined,
+    timeFrom: form.timeFrom || undefined,
+    time: form.timeFrom || undefined,
+    helpFor: form.helpFor || undefined,
+    selectedActions: additionalActions,
+    additionalActions,
+    dependentState: form.dependentState,
+    hygieneLevel: form.hygieneLevel,
+    physicalLoadLevel: form.physicalLoadLevel || form.physicalHelpLevel,
+    physicalHelpLevel: form.physicalLoadLevel || form.physicalHelpLevel,
+    taskVolumeLevel: form.taskVolumeLevel,
+    urgencyFlags: form.urgencyFlags ?? [],
+    isRemoteAddress: form.transportOption === "separate",
+    transportOption: form.transportOption,
+    urgency: form.scheduleType === "urgent" ? "urgent" : form.scheduleType === "regular" ? "regular" : "normal",
+    hasLimitedMobility: derivedHasLimitedMobility(form),
+    needsCooking: additionalActions.some((action) => ["simple_cooking", "full_cooking", "simpleMealWithinVisit", "simpleCookingVisit", "fullCookingVisit"].includes(action)),
+    needsCleaning: additionalActions.some((action) => ["light_cleaning", "laundry", "ironing", "bed_linen"].includes(action)),
+    needsWalk: additionalActions.includes("walk") || additionalActions.includes("escort"),
+    needsHygieneHelp: derivedNeedsHygiene(form),
+    hasPets: form.hasPets
+  };
+}
+
+function buildSavedActions(form: { additionalActions: string[]; hygieneLevel?: string; physicalLoadLevel?: string; taskVolumeLevel?: string; transportOption?: string; urgencyFlags?: string[] }) {
+  return Array.from(new Set([
+    ...form.additionalActions,
+    form.hygieneLevel && form.hygieneLevel !== "none" ? form.hygieneLevel : "",
+    form.physicalLoadLevel && form.physicalLoadLevel !== "none" ? form.physicalLoadLevel : "",
+    form.taskVolumeLevel && form.taskVolumeLevel !== "basic" ? `taskVolume:${form.taskVolumeLevel}` : "",
+    form.transportOption === "separate" ? "transportSeparate" : "",
+    ...(form.urgencyFlags ?? [])
+  ].filter(Boolean)));
+}
+
+function extractStoredPricingOptions(actions: string[], physicalHelpLevel?: string | null) {
+  const taskVolume = actions.find((action) => action.startsWith("taskVolume:"))?.split(":")[1];
+  return {
+    hygieneLevel: actions.includes("hygieneIntimate") || actions.includes("washing") ? "hygieneIntimate"
+      : actions.includes("hygieneHousehold") || actions.includes("hygiene") ? "hygieneHousehold"
+        : actions.includes("hygieneLight") || actions.includes("wash_help") ? "hygieneLight"
+          : "none",
+    physicalLoadLevel: actions.includes("physicalHeavy") || physicalHelpLevel === "physicalHeavy" ? "physicalHeavy"
+      : actions.includes("physicalMedium") || physicalHelpLevel === "physicalMedium" ? "physicalMedium"
+        : actions.includes("physicalLight") || physicalHelpLevel === "physicalLight" ? "physicalLight"
+          : "none",
+    taskVolumeLevel: taskVolume && taskVolumeOptions.some((option) => option.value === taskVolume) ? taskVolume : "basic",
+    transportOption: actions.includes("transportSeparate") ? "separate" : "city",
+    urgencyFlags: actions.filter((action) => urgencyFlagOptions.some((option) => option.value === action))
+  };
+}
+
+function derivedHasLimitedMobility(form: { helpFor: string; dependentState: string[]; additionalActions: string[]; physicalLoadLevel?: string; physicalHelpLevel?: string }) {
+  return (
+    form.helpFor === "limited_mobility" ||
+    form.dependentState.some((state) => ["limited_mobility", "bedridden", "fall_risk"].includes(state)) ||
+    form.additionalActions.includes("movement_help") ||
+    ["physicalLight", "physicalMedium", "physicalHeavy"].includes(form.physicalLoadLevel || form.physicalHelpLevel || "")
+  );
+}
+
+function derivedNeedsHygiene(form: { dependentState: string[]; additionalActions: string[]; hygieneLevel?: string }) {
+  return (
+    Boolean(form.hygieneLevel && form.hygieneLevel !== "none") ||
+    form.dependentState.some((state) => ["hygiene_help", "toilet_help", "diaper_help"].includes(state)) ||
+    form.additionalActions.some((action) => ["wash_help", "toilet_help", "diaper_change", "washing", "hygiene"].includes(action))
+  );
+}
+
+function parseJsonArray(value?: string | null) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function extractCommentLine(comment: string | null | undefined, prefix: string) {
+  return (comment ?? "")
+    .split("\n")
+    .find((line) => line.startsWith(prefix))
+    ?.slice(prefix.length)
+    .trim() ?? "";
+}
+
+function stripGeneratedCommentLines(comment: string | null | undefined) {
+  return (comment ?? "")
+    .split("\n")
+    .filter((line) => !line.startsWith("Комментарий к адресу:") && !line.startsWith("Комментарий по оплате:"))
+    .join("\n")
+    .trim();
+}
+
+function splitLegacyAddress(request: ClientRequest) {
+  const cityName = request.city?.name ?? request.addressCity ?? "";
+  const raw = request.addressText ?? request.fullAddress ?? "";
+  const withoutCity = cityName && raw.startsWith(cityName) ? raw.slice(cityName.length).replace(/^,\s*/, "") : raw;
+  const parts = withoutCity.split(",").map((item) => item.trim()).filter(Boolean);
+  return {
+    street: request.addressStreet ?? parts[0] ?? "",
+    house: request.addressHouse ?? parts[1]?.replace(/^дом\s+/i, "") ?? ""
+  };
+}
+
+function clientTabFromPath(pathname: string) {
+  if (pathname.startsWith("/app/client/requests/completed")) return "Выполненные заявки";
+  if (pathname.startsWith("/app/client/requests/new")) return "Создать заявку";
+  if (pathname.startsWith("/app/client/balance")) return "Мой баланс";
+  if (pathname.startsWith("/app/client/chats")) return "Чаты";
+  if (pathname.startsWith("/app/client/profile")) return "Мой профиль";
+  if (pathname.startsWith("/app/client/support")) return "Мои обращения";
+  if (pathname.startsWith("/app/client/help")) return "Помощь / FAQ";
+  if (pathname.startsWith("/app/client/consents")) return "Согласия";
+  return "Мои заявки";
+}
+
+function chatIdFromPath(pathname: string, prefix: string) {
+  const match = pathname.match(new RegExp(`^${prefix}/([^/]+)$`));
+  return match?.[1] ?? null;
+}

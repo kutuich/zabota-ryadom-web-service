@@ -1,0 +1,1546 @@
+import { Archive, Ban, BookOpen, CheckCircle2, Coins, Download, RefreshCcw, Search, ShieldAlert, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { api } from "../api/client";
+import { AdminPaymentsPage } from "./AdminPaymentsPage";
+import { Shell } from "../components/Shell";
+import { StatusBadge, statusTone } from "../components/StatusBadge";
+import { ChatPanel } from "../components/ChatPanel";
+import { EmptyState } from "../components/EmptyState";
+import { PriceSummary } from "../components/PriceSummary";
+import { ResponsiveDataList } from "../components/ResponsiveDataList";
+import { useAuth } from "../context/AuthContext";
+import type { Chat, ClientRequest, KnowledgeArticle, LegalDocument, ServiceCategory, User, UserConsent, UserConsentStatus } from "../types";
+import { labelChildcare, labelCriminalRecord, labelSelfEmployed, labelStatus, labelTrust, requestDisplayTitle } from "../utils/labels";
+import { adminNavigation, chatPathForRole, sectionTitleForPath } from "../routes/navigation";
+import { downloadXlsx, downloadZip } from "../utils/xlsx";
+import { buildPublicAddressFromRequest, buildYandexExactAddressFromRequest, buildYandexMapsSearchUrl } from "../utils/address";
+import { formatDateRu, formatDateTimeRu, formatTimeRu } from "../utils/dateTime";
+
+const summaryLabels: Record<string, string> = {
+  usersTotal: "Пользователей",
+  clientsTotal: "Заказчиков",
+  performersTotal: "Помощников",
+  requestsTotal: "Заявок",
+  chatsTotal: "Чатов",
+  complaintsTotal: "Жалоб",
+  balanceTotal: "Баланс пользователей",
+  riskFlagsTotal: "Риски"
+};
+
+const hiddenLegacySettingKeys = new Set(["performerCommissionAmount", "serviceCommissionAmount"]);
+
+export function AdminDashboard() {
+  const { bootstrap } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const activeTab = adminTabFromPath(location.pathname);
+  const routeChatId = chatIdFromPath(location.pathname, "/app/admin/chats");
+  const [summary, setSummary] = useState<Record<string, number>>({});
+  const [users, setUsers] = useState<User[]>([]);
+  const [requests, setRequests] = useState<ClientRequest[]>([]);
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [complaints, setComplaints] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [settings, setSettings] = useState<any[]>([]);
+  const [settingDrafts, setSettingDrafts] = useState<Record<string, string>>({});
+  const [knowledge, setKnowledge] = useState<KnowledgeArticle[]>([]);
+  const [legalDocuments, setLegalDocuments] = useState<LegalDocument[]>([]);
+  const [legalConsents, setLegalConsents] = useState<UserConsent[]>([]);
+  const [legalExportLogs, setLegalExportLogs] = useState<any[]>([]);
+  const [adminCategories, setAdminCategories] = useState<ServiceCategory[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [chatSearch, setChatSearch] = useState("");
+  const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
+  const [cityInfoCityId, setCityInfoCityId] = useState<string | null>(null);
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [selectedUserLegalStatuses, setSelectedUserLegalStatuses] = useState<UserConsentStatus[]>([]);
+  const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
+  const [selectedMatch, setSelectedMatch] = useState<{ request: ClientRequest; response: any } | null>(null);
+  const [expandedBalanceUserId, setExpandedBalanceUserId] = useState<string | null>(null);
+  const [editingArticle, setEditingArticle] = useState<KnowledgeArticle | null>(null);
+  const [orderingArticleId, setOrderingArticleId] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
+  const [bonusForm, setBonusForm] = useState({
+    userId: "",
+    amount: 150,
+    reason: "Пробный бонус",
+    comment: "",
+    bonusExpiresAt: ""
+  });
+  const categories = adminCategories;
+
+  async function load() {
+    const [summaryRows, userRows, requestRows, chatRows, complaintRows, categoryRows, transactionRows, settingRows, knowledgeRows, legalDocumentRows, legalConsentRows, legalExportLogRows] = await Promise.all([
+      api.adminSummary(),
+      api.adminUsers(),
+      api.adminRequests(),
+      api.adminChats(),
+      api.adminComplaints(),
+      api.adminCategories(),
+      api.adminTransactions(),
+      api.adminSettings(),
+      api.adminKnowledge(),
+      api.adminLegalDocuments(),
+      api.adminLegalConsents(),
+      api.adminLegalExportLogs()
+    ]);
+    setSummary(summaryRows);
+    setUsers(userRows);
+    setRequests(requestRows);
+    setChats(chatRows);
+    setComplaints(complaintRows);
+    setAdminCategories(categoryRows);
+    setTransactions(transactionRows);
+    setSettings(settingRows);
+    setSettingDrafts(Object.fromEntries((settingRows as any[]).map((setting) => [setting.key, setting.valueJson])));
+    setKnowledge(knowledgeRows);
+    setLegalDocuments(legalDocumentRows);
+    setLegalConsents(legalConsentRows as any);
+    setLegalExportLogs(legalExportLogRows as any[]);
+    setBonusForm((current) => ({ ...current, userId: current.userId || userRows[0]?.id || "" }));
+  }
+
+  useEffect(() => {
+    load().catch((error) => setNotice(error.message));
+  }, []);
+
+  useEffect(() => {
+    setActiveChatId(routeChatId);
+  }, [routeChatId]);
+
+  const clients = useMemo(() => users.filter((user) => user.role === "client"), [users]);
+  const performers = useMemo(() => users.filter((user) => user.role === "performer"), [users]);
+  const selectedCity = bootstrap?.cities.find((city) => city.id === cityInfoCityId) ?? null;
+  const selectedCityRequests = cityInfoCityId ? requests.filter((request) => request.cityId === cityInfoCityId) : [];
+  const selectedCityResponses = selectedCityRequests.flatMap((request) => (request.responses ?? []).map((response: any) => ({ request, response })));
+  const selectedCityClients = cityInfoCityId ? users.filter((user) => user.cityId === cityInfoCityId && user.role === "client") : [];
+  const selectedCityPerformers = cityInfoCityId ? users.filter((user) => user.cityId === cityInfoCityId && user.role === "performer") : [];
+  const sortedChats = useMemo(() => [...chats].sort((left, right) => {
+    const leftNumber = left.request?.publicNumber ?? "";
+    const rightNumber = right.request?.publicNumber ?? "";
+    return leftNumber.localeCompare(rightNumber, "ru", { numeric: true });
+  }), [chats]);
+  const filteredChats = useMemo(() => {
+    const query = chatSearch.trim().toLowerCase();
+    if (!query) return sortedChats;
+    return sortedChats.filter((chat) =>
+      [
+        chat.request?.publicNumber,
+        chat.request?.title,
+        chat.client?.displayName,
+        chat.performer?.displayName,
+        chat.status
+      ].filter(Boolean).join(" ").toLowerCase().includes(query)
+    );
+  }, [chatSearch, sortedChats]);
+  const sortedKnowledge = useMemo(() => [...knowledge].sort((left: any, right: any) => {
+    const byOrder = left.sortOrder - right.sortOrder;
+    if (byOrder !== 0) return byOrder;
+    return String(left.createdAt ?? left.title).localeCompare(String(right.createdAt ?? right.title), "ru");
+  }), [knowledge]);
+
+  async function block(userId: string) {
+    await api.adminBlockUser(userId, "Ручная блокировка администратором");
+    await load();
+  }
+
+  async function unblock(userId: string) {
+    await api.adminUnblockUser(userId);
+    await load();
+  }
+
+  async function deleteUser(user: User) {
+    const confirmed = window.confirm(
+      `Удалить пользователя ${user.displayName} полностью из базы данных?\n\n` +
+      "Будут удалены связанные заявки, отклики, чаты, обращения и операции. Восстановление возможно только новой регистрацией."
+    );
+    if (!confirmed) return;
+    const result = await api.adminDeleteUser(user.id);
+    setSelectedUser(null);
+    setNotice(`Пользователь удалён. Удалено заявок: ${result.removedRequests ?? 0}, чатов: ${result.removedChats ?? 0}.`);
+    await load();
+  }
+
+  async function openUserProfile(user: User) {
+    setSelectedUser(user);
+    setSelectedUserLegalStatuses([]);
+    try {
+      setSelectedUserLegalStatuses(await api.adminUserLegalConsents(user.id));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Не удалось загрузить юридические согласия пользователя.");
+    }
+  }
+
+  async function grantBonus() {
+    await api.adminGrantBonus(
+      bonusForm.userId,
+      Number(bonusForm.amount),
+      bonusForm.reason,
+      bonusForm.comment,
+      bonusForm.bonusExpiresAt || undefined
+    );
+    setNotice("Бонус начислен и записан в журнал операций.");
+    await load();
+  }
+
+  async function verifyPerformer(user: User) {
+    if (!window.confirm(`Изменить статус проверки помощника ${user.displayName}?`)) return;
+    await api.adminUpdatePerformerVerification(user.id, {
+      verificationStatuses: [
+        "phone_verified",
+        "profile_completed",
+        "self_employed_verified",
+        "criminal_record_verified",
+        "trusted_by_reviews"
+      ],
+      selfEmployedStatus: "self_employed_verified",
+      criminalRecordCertificateStatus: "criminal_record_verified",
+      trustLevel: "manual_verified",
+      childcareApprovalStatus: "approved"
+    });
+    await load();
+  }
+
+  async function markPerformerNotVerified(user: User) {
+    if (!window.confirm(`Снять проверку у помощника ${user.displayName}?`)) return;
+    await api.adminUpdatePerformerVerification(user.id, {
+      verificationStatuses: ["phone_verified", "profile_completed", "documents_optional"],
+      selfEmployedStatus: "self_employed_provided",
+      criminalRecordCertificateStatus: "criminal_record_not_provided",
+      trustLevel: "not_verified",
+      childcareApprovalStatus: "missing_criminal_record"
+    });
+    await load();
+  }
+
+  async function updateDocumentStatus(documentId: string, status: string) {
+    await api.adminUpdatePerformerDocumentStatus(documentId, status, status === "verified" ? "Подтверждено администратором" : "Отклонено администратором");
+    await load();
+  }
+
+  async function toggleCategory(category: ServiceCategory) {
+    await api.adminUpdateCategory(category.id, { isActive: !category.isActive });
+    await load();
+  }
+
+  async function saveSettings() {
+    await Promise.all(settings.map((setting: any) => api.adminUpdateSetting(setting.key, settingDrafts[setting.key] ?? setting.valueJson)));
+    setNotice("Настройки сервиса сохранены и записаны в audit log.");
+    await load();
+  }
+
+  async function saveKnowledgeArticle(article: KnowledgeArticle) {
+    const updated = await api.adminUpdateKnowledge(article.id, article);
+    setKnowledge((current) => current.map((item) => item.id === updated.id ? updated : item));
+    setEditingArticle(null);
+    await load();
+  }
+
+  async function toggleKnowledgeArticle(article: KnowledgeArticle) {
+    await api.adminUpdateKnowledge(article.id, { isPublished: !article.isPublished });
+    await load();
+  }
+
+  async function updateKnowledgeOrder(article: KnowledgeArticle, position: number) {
+    const next = sortedKnowledge.filter((item) => item.id !== article.id);
+    next.splice(Math.max(0, Math.min(position - 1, next.length)), 0, article);
+    await Promise.all(next.map((item, index) => api.adminUpdateKnowledge(item.id, { sortOrder: (index + 1) * 10 })));
+    setOrderingArticleId(null);
+    setNotice("Порядок отображения обновлён.");
+    await load();
+  }
+
+  function updateSettingDraft(key: string, valueJson: string) {
+    setSettingDrafts((current) => ({ ...current, [key]: valueJson }));
+  }
+
+  function openChat(chatId: string) {
+    setChatSearch("");
+    navigate(chatPathForRole("admin", chatId));
+  }
+
+  function exportRequests() {
+    downloadXlsx(`zabota-requests-${dateStamp()}.xlsx`, [{
+      name: "Заявки",
+      rows: [
+        requestExportHeader(),
+        ...requests.map(requestExportRow)
+      ]
+    }]);
+  }
+
+  function exportResponses() {
+    downloadXlsx(`zabota-responses-${dateStamp()}.xlsx`, [{
+      name: "Отклики",
+      rows: [
+        [
+          "Номер заявки",
+          "Город",
+          "Категория",
+          "Заказчик",
+          "Помощник",
+          "Статус отклика",
+          "Дата отклика",
+          "Есть чат",
+          "Статус чата",
+          "Оплата помощнику",
+          "Сервисный сбор помощника",
+          "Доход помощника после сервисного сбора"
+        ],
+        ...requests.flatMap((request) => (request.responses ?? []).map((response: any) => {
+          const pricing = request.pricing ?? parseJsonObject(request.pricingBreakdownJson);
+          const chat = chats.find((item) => item.requestId === request.id && item.performerId === response.performerId) ?? request.chat;
+          return [
+            request.publicNumber ?? "",
+            request.city?.name ?? "",
+            request.category?.name ?? "",
+            (request as any).client?.displayName ?? "",
+            response.performer?.displayName ?? "",
+            labelStatus(response.status),
+            formatDateTimeRu(response.createdAt),
+            chat ? "да" : "нет",
+            chat ? labelStatus(chat.status) : "",
+            pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0,
+            pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0,
+            pricing?.performerNetAmount ?? Math.max(0, (pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0) - (pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0))
+          ];
+        }))
+      ]
+    }]);
+  }
+
+  function exportCity() {
+    if (!selectedCity) return;
+    const cityRequests = requests.filter((request) => request.cityId === selectedCity.id);
+    const cityResponses = cityRequests.flatMap((request) => (request.responses ?? []).map((response: any) => ({ request, response })));
+    const cityUsers = users.filter((user) => user.cityId === selectedCity.id);
+    downloadXlsx(`zabota-city-${safeFileName(selectedCity.name)}-${dateStamp()}.xlsx`, [
+      {
+        name: "Сводка",
+        rows: [
+          ["Показатель", "Значение"],
+          ...citySummaryRows(selectedCity.id)
+        ]
+      },
+      { name: "Заявки", rows: [requestExportHeader(), ...cityRequests.map(requestExportRow)] },
+      {
+        name: "Отклики",
+        rows: [
+          ["Номер заявки", "Заказчик", "Помощник", "Категория", "Статус отклика", "Дата отклика"],
+          ...cityResponses.map(({ request, response }) => [
+            request.publicNumber ?? "",
+            (request as any).client?.displayName ?? "",
+            response.performer?.displayName ?? "",
+            request.category?.name ?? "",
+            labelStatus(response.status),
+            formatDateTimeRu(response.createdAt)
+          ])
+        ]
+      },
+      {
+        name: "Заказчики",
+        rows: [
+          ["Имя", "Телефон", "Email", "Баланс", "Статус"],
+          ...cityUsers.filter((user) => user.role === "client").map((user) => [
+            user.displayName,
+            user.phone,
+            user.email ?? "",
+            user.balance + user.bonusBalance,
+            labelStatus(user.status)
+          ])
+        ]
+      },
+      {
+        name: "Помощники",
+        rows: [
+          ["Имя", "Телефон", "Email", "Баланс", "Статус профиля"],
+          ...cityUsers.filter((user) => user.role === "performer").map((user) => [
+            user.displayName,
+            user.phone,
+            user.email ?? "",
+            user.balance + user.bonusBalance,
+            labelTrust(user.performerProfile?.trustLevel)
+          ])
+        ]
+      }
+    ]);
+  }
+
+  async function exportAllConsents() {
+    const exportPayload = await api.adminExportAllConsents();
+    downloadXlsx(exportPayload.fileName, exportPayload.sheets ?? []);
+    setNotice("Экспорт согласий сформирован и записан в журнал.");
+    await load();
+  }
+
+  async function exportUserConsents(user: User) {
+    const exportPayload = await api.adminExportUserConsents(user.id);
+    downloadXlsx(exportPayload.fileName, exportPayload.sheets ?? []);
+    setNotice(`Экспорт согласий пользователя ${user.displayName} сформирован.`);
+    await load();
+  }
+
+  async function exportUserLegalArchive(user: User) {
+    const exportPayload = await api.adminExportUserLegalArchive(user.id);
+    downloadZip(exportPayload.fileName, exportPayload.files ?? []);
+    setNotice(`Legal-архив пользователя ${user.displayName} сформирован.`);
+    await load();
+  }
+
+  async function exportLegalArchive() {
+    const exportPayload = await api.adminExportLegalArchive();
+    downloadZip(exportPayload.fileName, exportPayload.files ?? []);
+    setNotice("Юридический архив сформирован и записан в журнал.");
+    await load();
+  }
+
+  async function createLegalDocumentVersion(document: LegalDocument) {
+    const version = window.prompt("Укажите номер новой версии", nextLegalVersion(document.version));
+    if (!version) return;
+    await api.adminCreateLegalDocumentVersion(document.id, {
+      version,
+      contentMarkdown: `${document.contentMarkdown}\n\nДополните текст новой редакции перед публикацией.`
+    });
+    setNotice("Черновик новой версии создан. Отредактируйте текст перед публикацией.");
+    await load();
+  }
+
+  async function publishLegal(document: LegalDocument) {
+    if (!window.confirm(`Опубликовать документ “${document.title}” версии ${document.version}? Старые версии этого типа станут архивными.`)) return;
+    await api.adminPublishLegalDocument(document.id);
+    setNotice("Юридический документ опубликован. Пользователям потребуется принять новую актуальную версию.");
+    await load();
+  }
+
+  async function archiveLegal(document: LegalDocument) {
+    if (!window.confirm(`Архивировать документ “${document.title}” версии ${document.version}?`)) return;
+    await api.adminArchiveLegalDocument(document.id);
+    setNotice("Юридический документ перенесён в архив.");
+    await load();
+  }
+
+  function citySummaryRows(cityId: string) {
+    const cityRequests = requests.filter((request) => request.cityId === cityId);
+    const cityResponses = cityRequests.flatMap((request) => request.responses ?? []);
+    const cityChats = chats.filter((chat) => chat.request?.cityId === cityId);
+    const cityComplaints = complaints.filter((complaint) => complaint.request?.cityId === cityId);
+    const cityUsers = users.filter((user) => user.cityId === cityId);
+    const totals = cityRequests.reduce((sum, request) => {
+      const pricing = request.pricing ?? parseJsonObject(request.pricingBreakdownJson);
+      return {
+        helperPayments: sum.helperPayments + Number(pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0),
+        customerFees: sum.customerFees + Number(pricing?.clientServiceFeeAmount ?? 0),
+        helperFees: sum.helperFees + Number(pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0)
+      };
+    }, { helperPayments: 0, customerFees: 0, helperFees: 0 });
+    const city = bootstrap?.cities.find((city) => city.id === cityId);
+    return [
+      ["Город", city?.name ?? ""],
+      ["Регион", city?.region ?? ""],
+      ["Часовой пояс", city?.timezone ?? ""],
+      ["Тарифная зона", city?.pricingZone ?? ""],
+      ["Пояснение", "Используется для будущих отдельных тарифов и расчётов по городам."],
+      ["Активен", city?.isActive ? "Да" : "Нет"],
+      ["Порядок сортировки", city?.sortOrder ?? ""],
+      ["Количество заявок", cityRequests.length],
+      ["Количество активных заявок", cityRequests.filter((request) => !["completed", "cancelled", "archived"].includes(request.status)).length],
+      ["Количество выполненных заявок", cityRequests.filter((request) => request.status === "completed").length],
+      ["Количество откликов", cityResponses.length],
+      ["Количество заказчиков", cityUsers.filter((user) => user.role === "client").length],
+      ["Количество помощников", cityUsers.filter((user) => user.role === "performer").length],
+      ["Количество чатов", cityChats.length],
+      ["Количество обращений", cityComplaints.length],
+      ["Общая сумма оплат помощникам", totals.helperPayments],
+      ["Общая сумма сервисных сборов заказчиков", totals.customerFees],
+      ["Общая сумма сервисных сборов помощников", totals.helperFees]
+    ];
+  }
+
+  return (
+    <Shell title={sectionTitleForPath(location.pathname, adminNavigation)} navigation={adminNavigation} variant="admin">
+      {notice && <p className="notice">{notice}</p>}
+
+      {activeTab === "Главная" && (
+        <section className="panel-grid">
+          {Object.entries(summary).map(([key, value]) => (
+            <div className="metric" key={key}>
+              <ShieldAlert size={20} />
+              <span>{summaryLabels[key] ?? key}</span>
+              <strong>{value}</strong>
+            </div>
+          ))}
+          <button className="secondary-button" type="button" onClick={load}>
+            <RefreshCcw size={18} />
+            Обновить
+          </button>
+        </section>
+      )}
+
+      {activeTab === "Города" && (
+        <section className="plain-section">
+          <h2>Города</h2>
+          <div className="form-inline">
+            <label>
+              Выберите город
+              <select value={selectedCityId ?? ""} onChange={(event) => setSelectedCityId(event.target.value || null)}>
+                <option value="">Город не выбран</option>
+                {bootstrap?.cities.map((city) => (
+                  <option key={city.id} value={city.id}>{city.name}</option>
+                ))}
+              </select>
+            </label>
+            <button className="primary-button" type="button" onClick={() => setCityInfoCityId(selectedCityId)}>
+              Показать информацию
+            </button>
+          </div>
+          {!selectedCity && <EmptyState title="Выберите город и нажмите “Показать информацию”." />}
+          {selectedCity && (
+            <div className="list">
+              <article className="card">
+                <div className="card__head">
+                  <div>
+                    <p className="eyebrow">Сводка по городу</p>
+                    <h3>{selectedCity.name}</h3>
+                  </div>
+                  <button className="secondary-button" type="button" onClick={exportCity}>
+                    <Download size={18} />
+                    Экспорт по городу в Excel
+                  </button>
+                </div>
+                <div className="detail-grid">
+                  {citySummaryRows(selectedCity.id).map(([label, value]) => (
+                    <div className="detail-grid__row" key={String(label)}>
+                      <span>{label}</span>
+                      <strong>{value}</strong>
+                    </div>
+                  ))}
+                </div>
+                {selectedCityRequests.length === 0 && <p className="empty-text">По выбранному городу пока нет данных.</p>}
+              </article>
+              <CityDataBlock title="Заявки" emptyText="По выбранному городу пока нет заявок." hasRows={selectedCityRequests.length > 0}>
+                <div className="data-row data-row--header">
+                  <span>Заявка</span><span>Статус</span><span>Категория</span><span>Заказчик</span><span>Помощник</span><span>Оплата</span><span>Дата</span>
+                </div>
+                {selectedCityRequests.slice(0, 12).map((request) => {
+                  const pricing = request.pricing ?? parseJsonObject(request.pricingBreakdownJson);
+                  return (
+                    <button className="data-row data-row--button" type="button" key={request.id} onClick={() => setSelectedRequest(request)}>
+                      <strong>{request.publicNumber} — {request.title}</strong>
+                      <span>{labelStatus(request.status)}</span>
+                      <span>{request.category?.name ?? "категория не указана"}</span>
+                      <span>{(request as any).client?.displayName ?? "не указан"}</span>
+                      <span>{(request as any).selectedPerformer?.displayName ?? "не выбран"}</span>
+                      <span>{pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0} ₽</span>
+                      <span>{request.date ? formatDateRu(request.date) : "не указана"}</span>
+                    </button>
+                  );
+                })}
+              </CityDataBlock>
+              <CityDataBlock title="Отклики" emptyText="По выбранному городу пока нет откликов." hasRows={selectedCityResponses.length > 0}>
+                <div className="data-row data-row--header">
+                  <span>Заявка</span><span>Помощник</span><span>Статус</span><span>Дата отклика</span><span>Чат</span>
+                </div>
+                {selectedCityResponses.map(({ request, response }: any) => (
+                  <div className="data-row" key={response.id}>
+                    <strong>{request.publicNumber} — {request.title}</strong>
+                    <span>{response.performer?.displayName ?? "не указан"}</span>
+                    <span>{labelStatus(response.status)}</span>
+                    <span>{response.createdAt ? formatDateRu(response.createdAt) : "не указана"}</span>
+                    <span>{request.chats?.some((chat: { performerId: string }) => chat.performerId === response.performerId) ? "есть" : "нет"}</span>
+                  </div>
+                ))}
+              </CityDataBlock>
+              <CityDataBlock title="Заказчики" emptyText="По выбранному городу пока нет заказчиков." hasRows={selectedCityClients.length > 0}>
+                <div className="data-row data-row--header">
+                  <span>Заказчик</span><span>Телефон</span><span>Заявок</span><span>Баланс</span>
+                </div>
+                {selectedCityClients.map((user) => (
+                  <div className="data-row" key={user.id}>
+                    <strong>{user.displayName}</strong>
+                    <span>{user.phone}</span>
+                    <span>{requests.filter((request) => request.clientId === user.id).length}</span>
+                    <span>{Number(user.balance ?? 0) + Number(user.bonusBalance ?? 0)} ₽</span>
+                  </div>
+                ))}
+              </CityDataBlock>
+              <CityDataBlock title="Помощники" emptyText="По выбранному городу пока нет помощников." hasRows={selectedCityPerformers.length > 0}>
+                <div className="data-row data-row--header">
+                  <span>Помощник</span><span>Телефон</span><span>Статус</span><span>Откликов</span><span>Выполнено</span>
+                </div>
+                {selectedCityPerformers.map((user) => (
+                  <div className="data-row" key={user.id}>
+                    <strong>{user.displayName}</strong>
+                    <span>{user.phone}</span>
+                    <span>{labelTrust(user.performerProfile?.trustLevel)}</span>
+                    <span>{selectedCityResponses.filter(({ response }: any) => response.performerId === user.id).length}</span>
+                    <span>{user.performerProfile?.completedJobsCount ?? 0}</span>
+                  </div>
+                ))}
+              </CityDataBlock>
+            </div>
+          )}
+        </section>
+      )}
+
+      {activeTab === "Пользователи" && <UsersTable users={users} onBlock={block} onUnblock={unblock} onSelect={openUserProfile} onDelete={deleteUser} />}
+      {activeTab === "Заказчики" && <UsersTable users={clients} onBlock={block} onUnblock={unblock} onSelect={openUserProfile} onDelete={deleteUser} />}
+
+      {activeTab === "Помощники" && (
+        <div className="data-table">
+          {performers.map((user) => (
+            <div className="data-row" key={user.id}>
+              <strong>{user.displayName}</strong>
+              <span>{labelTrust(user.performerProfile?.trustLevel)}</span>
+              <span>{labelSelfEmployed(user.performerProfile?.selfEmployedStatus)}</span>
+              <span>{labelCriminalRecord(user.performerProfile?.criminalRecordCertificateStatus)}</span>
+              <span>{labelChildcare(user.performerProfile?.childcareApprovalStatus)}</span>
+              <button className="secondary-button" type="button" onClick={() => verifyPerformer(user)}>
+                <CheckCircle2 size={18} />
+                Проверен
+              </button>
+              <button className="secondary-button" type="button" onClick={() => markPerformerNotVerified(user)}>
+                Не проверен
+              </button>
+              <div>
+                {(user.performerDocuments ?? []).map((document) => (
+                  <div className="trust-row" key={document.id}>
+                    <span>{document.type === "self_employed" ? "Самозанятость" : "Справка"}</span>
+                    <StatusBadge tone={statusTone(document.status)}>{labelStatus(document.status)}</StatusBadge>
+                    <button className="secondary-button" type="button" onClick={() => updateDocumentStatus(document.id, "verified")}>
+                      Подтвердить
+                    </button>
+                    <button className="secondary-button" type="button" onClick={() => updateDocumentStatus(document.id, "rejected")}>
+                      Отклонить
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {activeTab === "Заявки" && (
+        <section className="plain-section">
+          <div className="section-actions">
+            <button className="secondary-button" type="button" onClick={exportRequests}>
+              <Download size={18} />
+              Экспорт заявок в Excel
+            </button>
+          </div>
+          <div className="data-table">
+            {requests.map((request) => (
+              <div className="data-row" key={request.id}>
+                <button className="link-button" type="button" onClick={() => setSelectedRequest(request)}>
+                  <strong>{requestDisplayTitle(request)}</strong>
+                </button>
+                <span>{request.city?.name}</span>
+                <span>{request.category?.name}</span>
+                <StatusBadge tone={statusTone(request.status)}>{labelStatus(request.status)}</StatusBadge>
+                <span>Рекомендовано: {request.priceEstimateAmount ?? request.budgetAmount ?? 0} ₽</span>
+                <span className="right-note">Заказчик: {(request as any).client?.displayName ?? "не указан"}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {activeTab === "Отклики" && (
+        <section className="plain-section">
+          <div className="section-actions">
+            <button className="secondary-button" type="button" onClick={exportResponses}>
+              <Download size={18} />
+              Экспорт откликов в Excel
+            </button>
+          </div>
+          <div className="data-table">
+            {requests.flatMap((request) =>
+              (request.responses ?? []).map((response: any) => (
+                <div className="data-row" key={response.id}>
+                  <strong>{request.publicNumber ?? "без номера"}</strong>
+                  <span>{(request as any).client?.displayName ?? "Заказчик"}</span>
+                  <span>{response.performer?.displayName ?? "Помощник"}</span>
+                  <span>{request.category?.name}</span>
+                  <StatusBadge tone={statusTone(response.status)}>{labelStatus(response.status)}</StatusBadge>
+                  <button className="secondary-button" type="button" onClick={() => setSelectedMatch({ request, response })}>
+                    Подбор
+                  </button>
+                  {request.chat?.id && (
+                    <button className="secondary-button" type="button" onClick={() => openChat(request.chat!.id)}>
+                      Открыть чат
+                    </button>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+      )}
+
+      {activeTab === "Чаты" && (
+        <div className="admin-chat-layout">
+          <label className="search-field">
+            <Search size={18} />
+            <input
+              value={chatSearch}
+              onChange={(event) => setChatSearch(event.target.value)}
+              placeholder="Поиск по номеру заявки, заказчику или помощнику"
+            />
+          </label>
+          <aside className="side-list side-list--tall">
+            {filteredChats.map((chat) => (
+              <button
+                key={chat.id}
+                type="button"
+                className={activeChatId === chat.id ? "side-list__item side-list__item--active" : "side-list__item"}
+                onClick={() => navigate(chatPathForRole("admin", chat.id))}
+              >
+                <strong>{chat.request?.publicNumber ?? "без номера"}</strong>
+                <span>{chat.client.displayName} → {chat.performer.displayName}</span>
+                <small>{labelStatus(chat.status)} · {chat.messages?.filter((message: any) => message.moderationStatus !== "clean").length ?? 0} флагов</small>
+              </button>
+            ))}
+          </aside>
+          {activeChatId ? <ChatPanel chatId={activeChatId} /> : <EmptyState title="Выберите чат из списка." />}
+        </div>
+      )}
+
+      {activeTab === "Обращения" && (
+        <div className="data-table">
+          {complaints.map((complaint) => (
+            <div className="data-row" key={complaint.id}>
+              <strong>{complaint.reason}</strong>
+              <span>{complaint.request?.publicNumber ?? "без заявки"}</span>
+              <span>{complaint.fromUser?.displayName}</span>
+              <span>{complaint.againstUser?.displayName ?? "не указан"}</span>
+              <StatusBadge tone={statusTone(complaint.status)}>{labelStatus(complaint.status)}</StatusBadge>
+              {complaint.chat?.id && (
+                <button className="secondary-button" type="button" onClick={() => openChat(complaint.chat.id)}>
+                  Перейти в чат
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {activeTab === "Балансы" && (
+        <div className="data-table">
+          {users.map((user) => (
+            <div className="balance-group" key={user.id}>
+              <button className="data-row data-row--button" type="button" onClick={() => setExpandedBalanceUserId(expandedBalanceUserId === user.id ? null : user.id)}>
+                <strong>{user.displayName}</strong>
+                <span>{user.role}</span>
+                <span>Основной: {user.balance} ₽</span>
+                <span>Бонусный: {user.bonusBalance} ₽</span>
+                <strong>Всего: {user.balance + user.bonusBalance} ₽</strong>
+              </button>
+              {expandedBalanceUserId === user.id && (
+                <div className="transaction-list">
+                  {transactions.filter((transaction: any) => transaction.user?.id === user.id).map((transaction: any) => (
+                    <div className="transaction-row" key={transaction.id}>
+                      <span>{formatDateTimeRu(transaction.createdAt)}</span>
+                      <span>{labelStatus(transaction.type)}</span>
+                      <strong>{transaction.amount} ₽</strong>
+                      <span>{transaction.balanceKind === "bonus" ? "Бонусный" : "Основной"}</span>
+                      <small>{transaction.reason}</small>
+                    </div>
+                  ))}
+                  {transactions.filter((transaction: any) => transaction.user?.id === user.id).length === 0 && (
+                    <p className="empty-text">Операций пока нет.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {activeTab === "Платежи" && <AdminPaymentsPage />}
+
+      {activeTab === "Начисления" && (
+        <section className="form-grid">
+          <p className="span-2 notice">
+            Здесь можно начислить пользователю бонусный баланс для пробного периода, акции или компенсации.
+          </p>
+          <label>
+            Пользователь
+            <select value={bonusForm.userId} onChange={(event) => setBonusForm({ ...bonusForm, userId: event.target.value })}>
+              {users.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.displayName} ({user.role})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Сумма
+            <input
+              type="number"
+              value={bonusForm.amount}
+              onChange={(event) => setBonusForm({ ...bonusForm, amount: Number(event.target.value) })}
+            />
+          </label>
+          <label className="span-2">
+            Причина
+            <input value={bonusForm.reason} onChange={(event) => setBonusForm({ ...bonusForm, reason: event.target.value })} />
+          </label>
+          <label>
+            Срок действия бонуса
+            <input
+              type="date"
+              value={bonusForm.bonusExpiresAt}
+              onChange={(event) => setBonusForm({ ...bonusForm, bonusExpiresAt: event.target.value })}
+            />
+            <small>{bonusForm.bonusExpiresAt ? `Выбранная дата: ${formatDateRu(bonusForm.bonusExpiresAt)}` : "Формат даты: дд.мм.гггг"}</small>
+          </label>
+          <label className="span-2">
+            Комментарий
+            <textarea
+              value={bonusForm.comment}
+              onChange={(event) => setBonusForm({ ...bonusForm, comment: event.target.value })}
+            />
+          </label>
+          <button className="primary-button span-2" type="button" onClick={grantBonus}>
+            <Coins size={18} />
+            Начислить бонус
+          </button>
+        </section>
+      )}
+
+      {activeTab === "Блокировки" && (
+        <UsersTable
+          users={users.filter((user) => user.status === "blocked")}
+          onBlock={block}
+          onUnblock={unblock}
+          onSelect={openUserProfile}
+          onDelete={deleteUser}
+        />
+      )}
+
+      {activeTab === "Категории" && (
+        <div className="data-table">
+          {categories.map((category) => (
+            <div className="data-row" key={category.id}>
+              <strong>{category.name}</strong>
+              <span>{category.description ?? "Описание не заполнено"}</span>
+              <span>{category.basePrice} ₽</span>
+              <span>{category.calculationUnit === "hour" ? "час" : category.calculationUnit === "visit" ? "визит" : "заявка"}</span>
+              <StatusBadge tone={category.isActive ? "success" : "neutral"}>{category.isActive ? "Активна" : "Выключена"}</StatusBadge>
+              <StatusBadge tone={category.requiresCriminalRecord ? "warning" : "neutral"}>
+                {category.requiresCriminalRecord ? "справка важна" : "обычная"}
+              </StatusBadge>
+              <button className="secondary-button" type="button" onClick={() => toggleCategory(category)}>
+                {category.isActive ? "Выключить" : "Включить"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {activeTab === "Архив" && (
+        <section className="plain-section">
+          <h2>Архив</h2>
+          <p>Архив скрывает старые данные из активной работы, но не удаляет историю.</p>
+          <button className="primary-button" type="button" onClick={async () => {
+            const result = await api.adminRunArchive(30);
+            setNotice(`В архив перенесено пользователей: ${result.archivedUsers}, заявок: ${result.archivedRequests}.`);
+            await load();
+          }}>
+            <Archive size={18} />
+            Запустить архивирование
+          </button>
+        </section>
+      )}
+
+      {activeTab === "Настройки сервиса" && (
+        <section className="plain-section">
+          <h2>Настройки сервиса</h2>
+          <div className="data-table">
+            {settings.filter((setting: any) => !hiddenLegacySettingKeys.has(setting.key)).map((setting: any) => (
+              <div className="data-row" key={setting.key}>
+                <strong>{setting.label}</strong>
+                <span>{setting.group}</span>
+                {parseSettingBoolean(settingDrafts[setting.key] ?? setting.valueJson) === null ? (
+                  <input
+                    value={settingDrafts[setting.key] ?? setting.valueJson}
+                    onChange={(event) => updateSettingDraft(setting.key, event.target.value)}
+                  />
+                ) : (
+                  <div className="boolean-toggle" role="group" aria-label={setting.label}>
+                    {[true, false].map((value) => (
+                      <button
+                        key={String(value)}
+                        type="button"
+                        className={parseSettingBoolean(settingDrafts[setting.key] ?? setting.valueJson) === value ? "choice choice--active" : "choice"}
+                        onClick={() => updateSettingDraft(setting.key, JSON.stringify(value))}
+                      >
+                        {value ? "Да" : "Нет"}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <button className="primary-button" type="button" onClick={saveSettings}>
+            Сохранить настройки
+          </button>
+          <p>Ключ Яндекс.Карт передаётся через переменную окружения, точные адреса до принятия заявки скрываются API.</p>
+        </section>
+      )}
+
+      {activeTab === "База знаний" && (
+        <div className="list">
+          {sortedKnowledge.map((article) => (
+            <article className="card" key={article.id}>
+              <p className="eyebrow">{article.category} · {article.audience}</p>
+              <div className="knowledge-title-row">
+                <h3>{article.title}</h3>
+                <StatusBadge tone={article.isPublished ? "success" : "neutral"}>
+                  {article.isPublished ? "Опубликована" : "Снята с публикации"}
+                </StatusBadge>
+              </div>
+              <p>{article.content}</p>
+              <div className="trust-row">
+                <button className="secondary-button" type="button" onClick={() => setEditingArticle(article)}>Редактировать</button>
+                <button className="secondary-button" type="button" onClick={() => toggleKnowledgeArticle(article)}>
+                  {article.isPublished ? "Снять с публикации" : "Опубликовать"}
+                </button>
+                <button className="secondary-button" type="button" onClick={() => setOrderingArticleId(orderingArticleId === article.id ? null : article.id)}>
+                  Изменить порядок
+                </button>
+              </div>
+              {orderingArticleId === article.id && (
+                <label>
+                  Позиция в списке
+                  <select value={Math.max(1, Math.ceil(article.sortOrder / 10))} onChange={(event) => updateKnowledgeOrder(article, Number(event.target.value))}>
+                    {sortedKnowledge.map((_, index) => (
+                      <option key={index + 1} value={index + 1}>{index + 1}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </article>
+          ))}
+          <button className="secondary-button" type="button">
+            <BookOpen size={18} />
+            Создание и редактирование статей подключено через API
+          </button>
+        </div>
+      )}
+
+      {activeTab === "Юридические документы" && (
+        <LegalAdminSection
+          documents={legalDocuments}
+          consents={legalConsents}
+          exportLogs={legalExportLogs}
+          onExportAll={exportAllConsents}
+          onExportArchive={exportLegalArchive}
+          onCreateVersion={createLegalDocumentVersion}
+          onPublish={publishLegal}
+          onArchive={archiveLegal}
+        />
+      )}
+
+      {selectedUser && (
+        <Modal title={`Профиль пользователя: ${selectedUser.displayName}`} onClose={() => setSelectedUser(null)}>
+          <UserProfile user={selectedUser} legalStatuses={selectedUserLegalStatuses} />
+          <div className="trust-row">
+            <button className="secondary-button" type="button" onClick={() => exportUserConsents(selectedUser)}>
+              <Download size={18} />
+              Скачать согласия пользователя Excel
+            </button>
+            <button className="secondary-button" type="button" onClick={() => exportUserLegalArchive(selectedUser)}>
+              <Archive size={18} />
+              Скачать полный legal-архив пользователя ZIP
+            </button>
+            <button className="secondary-button" type="button" onClick={() => deleteUser(selectedUser)}>
+              <Trash2 size={18} />
+              Удалить пользователя
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {selectedRequest && (
+        <Modal title={`Заявка ${selectedRequest.publicNumber ?? ""}`} onClose={() => setSelectedRequest(null)}>
+          <RequestDetails request={selectedRequest} />
+        </Modal>
+      )}
+
+      {selectedMatch && (
+        <Modal title={`Подбор по заявке ${selectedMatch.request.publicNumber ?? ""}`} onClose={() => setSelectedMatch(null)}>
+          <MatchDetails request={selectedMatch.request} response={selectedMatch.response} />
+        </Modal>
+      )}
+
+      {editingArticle && (
+        <Modal title="Редактировать статью базы знаний" onClose={() => setEditingArticle(null)}>
+          <form className="form-grid" onSubmit={(event) => {
+            event.preventDefault();
+            saveKnowledgeArticle(editingArticle);
+          }}>
+            <label>
+              Заголовок
+              <input value={editingArticle.title} onChange={(event) => setEditingArticle({ ...editingArticle, title: event.target.value })} />
+            </label>
+            <label>
+              Раздел
+              <input value={editingArticle.category} onChange={(event) => setEditingArticle({ ...editingArticle, category: event.target.value })} />
+            </label>
+            <label>
+              Аудитория
+              <select value={editingArticle.audience} onChange={(event) => setEditingArticle({ ...editingArticle, audience: event.target.value })}>
+                <option value="all">Все</option>
+                <option value="client">Заказчики</option>
+                <option value="performer">Помощники</option>
+              </select>
+            </label>
+            <label>
+              Публикация
+              <select value={editingArticle.isPublished ? "true" : "false"} onChange={(event) => setEditingArticle({ ...editingArticle, isPublished: event.target.value === "true" })}>
+                <option value="true">Опубликована</option>
+                <option value="false">Снята с публикации</option>
+              </select>
+            </label>
+            <label className="span-2">
+              Текст
+              <textarea value={editingArticle.content} onChange={(event) => setEditingArticle({ ...editingArticle, content: event.target.value })} />
+            </label>
+            <button className="primary-button span-2" type="submit">Сохранить статью</button>
+          </form>
+        </Modal>
+      )}
+    </Shell>
+  );
+}
+
+function CityDataBlock({ title, emptyText, hasRows, children }: { title: string; emptyText: string; hasRows: boolean; children: ReactNode }) {
+  return (
+    <article className="card">
+      <div className="card__head">
+        <h3>{title}</h3>
+      </div>
+      {hasRows ? <div className="data-table data-table--wide">{children}</div> : <p className="empty-text">{emptyText}</p>}
+    </article>
+  );
+}
+
+function LegalAdminSection({
+  documents,
+  consents,
+  exportLogs,
+  onExportAll,
+  onExportArchive,
+  onCreateVersion,
+  onPublish,
+  onArchive
+}: {
+  documents: LegalDocument[];
+  consents: UserConsent[];
+  exportLogs: any[];
+  onExportAll: () => void;
+  onExportArchive: () => void;
+  onCreateVersion: (document: LegalDocument) => void;
+  onPublish: (document: LegalDocument) => void;
+  onArchive: (document: LegalDocument) => void;
+}) {
+  const [tab, setTab] = useState<"documents" | "consents" | "exports">("documents");
+  const [filters, setFilters] = useState({
+    user: "",
+    role: "",
+    documentType: "",
+    status: "",
+    missingRequired: false
+  });
+  const filteredConsents = consents.filter((consent: any) => {
+    const userText = `${consent.user?.displayName ?? ""} ${consent.user?.email ?? ""} ${consent.user?.phone ?? ""}`.toLowerCase();
+    if (filters.user && !userText.includes(filters.user.toLowerCase())) return false;
+    if (filters.role && consent.user?.role !== filters.role) return false;
+    if (filters.documentType && consent.documentType !== filters.documentType) return false;
+    if (filters.status === "accepted" && (!consent.isActive || consent.revokedAt)) return false;
+    if (filters.status === "revoked" && !consent.revokedAt) return false;
+    if (filters.missingRequired) return false;
+    return true;
+  });
+  const documentTypes = Array.from(new Set(documents.map((document) => document.type)));
+
+  return (
+    <div className="list">
+      <section className="plain-section">
+        <div className="card__head">
+          <div>
+            <p className="eyebrow">Юридический контур</p>
+            <h2>Юридические документы</h2>
+          </div>
+        </div>
+        <div className="tabs">
+          <button className={tab === "documents" ? "primary-button" : "secondary-button"} type="button" onClick={() => setTab("documents")}>Документы</button>
+          <button className={tab === "consents" ? "primary-button" : "secondary-button"} type="button" onClick={() => setTab("consents")}>Согласия пользователей</button>
+          <button className={tab === "exports" ? "primary-button" : "secondary-button"} type="button" onClick={() => setTab("exports")}>Выгрузки</button>
+        </div>
+        <p className="privacy-note">
+          Опубликованный документ нельзя редактировать напрямую. Для изменения создайте новую версию, проверьте текст и опубликуйте её.
+        </p>
+      </section>
+
+      {tab === "documents" && (
+      <section className="plain-section">
+        <div className="data-table data-table--wide">
+          <div className="data-row data-row--header">
+            <span>Название</span><span>Тип</span><span>Для кого</span><span>Версия</span><span>Обязательный</span><span>Опубликован</span><span>Активен</span><span>Дата публикации</span><span>Действия</span>
+          </div>
+          {documents.map((document) => (
+            <div className="data-row" key={document.id}>
+              <strong>{document.title}</strong>
+              <span>{document.type}</span>
+              <span>{legalScopeLabel(document.roleScope)}</span>
+              <span>{document.version}</span>
+              <span>{document.isRequired ? "Да" : "Нет"}</span>
+              <span>{document.isPublished ? "Да" : "Нет"}</span>
+              <span>{document.isActive ? "Да" : "Нет"}</span>
+              <span>{document.publishedAt ? formatDateRu(document.publishedAt) : "не опубликован"}</span>
+              <span className="trust-row">
+                <a className="secondary-button" href={`/legal/${document.slug}`} target="_blank" rel="noreferrer">
+                  Открыть
+                </a>
+                <button className="secondary-button" type="button" onClick={() => onCreateVersion(document)}>
+                  Создать новую версию
+                </button>
+                <button className="secondary-button" type="button" onClick={() => {
+                  setFilters((current) => ({ ...current, documentType: document.type }));
+                  setTab("consents");
+                }}>
+                  Посмотреть принявших
+                </button>
+                {!document.isPublished && (
+                  <button className="secondary-button" type="button" onClick={() => onPublish(document)}>
+                    Опубликовать
+                  </button>
+                )}
+                {document.isActive && (
+                  <button className="secondary-button" type="button" onClick={() => onArchive(document)}>
+                    Архивировать
+                  </button>
+                )}
+              </span>
+            </div>
+          ))}
+          {documents.length === 0 && <p className="empty-text">Юридические документы пока не созданы.</p>}
+        </div>
+      </section>
+      )}
+
+      {tab === "consents" && (
+      <section className="plain-section">
+        <h2>Согласия пользователей</h2>
+        <p className="privacy-note">Здесь хранится доказательная запись: документ, версия, hash текста, дата принятия, IP, user agent и источник.</p>
+        <div className="filter-panel">
+          <label>
+            Пользователь
+            <input value={filters.user} onChange={(event) => setFilters({ ...filters, user: event.target.value })} placeholder="Имя, email или телефон" />
+          </label>
+          <label>
+            Роль
+            <select value={filters.role} onChange={(event) => setFilters({ ...filters, role: event.target.value })}>
+              <option value="">Все роли</option>
+              <option value="client">Заказчик</option>
+              <option value="performer">Помощник</option>
+              <option value="admin">Администратор</option>
+              <option value="superadmin">Владелец</option>
+            </select>
+          </label>
+          <label>
+            Тип документа
+            <select value={filters.documentType} onChange={(event) => setFilters({ ...filters, documentType: event.target.value })}>
+              <option value="">Все типы</option>
+              {documentTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+            </select>
+          </label>
+          <label>
+            Статус
+            <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
+              <option value="">Все статусы</option>
+              <option value="accepted">Принято</option>
+              <option value="revoked">Отозвано</option>
+            </select>
+          </label>
+          <label className="checkbox-line">
+            <input type="checkbox" checked={filters.missingRequired} onChange={(event) => setFilters({ ...filters, missingRequired: event.target.checked })} />
+            Отсутствует обязательное согласие
+          </label>
+        </div>
+        <div className="data-table data-table--wide">
+          <div className="data-row data-row--header">
+            <span>Пользователь</span><span>Роль</span><span>Документ</span><span>Версия</span><span>Статус</span><span>Дата принятия</span><span>IP</span><span>User-Agent</span><span>Источник</span>
+          </div>
+          {filteredConsents.slice(0, 100).map((consent: any) => (
+            <div className="data-row" key={consent.id}>
+              <strong>{consent.user?.displayName ?? consent.userId}</strong>
+              <span>{userRoleLabel(consent.user?.role ?? "")}</span>
+              <span>{consent.documentTitle}</span>
+              <span>{consent.documentVersion}</span>
+              <StatusBadge tone={consent.revokedAt ? "neutral" : "success"}>{consent.revokedAt ? "Отозвано" : "Принято"}</StatusBadge>
+              <span>{formatDateTimeRu(consent.acceptedAt)}</span>
+              <span>{consent.ipAddress ?? "не записан"}</span>
+              <small>{consent.userAgent ?? "не записан"}</small>
+              <span>{consent.source}</span>
+            </div>
+          ))}
+          {filteredConsents.length === 0 && <p className="empty-text">{filters.missingRequired ? "Проверка отсутствующих обязательных согласий доступна в выгрузке всех согласий." : "Согласий пока нет."}</p>}
+        </div>
+      </section>
+      )}
+
+      {tab === "exports" && (
+      <section className="plain-section">
+        <div className="card__head">
+          <h2>Выгрузки</h2>
+          <div className="trust-row">
+            <button className="secondary-button" type="button" onClick={onExportAll}>
+              <Download size={18} />
+              Экспорт всех согласий в Excel
+            </button>
+            <button className="secondary-button" type="button" onClick={onExportArchive}>
+              <Archive size={18} />
+              Скачать полный legal-архив ZIP
+            </button>
+          </div>
+        </div>
+        <h3>Журнал последних выгрузок</h3>
+        <div className="data-table data-table--wide">
+          <div className="data-row data-row--header">
+            <span>Дата</span><span>Тип</span><span>Файл</span><span>Пользователь</span><span>Комментарий</span>
+          </div>
+          {exportLogs.map((log: any) => (
+            <div className="data-row" key={log.id}>
+              <span>{formatDateTimeRu(log.exportedAt)}</span>
+              <span>{log.exportType}</span>
+              <strong>{log.fileName}</strong>
+              <span>{log.userId ?? "все пользователи"}</span>
+              <span>{log.comment ?? ""}</span>
+            </div>
+          ))}
+          {exportLogs.length === 0 && <p className="empty-text">Выгрузок пока нет.</p>}
+        </div>
+      </section>
+      )}
+    </div>
+  );
+}
+
+function UsersTable({
+  users,
+  onBlock,
+  onUnblock,
+  onSelect,
+  onDelete
+}: {
+  users: User[];
+  onBlock: (userId: string) => void;
+  onUnblock: (userId: string) => void;
+  onSelect: (user: User) => void;
+  onDelete: (user: User) => void;
+}) {
+  return (
+    <ResponsiveDataList>
+      {users.map((user) => (
+        <div className="data-row" key={user.id}>
+          <button className="link-button" type="button" onClick={() => onSelect(user)}>
+            <strong>{user.displayName}</strong>
+          </button>
+          <span>{userRoleLabel(user.role)}</span>
+          <span>{user.city?.name ?? "город не выбран"}</span>
+          <span>{user.balance + user.bonusBalance} ₽</span>
+          <StatusBadge tone={statusTone(user.status)}>{labelStatus(user.status)}</StatusBadge>
+          {user.status === "blocked" ? (
+            <button className="secondary-button" type="button" onClick={() => onUnblock(user.id)}>
+              Разблокировать
+            </button>
+          ) : (
+            <button className="secondary-button" type="button" onClick={() => onBlock(user.id)}>
+              <Ban size={18} />
+              Блокировать
+            </button>
+          )}
+          <button className="secondary-button" type="button" onClick={() => onDelete(user)}>
+            <Trash2 size={18} />
+            Удалить
+          </button>
+        </div>
+      ))}
+    </ResponsiveDataList>
+  );
+}
+
+function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <section className="modal-panel">
+        <div className="card__head">
+          <h2>{title}</h2>
+          <button className="secondary-button" type="button" onClick={onClose}>Закрыть</button>
+        </div>
+        {children}
+      </section>
+    </div>
+  );
+}
+
+function UserProfile({ user, legalStatuses }: { user: User; legalStatuses: UserConsentStatus[] }) {
+  return (
+    <div className="list">
+      <div className="detail-grid">
+        <span>Роль</span><strong>{userRoleLabel(user.role)}</strong>
+        <span>Телефон</span><strong>{user.phone}</strong>
+        <span>Email</span><strong>{user.email ?? "не указан"}</strong>
+        <span>Город</span><strong>{user.city?.name ?? "не выбран"}</strong>
+        <span>Статус</span><strong>{labelStatus(user.status)}</strong>
+        <span>Основной баланс</span><strong>{user.balance} ₽</strong>
+        <span>Бонусный баланс</span><strong>{user.bonusBalance} ₽</strong>
+        {user.clientProfile && <>
+          <span>Рейтинг заказчика</span><strong>{user.clientProfile.rating}</strong>
+          <span>Выполненных заявок</span><strong>{user.clientProfile.completedRequestsCount}</strong>
+        </>}
+        {user.performerProfile && <>
+          <span>Рейтинг помощника</span><strong>{user.performerProfile.rating}</strong>
+          <span>Статус профиля</span><strong>{labelTrust(user.performerProfile.trustLevel)}</strong>
+          <span>Самозанятость</span><strong>{labelSelfEmployed(user.performerProfile.selfEmployedStatus)}</strong>
+          <span>Справка</span><strong>{labelCriminalRecord(user.performerProfile.criminalRecordCertificateStatus)}</strong>
+          <span>Услуги</span><strong>{formatJsonList(user.performerProfile.services)}</strong>
+          <span>Навыки</span><strong>{formatJsonList(user.performerProfile.skills)}</strong>
+        </>}
+      </div>
+      <section className="plain-section">
+        <h3>Юридические согласия</h3>
+        <p className="privacy-note">Возможные статусы: Принято, Требуется, Требуется новая версия.</p>
+        <div className="data-table data-table--wide">
+          <div className="data-row data-row--header">
+            <span>Документ</span><span>Статус</span><span>Обязательный</span><span>Версия</span><span>Дата принятия</span><span>IP</span><span>User-Agent</span>
+          </div>
+          {legalStatuses.map((row) => (
+            <div className="data-row" key={row.document.id}>
+              <strong>{row.document.title}</strong>
+              <StatusBadge tone={row.status === "accepted" ? "success" : row.status === "needs_new_version" ? "warning" : "neutral"}>
+                {legalStatusLabel(row.status)}
+              </StatusBadge>
+              <span>{row.document.isRequired ? "Да" : "Нет"}</span>
+              <span>{row.document.version}</span>
+              <span>{row.consent?.acceptedAt ? formatDateTimeRu(row.consent.acceptedAt) : "не принято"}</span>
+              <span>{row.consent?.ipAddress ?? "не записан"}</span>
+              <small>{row.consent?.userAgent ?? "не записан"}</small>
+            </div>
+          ))}
+          {legalStatuses.length === 0 && <p className="empty-text">Юридические согласия загружаются или пока не найдены.</p>}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function RequestDetails({ request }: { request: ClientRequest }) {
+  const pricing = request.pricing ?? parseJsonObject(request.pricingBreakdownJson);
+  const builtPublicAddress = buildPublicAddressFromRequest(request);
+  const publicMapAddress = request.yandexPublicMapAddress || builtPublicAddress || request.publicAddress || "";
+  const exactMapAddress = request.yandexExactMapAddress || buildYandexExactAddressFromRequest(request);
+  const publicMapUrl = request.yandexPublicMapUrl || buildYandexMapsSearchUrl(publicMapAddress);
+  const exactMapUrl = request.yandexExactMapUrl || buildYandexMapsSearchUrl(exactMapAddress);
+  return (
+    <div className="list">
+      <div className="detail-grid">
+        <span>Номер</span><strong>{request.publicNumber ?? "без номера"}</strong>
+        <span>Заказчик</span><strong>{(request as any).client?.displayName ?? "не указан"}</strong>
+        <span>Город</span><strong>{request.city?.name ?? "не указан"}</strong>
+        <span>Категория</span><strong>{request.category?.name ?? "не указана"}</strong>
+        <span>Статус</span><strong>{labelStatus(request.status)}</strong>
+        <span>Дата и время</span><strong>{request.date ? formatDateRu(request.date) : "не указана"} {formatTimeRu(request.timeFrom)}</strong>
+        <span>Длительность</span><strong>{request.expectedDurationHours ?? "не указана"} ч</strong>
+        <span>Полный адрес</span><strong>{request.fullAddress ?? request.addressText ?? "не указан"}</strong>
+        <span>Публичный адрес</span><strong>{request.publicAddress ?? request.approximateAddressText}</strong>
+        <span>Адрес для Яндекс.Карт до согласования</span><strong>{publicMapAddress}</strong>
+        <span>Адрес для Яндекс.Карт после перехода в работу</span><strong>{exactMapAddress}</strong>
+        <span>Ссылки</span>
+        <strong className="button-row">
+          {publicMapUrl && <a className="secondary-button" href={publicMapUrl} target="_blank" rel="noreferrer">Открыть на Яндекс.Картах</a>}
+          {exactMapUrl && <a className="secondary-button" href={exactMapUrl} target="_blank" rel="noreferrer">Открыть точный адрес на Яндекс.Картах</a>}
+        </strong>
+        <span>Описание</span><strong>{request.description}</strong>
+        <span>Отклики</span><strong>{request.responses?.length ?? 0}</strong>
+      </div>
+      <PriceSummary pricing={pricing} fallbackPayment={request.priceEstimateAmount} role="admin" />
+    </div>
+  );
+}
+
+function MatchDetails({ request, response }: { request: ClientRequest; response: any }) {
+  const performerProfile = response.performer?.performerProfile;
+  return (
+    <div className="match-grid">
+      <table>
+        <caption>Данные заявки заказчика</caption>
+        <tbody>
+          <tr><td>Заказчик</td><td>{(request as any).client?.displayName ?? "не указан"}</td></tr>
+          <tr><td>Город</td><td>{request.city?.name}</td></tr>
+          <tr><td>Категория</td><td>{request.category?.name}</td></tr>
+          <tr><td>Район</td><td>{request.district ?? request.approximateAddressText}</td></tr>
+          <tr><td>Дата / время</td><td>{request.date ? formatDateRu(request.date) : "не указана"} {formatTimeRu(request.timeFrom)}</td></tr>
+          <tr><td>Гигиеническая помощь</td><td>{request.needsHygieneHelp ? "требуется" : "не указана"}</td></tr>
+          <tr><td>Маломобильность</td><td>{request.hasLimitedMobility ? "да" : "нет"}</td></tr>
+          <tr><td>Ребёнок</td><td>{request.hasChild ? "да" : "нет"}</td></tr>
+          <tr><td>Состав работ</td><td>{formatJsonList(request.additionalActionsJson)}</td></tr>
+        </tbody>
+      </table>
+      <table>
+        <caption>Данные помощника</caption>
+        <tbody>
+          <tr><td>Помощник</td><td>{response.performer?.displayName ?? "не указан"}</td></tr>
+          <tr><td>Город</td><td>{response.performer?.city?.name ?? "не указан"}</td></tr>
+          <tr><td>Услуги</td><td>{formatJsonList(performerProfile?.services)}</td></tr>
+          <tr><td>Навыки</td><td>{formatJsonList(performerProfile?.skills)}</td></tr>
+          <tr><td>Готов к гигиене</td><td>{performerProfile?.readyForHygieneHelp ? "да" : "нет"}</td></tr>
+          <tr><td>Готов к маломобильным</td><td>{performerProfile?.readyForLimitedMobility ? "да" : "нет"}</td></tr>
+          <tr><td>Готов к детям</td><td>{performerProfile?.readyForChildren ? "да" : "нет"}</td></tr>
+          <tr><td>Самозанятость</td><td>{labelSelfEmployed(performerProfile?.selfEmployedStatus)}</td></tr>
+          <tr><td>Справка</td><td>{labelCriminalRecord(performerProfile?.criminalRecordCertificateStatus)}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function parseJsonObject(value?: string | null): any {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function parseSettingBoolean(value?: string | null) {
+  try {
+    const parsed = JSON.parse(value ?? "null");
+    return typeof parsed === "boolean" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function requestExportHeader() {
+  return [
+    "Номер заявки",
+    "Статус",
+    "Город",
+    "Категория",
+    "Заказчик",
+    "Помощник",
+    "Дата/время",
+    "Длительность",
+    "Оплата помощнику",
+    "Сервисный сбор заказчика",
+    "Сервисный сбор помощника",
+    "Итого расходы заказчика",
+    "Доход помощника после сервисного сбора",
+    "Дата создания",
+    "Дата обновления"
+  ];
+}
+
+function requestExportRow(request: ClientRequest) {
+  const pricing = request.pricing ?? parseJsonObject(request.pricingBreakdownJson);
+  const payment = pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? request.budgetAmount ?? 0;
+  const customerFee = pricing?.clientServiceFeeAmount ?? 0;
+  const helperFee = pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0;
+  return [
+    request.publicNumber ?? "",
+    labelStatus(request.status),
+    request.city?.name ?? "",
+    request.category?.name ?? "",
+    (request as any).client?.displayName ?? "",
+    (request as any).selectedPerformer?.displayName ?? "",
+    `${request.date ? formatDateRu(request.date) : ""} ${formatTimeRu(request.timeFrom)}`.trim(),
+    request.expectedDurationHours ?? "",
+    payment,
+    customerFee,
+    helperFee,
+    pricing?.clientTotalExpense ?? payment + customerFee,
+    pricing?.performerNetAmount ?? Math.max(0, payment - helperFee),
+    formatDateTimeRu((request as any).createdAt),
+    formatDateTimeRu((request as any).updatedAt)
+  ];
+}
+
+function dateStamp() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function safeFileName(value: string) {
+  return value.toLowerCase().replace(/\s+/g, "-").replace(/[^a-zа-яё0-9-]/gi, "");
+}
+
+function userRoleLabel(role: string) {
+  if (role === "client") return "Заказчик";
+  if (role === "performer") return "Помощник";
+  if (role === "superadmin") return "Владелец";
+  return "Администратор";
+}
+
+function legalScopeLabel(scope: string) {
+  if (scope === "customer") return "Заказчики";
+  if (scope === "helper") return "Помощники";
+  if (scope === "admin") return "Администраторы";
+  return "Все";
+}
+
+function legalStatusLabel(status: string) {
+  if (status === "accepted") return "Принято";
+  if (status === "needs_new_version") return "Требуется новая версия";
+  if (status === "revoked") return "Отозвано";
+  if (status === "optional") return "Необязательно";
+  return "Требуется";
+}
+
+function nextLegalVersion(version: string) {
+  const parsed = Number.parseFloat(version);
+  if (Number.isFinite(parsed)) return (parsed + 0.1).toFixed(1);
+  return `${version}-new`;
+}
+
+function formatJsonList(value?: string | null) {
+  if (!value) return "не указано";
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.length ? parsed.join(", ") : "не указано";
+  } catch {
+    return value;
+  }
+}
+
+function adminTabFromPath(pathname: string) {
+  if (pathname.startsWith("/app/admin/cities")) return "Города";
+  if (pathname.startsWith("/app/admin/users")) return "Пользователи";
+  if (pathname.startsWith("/app/admin/clients")) return "Заказчики";
+  if (pathname.startsWith("/app/admin/performers")) return "Помощники";
+  if (pathname.startsWith("/app/admin/requests")) return "Заявки";
+  if (pathname.startsWith("/app/admin/responses")) return "Отклики";
+  if (pathname.startsWith("/app/admin/chats")) return "Чаты";
+  if (pathname.startsWith("/app/admin/support")) return "Обращения";
+  if (pathname.startsWith("/app/admin/balances")) return "Балансы";
+  if (pathname.startsWith("/app/admin/payments")) return "Платежи";
+  if (pathname.startsWith("/app/admin/bonuses")) return "Начисления";
+  if (pathname.startsWith("/app/admin/blocked")) return "Блокировки";
+  if (pathname.startsWith("/app/admin/categories")) return "Категории";
+  if (pathname.startsWith("/app/admin/legal")) return "Юридические документы";
+  if (pathname.startsWith("/app/admin/archive")) return "Архив";
+  if (pathname.startsWith("/app/admin/settings")) return "Настройки сервиса";
+  if (pathname.startsWith("/app/admin/knowledge")) return "База знаний";
+  return "Главная";
+}
+
+function chatIdFromPath(pathname: string, prefix: string) {
+  const match = pathname.match(new RegExp(`^${prefix}/([^/]+)$`));
+  return match?.[1] ?? null;
+}

@@ -1,0 +1,576 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model City {
+  id                      String          @id @default(cuid())
+  name                    String
+  slug                    String          @unique
+  region                  String
+  status                  String          @default("active")
+  isActive                Boolean         @default(true)
+  defaultCommissionAmount Int             @default(50)
+  minTopUpAmount          Int             @default(150)
+  mapCenterLat            Float
+  mapCenterLng            Float
+  mapDefaultRadiusMeters  Int             @default(600)
+  districtsJson           String          @default("[]")
+  localSettingsJson       String          @default("{}")
+  timezone                String          @default("Asia/Yekaterinburg")
+  pricingZone             String          @default("base_yugorsk")
+  sortOrder               Int             @default(100)
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+  users                   User[]
+  requests                ClientRequest[]
+
+  @@index([isActive])
+}
+
+model User {
+  id                       String               @id @default(cuid())
+  role                     String
+  rolesJson                String               @default("[]")
+  phone                    String               @unique
+  normalizedPhone          String?              @unique
+  email                    String?              @unique
+  passwordHash             String
+  displayName              String
+  avatarUrl                String?
+  cityId                   String?
+  status                   String               @default("active")
+  balance                  Int                  @default(0)
+  bonusBalance             Int                  @default(0)
+  isPhoneVerified          Boolean              @default(false)
+  isEmailVerified          Boolean              @default(false)
+  phoneVerifiedAt          DateTime?
+  emailVerifiedAt          DateTime?
+  createdAt                DateTime             @default(now())
+  updatedAt                DateTime             @updatedAt
+  blockedAt                DateTime?
+  blockReason              String?
+  lastSeenAt               DateTime?
+  archivedAt               DateTime?
+  city                     City?                @relation(fields: [cityId], references: [id])
+  clientProfile            ClientProfile?
+  performerProfile         PerformerProfile?
+  clientRequests           ClientRequest[]      @relation("ClientRequests")
+  selectedRequests         ClientRequest[]      @relation("SelectedPerformerRequests")
+  responses                RequestResponse[]
+  chatsAsClient            Chat[]               @relation("ClientChats")
+  chatsAsPerformer         Chat[]               @relation("PerformerChats")
+  chatMessages             ChatMessage[]
+  balanceTransactions      BalanceTransaction[] @relation("UserBalanceTransactions")
+  paymentTransactions      PaymentTransaction[] @relation("UserPaymentTransactions")
+  adminCreatedTransactions BalanceTransaction[] @relation("AdminCreatedTransactions")
+  complaintsFrom           Complaint[]          @relation("ComplaintsFrom")
+  complaintsAgainst        Complaint[]          @relation("ComplaintsAgainst")
+  riskFlags                UserRiskFlag[]
+  reviewsFrom              Review[]             @relation("ReviewsFrom")
+  reviewsTo                Review[]             @relation("ReviewsTo")
+  auditLogs                AuditLog[]           @relation("ActorAuditLogs")
+  consents                 Consent[]
+  legalConsents            UserConsent[]        @relation("UserLegalConsents")
+  createdLegalDocuments    LegalDocument[]      @relation("AdminCreatedLegalDocuments")
+  consentAuditLogs         UserConsentAuditLog[] @relation("UserConsentAuditLogs")
+  adminConsentAuditLogs    UserConsentAuditLog[] @relation("AdminConsentAuditLogs")
+  adminConsentExports      ConsentExportLog[]   @relation("AdminConsentExports")
+  userConsentExports       ConsentExportLog[]   @relation("UserConsentExports")
+  performerDocuments       PerformerDocument[]
+
+  @@index([role])
+  @@index([cityId])
+  @@index([status])
+}
+
+model ClientProfile {
+  userId                 String  @id
+  fullName               String?
+  preferredContactMethod String  @default("chat")
+  rating                 Float   @default(0)
+  completedRequestsCount Int     @default(0)
+  complaintsCount        Int     @default(0)
+  notes                  String?
+  user                   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PerformerProfile {
+  userId                          String  @id
+  age                             Int?
+  about                           String?
+  experience                      String?
+  services                        String  @default("[]")
+  skills                          String  @default("[]")
+  limitations                     String?
+  schedule                        String?
+  districts                       String  @default("[]")
+  canTravelIndependently          Boolean @default(false)
+  canTravelOutsideCity            Boolean @default(false)
+  readyForHygieneHelp             Boolean @default(false)
+  readyForPhysicalHelp            Boolean @default(false)
+  readyForLimitedMobility         Boolean @default(false)
+  readyForChildren                Boolean @default(false)
+  readyForUrgentRequests          Boolean @default(false)
+  readyToProvideDocuments         Boolean @default(false)
+  selfEmployedStatus              String  @default("self_employed_not_provided")
+  criminalRecordCertificateStatus String  @default("criminal_record_not_provided")
+  verificationStatuses            String  @default("[\"documents_optional\"]")
+  childcareApprovalStatus         String  @default("not_requested")
+  trustLevel                      String  @default("new_profile")
+  rating                          Float   @default(0)
+  completedJobsCount              Int     @default(0)
+  complaintsCount                 Int     @default(0)
+  isAvailable                     Boolean @default(true)
+  profileComment                  String?
+  notes                           String?
+  user                            User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ServiceCategory {
+  id                     String          @id @default(cuid())
+  name                   String
+  slug                   String          @unique
+  description            String?
+  includedJson           String          @default("[]")
+  excludedJson           String          @default("[]")
+  complexityJson         String          @default("{}")
+  transferRules          String?
+  medicalProhibitions    String?
+  clientInstructions     String?
+  performerInstructions  String?
+  pricingRulesJson       String          @default("{}")
+  basePrice              Int             @default(0)
+  calculationUnit        String          @default("hour")
+  minDurationHours       Float           @default(1)
+  sortOrder              Int             @default(100)
+  isActive               Boolean         @default(true)
+  isChildcare            Boolean         @default(false)
+  requiresCriminalRecord Boolean         @default(false)
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  requests               ClientRequest[]
+
+  @@index([isActive])
+}
+
+model ClientRequest {
+  id                     String               @id @default(cuid())
+  publicNumber           String?
+  seedKey                String?              @unique
+  clientId               String
+  cityId                 String
+  categoryId             String
+  contactName            String?
+  contactPhone           String?
+  helpFor                String?
+  additionalActionsJson  String               @default("[]")
+  dependentStateJson     String               @default("[]")
+  dependentAge           Int?
+  scheduleType           String               @default("once")
+  regularPeriod          String?
+  repeatedVisitsAllowed  Boolean              @default(false)
+  title                  String
+  description            String
+  addressText            String
+  approximateAddressText String
+  addressCity            String?
+  addressStreet          String?
+  addressHouse           String?
+  addressApartment       String?
+  addressEntrance        String?
+  addressFloor           String?
+  addressIntercom        String?
+  addressComment         String?
+  fullAddress            String?
+  publicAddress          String?
+  yandexPublicMapAddress String?
+  yandexExactMapAddress  String?
+  lat                    Float?
+  lng                    Float?
+  approximateLat         Float?
+  approximateLng         Float?
+  mapPrivacyRadiusMeters Int                  @default(600)
+  district               String?
+  date                   DateTime?
+  timeFrom               String?
+  timeTo                 String?
+  expectedDurationHours  Float?
+  urgency                String               @default("normal")
+  hasElderlyPerson       Boolean              @default(false)
+  hasChild               Boolean              @default(false)
+  hasLimitedMobility     Boolean              @default(false)
+  physicalHelpLevel      String?
+  needsCooking           Boolean              @default(false)
+  needsCleaning          Boolean              @default(false)
+  needsWalk              Boolean              @default(false)
+  needsHygieneHelp       Boolean              @default(false)
+  hasPets                Boolean              @default(false)
+  budgetAmount           Int?
+  priceEstimateAmount    Int?
+  pricingBreakdownJson   String?
+  comment                String?
+  status                 String               @default("draft")
+  visibilityStatus       String               @default("private")
+  selectedPerformerId    String?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  completedAt            DateTime?
+  cancelledAt            DateTime?
+  archivedAt             DateTime?
+  client                 User                 @relation("ClientRequests", fields: [clientId], references: [id])
+  city                   City                 @relation(fields: [cityId], references: [id])
+  category               ServiceCategory      @relation(fields: [categoryId], references: [id])
+  selectedPerformer      User?                @relation("SelectedPerformerRequests", fields: [selectedPerformerId], references: [id])
+  responses              RequestResponse[]
+  chats                  Chat[]
+  complaints             Complaint[]
+  reviews                Review[]
+  balanceTransactions    BalanceTransaction[]
+
+  @@index([cityId, status])
+  @@index([publicNumber])
+  @@index([clientId])
+  @@index([selectedPerformerId])
+}
+
+model RequestResponse {
+  id          String        @id @default(cuid())
+  requestId   String
+  performerId String
+  message     String?
+  status      String        @default("pending")
+  createdAt   DateTime      @default(now())
+  acceptedAt  DateTime?
+  rejectedAt  DateTime?
+  notAgreedAt DateTime?
+  finalRejectedAt DateTime?
+  newTermsOfferedAt DateTime?
+  request     ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  performer   User          @relation(fields: [performerId], references: [id])
+  chat        Chat?
+
+  @@unique([requestId, performerId])
+  @@index([performerId, status])
+}
+
+model Chat {
+  id          String        @id @default(cuid())
+  requestId   String
+  responseId  String?       @unique
+  clientId    String
+  performerId String
+  status      String        @default("open")
+  clientConfirmedAt DateTime?
+  performerConfirmedAt DateTime?
+  conditionsJson String?
+  notAgreedAt DateTime?
+  reopenedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  closedAt    DateTime?
+  archivedAt  DateTime?
+  request     ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  response    RequestResponse? @relation(fields: [responseId], references: [id])
+  client      User          @relation("ClientChats", fields: [clientId], references: [id])
+  performer   User          @relation("PerformerChats", fields: [performerId], references: [id])
+  messages    ChatMessage[]
+  complaints  Complaint[]
+
+  @@index([clientId])
+  @@index([performerId])
+}
+
+model ChatMessage {
+  id               String   @id @default(cuid())
+  chatId           String
+  senderId         String?
+  text             String
+  visibility       String   @default("all")
+  isSystem         Boolean  @default(false)
+  moderationStatus String   @default("clean")
+  isHidden         Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  chat             Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender           User?    @relation(fields: [senderId], references: [id])
+
+  @@index([chatId, createdAt])
+  @@index([senderId])
+}
+
+model BalanceTransaction {
+  id               String         @id @default(cuid())
+  userId           String
+  type             String
+  amount           Int
+  balanceKind      String
+  reason           String
+  comment          String?
+  balanceBefore    Int?
+  balanceAfter     Int?
+  bonusExpiresAt   DateTime?
+  relatedRequestId String?
+  createdByAdminId String?
+  createdAt        DateTime       @default(now())
+  user             User           @relation("UserBalanceTransactions", fields: [userId], references: [id])
+  createdByAdmin   User?          @relation("AdminCreatedTransactions", fields: [createdByAdminId], references: [id])
+  relatedRequest   ClientRequest? @relation(fields: [relatedRequestId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([createdByAdminId])
+}
+
+model PaymentTransaction {
+  id                   String   @id @default(cuid())
+  userId               String
+  provider             String
+  providerPaymentId    String?  @unique
+  orderId              String   @unique
+  amount               Int
+  currency             String   @default("RUB")
+  status               String
+  purpose              String   @default("balance_top_up")
+  description          String?
+  paymentUrl           String?
+  successUrl           String?
+  failUrl              String?
+  notificationUrl      String?
+  balanceTransactionId String?
+  rawInitRequestJson   String?
+  rawInitResponseJson  String?
+  rawWebhookJson       String?
+  metadataJson         String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  paidAt               DateTime?
+  creditedAt           DateTime?
+  failedAt             DateTime?
+  cancelledAt          DateTime?
+  user                 User     @relation("UserPaymentTransactions", fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([provider])
+  @@index([status])
+  @@index([createdAt])
+  @@index([orderId])
+}
+
+model Complaint {
+  id              String         @id @default(cuid())
+  publicNumber    String?        @unique
+  type            String         @default("complaint")
+  requestId       String?
+  chatId          String?
+  fromUserId      String
+  againstUserId   String?
+  reason          String
+  description     String?
+  status          String         @default("new")
+  createdAt       DateTime       @default(now())
+  resolvedAt      DateTime?
+  adminComment    String?
+  adminResponse   String?
+  isVisibleToUser Boolean        @default(true)
+  request         ClientRequest? @relation(fields: [requestId], references: [id])
+  chat            Chat?          @relation(fields: [chatId], references: [id])
+  fromUser        User           @relation("ComplaintsFrom", fields: [fromUserId], references: [id])
+  againstUser     User?          @relation("ComplaintsAgainst", fields: [againstUserId], references: [id])
+
+  @@index([status])
+  @@index([fromUserId])
+  @@index([againstUserId])
+}
+
+model UserRiskFlag {
+  id         String    @id @default(cuid())
+  userId     String
+  type       String
+  severity   String    @default("low")
+  reason     String
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, resolvedAt])
+  @@index([type])
+}
+
+model Review {
+  id         String        @id @default(cuid())
+  requestId  String
+  fromUserId String
+  toUserId   String
+  rating     Int
+  text       String?
+  likedText  String?
+  improvementText String?
+  createdAt  DateTime      @default(now())
+  request    ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  fromUser   User          @relation("ReviewsFrom", fields: [fromUserId], references: [id])
+  toUser     User          @relation("ReviewsTo", fields: [toUserId], references: [id])
+
+  @@unique([requestId, fromUserId, toUserId])
+  @@index([toUserId])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  action      String
+  entityType  String
+  entityId    String?
+  payloadJson String?
+  createdAt   DateTime @default(now())
+  actor       User?    @relation("ActorAuditLogs", fields: [actorUserId], references: [id])
+
+  @@index([actorUserId, createdAt])
+  @@index([entityType, entityId])
+}
+
+model Consent {
+  id         String   @id @default(cuid())
+  userId     String
+  type       String
+  version    String
+  acceptedAt DateTime @default(now())
+  ip         String?
+  userAgent  String?
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type, version])
+  @@index([userId])
+}
+
+model LegalDocument {
+  id               String        @id @default(cuid())
+  type             String
+  roleScope        String        @default("all")
+  title            String
+  slug             String
+  version          String
+  contentMarkdown  String
+  contentHash      String
+  isRequired       Boolean       @default(true)
+  isPublished      Boolean       @default(false)
+  isActive         Boolean       @default(true)
+  publishedAt      DateTime?
+  effectiveFrom    DateTime?
+  archivedAt       DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  createdByAdminId String?
+  createdByAdmin   User?         @relation("AdminCreatedLegalDocuments", fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  userConsents     UserConsent[]
+
+  @@unique([type, version])
+  @@unique([slug, version])
+  @@index([type, isActive, isPublished])
+  @@index([roleScope, isRequired])
+}
+
+model UserConsent {
+  id                  String        @id @default(cuid())
+  userId              String
+  documentId          String
+  documentType        String
+  documentVersion     String
+  documentTitle       String
+  documentContentHash String
+  acceptedAt          DateTime      @default(now())
+  ipAddress           String?
+  userAgent           String?
+  source              String        @default("profile")
+  isRequired          Boolean       @default(true)
+  isActive            Boolean       @default(true)
+  revokedAt           DateTime?
+  revocationReason    String?
+  createdAt           DateTime      @default(now())
+  user                User          @relation("UserLegalConsents", fields: [userId], references: [id], onDelete: Cascade)
+  document            LegalDocument @relation(fields: [documentId], references: [id])
+
+  @@unique([userId, documentId])
+  @@index([userId, isActive])
+  @@index([documentType, documentVersion])
+}
+
+model UserConsentAuditLog {
+  id              String   @id @default(cuid())
+  userId          String?
+  adminId         String?
+  action          String
+  documentType    String?
+  documentVersion String?
+  oldValue        String?
+  newValue        String?
+  ipAddress       String?
+  userAgent       String?
+  createdAt       DateTime @default(now())
+  comment         String?
+  user            User?    @relation("UserConsentAuditLogs", fields: [userId], references: [id], onDelete: SetNull)
+  admin           User?    @relation("AdminConsentAuditLogs", fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([adminId, createdAt])
+  @@index([documentType, documentVersion])
+}
+
+model ConsentExportLog {
+  id                String   @id @default(cuid())
+  exportedByAdminId String?
+  exportType        String
+  userId            String?
+  fileName          String
+  exportedAt        DateTime @default(now())
+  ipAddress         String?
+  userAgent         String?
+  comment           String?
+  exportedByAdmin   User?    @relation("AdminConsentExports", fields: [exportedByAdminId], references: [id], onDelete: SetNull)
+  user              User?    @relation("UserConsentExports", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([exportedByAdminId, exportedAt])
+  @@index([userId, exportedAt])
+  @@index([exportType])
+}
+
+model PerformerDocument {
+  id           String    @id @default(cuid())
+  performerId  String
+  type         String
+  fileName     String
+  fileUrl      String
+  status       String    @default("uploaded")
+  uploadedAt   DateTime  @default(now())
+  verifiedAt   DateTime?
+  adminComment String?
+  performer    User      @relation(fields: [performerId], references: [id], onDelete: Cascade)
+
+  @@index([performerId, type])
+  @@index([status])
+}
+
+model ServiceSetting {
+  key       String   @id
+  valueJson String
+  label     String
+  group     String   @default("general")
+  updatedAt DateTime @updatedAt
+}
+
+model KnowledgeArticle {
+  id          String   @id @default(cuid())
+  audience    String   @default("all")
+  title       String
+  slug        String   @unique
+  content     String
+  category    String
+  isPublished Boolean  @default(true)
+  sortOrder   Int      @default(100)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([audience, isPublished])
+  @@index([category, sortOrder])
+}

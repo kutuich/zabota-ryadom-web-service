@@ -1,0 +1,52 @@
+# macOS
+.DS_Store
+
+# Node dependencies
+node_modules/
+**/node_modules/
+
+# Build/cache
+dist/
+**/dist/
+build/
+**/build/
+.cache/
+.turbo/
+
+# Environment files with secrets
+.env
+.env.*
+!.env.example
+!.env.preview.example
+!.env.production.example
+!.env.tbank.test.example
+
+# Databases and runtime data
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/
+uploads/
+backups/
+backend/prisma/dev.db
+backend/dev.db
+
+# Test / visual artifacts
+test-results/
+playwright-report/
+coverage/
+screenshots/
+frontend-check-screenshots/
+visual-audit/
+audit-output/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local exported documents / drafts
+*.pdf

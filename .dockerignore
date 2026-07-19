@@ -1,0 +1,36 @@
+node_modules
+backend/node_modules
+frontend/node_modules
+backend/dist
+frontend/dist
+frontend-check-screenshots
+visual-audit
+playwright-report
+test-results
+.env
+.env.*
+!.env.example
+!.env.preview.example
+!.env.tbank.test.example
+!.env.production.example
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+backend/uploads
+**/*.php
+Care servis
+Care servis/**
+landing-public/admin
+landing-public/api
+landing-public/includes
+landing-public/data
+/admin
+/api
+/includes
+/data
+.DS_Store
+*.log
+*.pdf
+CONCEPT_PRICING_ZABOTA_RYADOM_V3.md
+ZABOTA_RYADOM_2_0_MASTER_CONTEXT.md
