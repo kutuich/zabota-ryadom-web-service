@@ -1710,7 +1710,8 @@ Production:
 проект: /opt/zabota/repo
 data: /opt/zabota/data
 контейнер: zabota-web
-порт: 80:4000
+приложение: 127.0.0.1:4000:4000
+reverse proxy: Caddy на 80/443 с автоматическим HTTPS
 ```
 
 Repo:
@@ -1726,6 +1727,8 @@ https://github.com/kutuich/zabota-ryadom-web-service.git
 ```bash
 DATABASE_URL=file:/data/zabota.db
 PORT=4000
+APP_BASE_URL=https://zabota-ugorsk.ru
+PUBLIC_SITE_URL=https://zabota-ugorsk.ru
 JWT_SECRET=
 JWT_EXPIRES_IN=7d
 CORS_ORIGIN=https://zabota-ugorsk.ru

@@ -26,6 +26,8 @@
 
 - `NODE_ENV=production` - включает production static routing.
 - `PORT=4000` - порт внутри контейнера. Timeweb может пробрасывать внешний порт отдельно.
+- `APP_BASE_URL=https://zabota-ugorsk.ru` - основной URL приложения.
+- `PUBLIC_SITE_URL=https://zabota-ugorsk.ru` - публичный URL лендинга.
 - `DATABASE_URL="file:/data/zabota.db"` - SQLite база на persistent volume.
 - `JWT_SECRET` - длинный случайный production secret. Не использовать значение из example.
 - `CORS_ORIGIN="https://zabota-ugorsk.ru"` - production origin сайта.
@@ -46,6 +48,7 @@
 - `TBANK_FAIL_URL=https://zabota-ugorsk.ru/app/balance/payment-fail` - URL неуспешного возврата.
 - `TBANK_NOTIFICATION_URL=https://zabota-ugorsk.ru/api/payments/tbank/webhook` - webhook/notification URL.
 - `UPLOADS_DIR=/data/uploads` - целевой путь для persistent uploads.
+- `OAUTH_ENABLED=false` и `VK_ID_ENABLED=false` - VK ID не включать до отдельной настройки.
 
 `PAYMENT_PROVIDER=tbank` включать только после проверки домена, HTTPS, webhook и тестового терминала. До этого production preview должен работать с `PAYMENT_PROVIDER=mock`.
 
@@ -119,6 +122,8 @@ docker run --rm \
 ## 6. Что не включать на первом запуске
 
 - `PAYMENT_PROVIDER=tbank`;
+- `OAUTH_ENABLED=true`;
+- `VK_ID_ENABLED=true`;
 - `SEED_DEMO_DATA=true`;
 - реальные платежи;
 - SMS;
@@ -138,3 +143,137 @@ docker run --rm \
 - успешный webhook начисляет баланс только один раз;
 - платёж виден в админке;
 - статус виден пользователю в истории пополнений.
+
+## 8. HTTPS через Caddy
+
+Production-схема:
+
+```text
+Интернет
+  -> Caddy: TCP 80/443, автоматический сертификат и HTTP -> HTTPS
+  -> 127.0.0.1:4000
+  -> Docker container zabota-web:4000
+```
+
+Caddy устанавливается на host-сервер как systemd service. Контейнер приложения не должен занимать внешний порт 80 и запускается только с публикацией:
+
+```bash
+-p 127.0.0.1:4000:4000
+```
+
+Порядок первого включения:
+
+1. Убедиться, что DNS A-запись `zabota-ugorsk.ru` указывает на `104.171.139.243`.
+2. Открыть TCP 80 и 443 в firewall Timeweb и, если используется, в `ufw`.
+3. Выполнить обычный production deploy. После него приложение должно отвечать на `http://127.0.0.1:4000`, но ещё не занимать внешний порт 80.
+4. На сервере проверить `curl -i http://127.0.0.1:4000/api/health`.
+5. Из `/opt/zabota/repo` запустить `bash scripts/setup-https-caddy-timeweb.sh` от root.
+6. Проверить `curl -i https://zabota-ugorsk.ru/api/health`.
+7. Проверить перенаправление командой `curl -I http://zabota-ugorsk.ru`.
+8. Открыть `https://zabota-ugorsk.ru` и `https://zabota-ugorsk.ru/app`.
+
+Скрипт проверяет Linux/root, локальный health, DNS, занятость портов, правила `ufw`, устанавливает официальный пакет Caddy, сохраняет резервную копию существующего Caddyfile, валидирует новую конфигурацию и ждёт успешный HTTPS health. Основной Caddyfile находится в `/etc/caddy/Caddyfile`, сертификаты и служебные данные Caddy обслуживаются системным пакетом.
+
+Важные ограничения:
+
+- не удалять `/opt/zabota/data`;
+- не запускать `docker volume prune`;
+- не запускать `docker system prune -a --volumes`;
+- не публиковать приложение на внешнем порту 80 после включения Caddy;
+- не выводить содержимое `/opt/zabota/repo/.env.production` в терминал или логи;
+- не включать VK ID и Т-Банк в рамках настройки HTTPS.
+
+## 9. Ручная установка Caddy
+
+Если setup script нельзя использовать, те же действия выполняются вручную на production-сервере:
+
+```bash
+apt-get update
+apt-get install -y debian-keyring debian-archive-keyring apt-transport-https ca-certificates curl gnupg
+
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+  | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+  | tee /etc/apt/sources.list.d/caddy-stable.list
+
+chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+chmod o+r /etc/apt/sources.list.d/caddy-stable.list
+
+apt-get update
+apt-get install -y caddy
+
+ufw allow 80/tcp
+ufw allow 443/tcp
+
+cat > /etc/caddy/Caddyfile <<'EOF'
+zabota-ugorsk.ru {
+    encode gzip
+
+    reverse_proxy 127.0.0.1:4000
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+}
+EOF
+
+caddy fmt --overwrite /etc/caddy/Caddyfile
+caddy validate --config /etc/caddy/Caddyfile
+systemctl enable caddy
+systemctl reload caddy || systemctl restart caddy
+systemctl status caddy --no-pager
+```
+
+Пакет и способ установки соответствуют [официальной инструкции Caddy для Debian/Ubuntu](https://caddyserver.com/docs/install#debian-ubuntu-raspbian).
+
+## 10. Проверка HTTPS
+
+```bash
+curl -i http://127.0.0.1:4000/api/health
+curl -i https://zabota-ugorsk.ru/api/health
+curl -I http://zabota-ugorsk.ru
+```
+
+Ожидается:
+
+- локальный health возвращает `200` и JSON;
+- HTTPS health возвращает `200` и JSON;
+- HTTP-запрос возвращает redirect на `https://zabota-ugorsk.ru/`;
+- `systemctl status caddy --no-pager` показывает active/running.
+
+При проблемах с сертификатом проверить:
+
+```bash
+journalctl -u caddy --no-pager -n 100
+getent ahostsv4 zabota-ugorsk.ru
+ss -ltnp | grep -E ':80|:443|:4000'
+```
+
+## 11. Временный откат
+
+Если HTTPS сломался и требуется временно восстановить HTTP-доступ:
+
+```bash
+systemctl stop caddy
+
+docker rm -f zabota-web
+
+docker run -d \
+  --name zabota-web \
+  --restart unless-stopped \
+  --env-file /opt/zabota/repo/.env.production \
+  -p 80:4000 \
+  -v /opt/zabota/data:/data \
+  zabota-web-service
+
+curl -i http://zabota-ugorsk.ru/api/health
+```
+
+Этот откат временный. Он не удаляет базу или uploads. После исправления Caddy контейнер нужно снова запустить с `-p 127.0.0.1:4000:4000`, затем включить Caddy:
+
+```bash
+systemctl enable --now caddy
+```

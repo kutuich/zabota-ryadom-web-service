@@ -1,14 +1,15 @@
 # Production Checklist
 
 - [ ] HTTPS включён.
+- [ ] Caddy слушает внешние TCP 80 и 443.
+- [ ] `zabota-web` опубликован только на `127.0.0.1:4000`.
 - [ ] Домен открывает landing на `/`.
 - [ ] `/app` открывает приложение.
 - [ ] `/api/health` отдаёт JSON.
 - [ ] `/legal/privacy` открывается.
 - [ ] Старые PHP paths возвращают 404.
 - [ ] `DATABASE_URL` указывает на persistent volume: `file:/data/zabota.db`.
-- [ ] Uploads находятся на persistent volume.
-- [ ] Перед production загрузками доработан `UPLOADS_DIR`, потому что текущий код пишет в `backend/uploads`.
+- [ ] Uploads находятся на persistent volume `/opt/zabota/data/uploads` через `UPLOADS_DIR=/data/uploads`.
 - [ ] `JWT_SECRET` заменён на production secret.
 - [ ] `PAYMENT_PROVIDER=mock`.
 - [ ] `SEED_DEMO_DATA=false`.

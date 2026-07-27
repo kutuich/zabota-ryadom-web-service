@@ -167,7 +167,7 @@ docker run -d \
   --name zabota-web \
   --restart unless-stopped \
   --env-file /opt/zabota/repo/.env.production \
-  -p 80:4000 \
+  -p 127.0.0.1:4000:4000 \
   -v /opt/zabota/data:/data \
   zabota-web-service || server_error "не удалось запустить Docker-контейнер zabota-web"
 
@@ -176,10 +176,20 @@ sleep 10
 
 docker ps --filter 'name=^/zabota-web$' --filter 'status=running' --format '{{.Names}}' | grep -qx 'zabota-web' || \
   check_error "Docker-контейнер zabota-web не работает"
-curl -fsS http://127.0.0.1/api/health >/dev/null || check_error "не отвечает /api/health"
-curl -fsSI http://127.0.0.1/ >/dev/null || check_error "не отвечает главная страница"
-curl -fsSI http://127.0.0.1/app >/dev/null || check_error "не отвечает /app"
-curl -fsSI http://127.0.0.1/prices.html >/dev/null || check_error "не отвечает /prices.html"
+curl -fsS http://127.0.0.1:4000/api/health >/dev/null || check_error "не отвечает локальный /api/health на порту 4000"
+curl -fsSI http://127.0.0.1:4000/ >/dev/null || check_error "не отвечает локальная главная страница"
+curl -fsSI http://127.0.0.1:4000/app >/dev/null || check_error "не отвечает локальный /app"
+curl -fsSI http://127.0.0.1:4000/prices.html >/dev/null || check_error "не отвечает локальный /prices.html"
+
+if command -v caddy >/dev/null 2>&1 \
+  && systemctl is-active --quiet caddy \
+  && ss -ltnH 2>/dev/null | awk '$4 ~ /:443$/ { found=1 } END { exit !found }'; then
+  curl -fsS --retry 5 --retry-delay 2 --max-time 15 https://zabota-ugorsk.ru/api/health >/dev/null || \
+    check_error "Caddy активен, но production HTTPS /api/health не отвечает"
+  echo "HTTPS health - успешно"
+else
+  echo "WARNING: Caddy/HTTPS ещё не настроен; выполнена только локальная проверка 127.0.0.1:4000."
+fi
 REMOTE_SCRIPT
 
 SSH_RESULT=${PIPESTATUS[0]}
