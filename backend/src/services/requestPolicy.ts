@@ -6,9 +6,21 @@ import {
   buildYandexPublicMapAddress,
   canShowExactAddressToHelper
 } from "./addressService";
+import { serializeAgreedTerms, type AgreementTermsSource } from "./agreementTermsService";
+
+type RequestChatSummary = AgreementTermsSource & {
+  id: string;
+  status: string;
+  performerId: string;
+  clientConfirmedAt?: Date | null;
+  performerConfirmedAt?: Date | null;
+  agreementFinalizedAt?: Date | null;
+  archivedAt?: Date | null;
+};
 
 type RequestWithRelations = ClientRequest & {
   category?: ServiceCategory;
+  city?: unknown;
   responses?: Array<{
     id: string;
     status: string;
@@ -35,21 +47,16 @@ type RequestWithRelations = ClientRequest & {
     id: string;
     displayName: string;
   } | null;
-  chats?: Array<{
-    id: string;
-    status: string;
-    performerId: string;
-    clientConfirmedAt?: Date | null;
-    performerConfirmedAt?: Date | null;
-    archivedAt?: Date | null;
-  }>;
+  chats?: RequestChatSummary[];
 };
 
 export function serializeRequestForUser(
   request: RequestWithRelations,
-  viewer: { id: string; role: UserRole }
+  viewer: { id: string; role: UserRole },
+  chatOverride?: RequestChatSummary
 ) {
-  const chat = request.chats?.find((item) => !item.archivedAt) ?? request.chats?.[0] ?? null;
+  const chats = chatOverride ? [chatOverride] : request.chats;
+  const chat = chats?.find((item) => !item.archivedAt) ?? chats?.[0] ?? null;
   const canSeeExactAddress =
     ["admin", "superadmin"].includes(viewer.role) ||
     request.clientId === viewer.id ||
@@ -63,10 +70,27 @@ export function serializeRequestForUser(
   const builtExactMapAddress = buildYandexExactMapAddress(addressParts);
   const publicMapAddress = request.yandexPublicMapAddress || builtPublicMapAddress || request.publicAddress || request.approximateAddressText || "";
   const exactMapAddress = request.yandexExactMapAddress || builtExactMapAddress;
+  const canSeeContact = ["admin", "superadmin"].includes(viewer.role) || request.clientId === viewer.id;
 
   return {
-    ...request,
+    id: request.id,
+    publicNumber: request.publicNumber,
+    clientId: request.clientId,
+    cityId: request.cityId,
+    categoryId: request.categoryId,
+    contactName: canSeeContact ? request.contactName : null,
+    contactPhone: canSeeContact ? request.contactPhone : null,
+    helpFor: request.helpFor,
+    additionalActionsJson: request.additionalActionsJson,
+    dependentStateJson: request.dependentStateJson,
+    dependentAge: request.dependentAge,
+    scheduleType: request.scheduleType,
+    regularPeriod: request.regularPeriod,
+    repeatedVisitsAllowed: request.repeatedVisitsAllowed,
+    title: request.title,
+    description: request.description,
     addressText: canSeeExactAddress ? request.addressText : null,
+    approximateAddressText: request.approximateAddressText,
     fullAddress: canSeeExactAddress ? request.fullAddress ?? request.addressText : null,
     publicAddress: request.publicAddress || builtPublicMapAddress || request.approximateAddressText,
     addressCity: request.addressCity,
@@ -83,11 +107,61 @@ export function serializeRequestForUser(
     yandexExactMapUrl: canSeeExactAddress ? buildYandexMapsSearchUrl(exactMapAddress) : null,
     lat: canSeeExactAddress ? request.lat : request.approximateLat,
     lng: canSeeExactAddress ? request.lng : request.approximateLng,
+    approximateLat: request.approximateLat,
+    approximateLng: request.approximateLng,
+    mapPrivacyRadiusMeters: request.mapPrivacyRadiusMeters,
+    district: request.district,
+    date: request.date,
+    timeFrom: request.timeFrom,
+    timeTo: request.timeTo,
+    expectedDurationHours: request.expectedDurationHours,
+    urgency: request.urgency,
+    hasElderlyPerson: request.hasElderlyPerson,
+    hasChild: request.hasChild,
+    hasLimitedMobility: request.hasLimitedMobility,
+    physicalHelpLevel: request.physicalHelpLevel,
+    needsCooking: request.needsCooking,
+    needsCleaning: request.needsCleaning,
+    needsWalk: request.needsWalk,
+    needsHygieneHelp: request.needsHygieneHelp,
+    hasPets: request.hasPets,
+    budgetAmount: request.budgetAmount,
+    priceEstimateAmount: request.priceEstimateAmount,
+    pricingBreakdownJson: request.pricingBreakdownJson,
+    comment: request.comment,
+    status: request.status,
+    visibilityStatus: request.visibilityStatus,
+    selectedPerformerId: request.selectedPerformerId,
+    createdAt: request.createdAt,
+    updatedAt: request.updatedAt,
+    completedAt: request.completedAt,
+    cancelledAt: request.cancelledAt,
+    archivedAt: request.archivedAt,
     exactAddressVisible: canSeeExactAddress,
     phoneVisible: false,
     pricing: safeJsonObject(request.pricingBreakdownJson),
-    chat: chat ? { id: chat.id, status: chat.status, performerId: chat.performerId } : null,
+    chat: chat ? {
+      id: chat.id,
+      status: chat.status,
+      performerId: chat.performerId,
+      agreedTerms: serializeAgreedTerms(chat)
+    } : null,
+    city: request.city,
+    category: request.category,
     client: request.client ? { id: request.client.id, displayName: request.client.displayName } : undefined,
+    selectedPerformer: request.selectedPerformer
+      ? { id: request.selectedPerformer.id, displayName: request.selectedPerformer.displayName }
+      : request.selectedPerformer,
+    chats: chats?.map((item) => ({
+      id: item.id,
+      status: item.status,
+      performerId: item.performerId,
+      clientConfirmedAt: item.clientConfirmedAt,
+      performerConfirmedAt: item.performerConfirmedAt,
+      agreementFinalizedAt: item.agreementFinalizedAt,
+      agreedTerms: serializeAgreedTerms(item),
+      archivedAt: item.archivedAt
+    })),
     responses: request.responses?.map((response) => {
       const profile = response.performer?.performerProfile;
       const verificationStatuses = safeJsonArray(profile?.verificationStatuses);

@@ -1,8 +1,24 @@
+import { useState } from "react";
+import { api } from "../api/client";
+import { useAuth } from "../context/AuthContext";
 import type { User } from "../types";
 
 export function ContactDetails({ user }: { user: User | null | undefined }) {
+  const { bootstrap } = useAuth();
+  const [linkError, setLinkError] = useState("");
   const phoneVerified = Boolean(user?.phoneVerifiedAt || user?.isPhoneVerified);
   const emailVerified = Boolean(user?.emailVerifiedAt || user?.isEmailVerified);
+  const vkIdentity = user?.identities?.find((identity) => identity.provider === "vk");
+
+  async function linkVk() {
+    setLinkError("");
+    try {
+      const { authorizationUrl } = await api.startVkLink();
+      window.location.href = authorizationUrl;
+    } catch (error) {
+      setLinkError(error instanceof Error ? error.message : "Не удалось начать привязку VK ID");
+    }
+  }
 
   return (
     <section className="plain-section span-2">
@@ -18,6 +34,12 @@ export function ContactDetails({ user }: { user: User | null | undefined }) {
         <strong>{emailVerified ? "Подтверждён" : "Не подтверждён"}</strong>
       </div>
       <p className="privacy-note">Подтверждение телефона и email будет добавлено позже.</p>
+      {vkIdentity ? (
+        <p className="privacy-note">VK ID привязан{vkIdentity.displayName ? `: ${vkIdentity.displayName}` : ""}.</p>
+      ) : bootstrap?.settings.vkIdEnabled ? (
+        <button className="secondary-button" type="button" onClick={linkVk}>Привязать VK ID</button>
+      ) : null}
+      {linkError && <p className="error-text">{linkError}</p>}
     </section>
   );
 }

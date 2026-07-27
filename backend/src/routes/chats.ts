@@ -6,12 +6,10 @@ import { chargeAgreementFeesTx, getServiceFeeSettings, hasAvailableBalance } fro
 import { writeAudit } from "../services/auditService";
 import { requireFeatureConsent } from "../services/legalService";
 import { moderateChatMessage } from "../services/moderationService";
-import {
-  buildYandexExactMapAddress,
-  buildYandexMapsSearchUrl,
-  buildYandexPublicMapAddress,
-  canShowExactAddressToHelper
-} from "../services/addressService";
+import { serializeRequestForUser } from "../services/requestPolicy";
+import { canShowExactAddressToHelper } from "../services/addressService";
+import { serializeAgreedTerms } from "../services/agreementTermsService";
+import { PRICING_ADDONS, PRICING_PACKAGES } from "../services/pricingService";
 import { asyncHandler, HttpError } from "../utils/http";
 
 export const chatsRouter = Router();
@@ -33,6 +31,15 @@ const chatInclude = {
     orderBy: { createdAt: "asc" as const }
   }
 };
+
+const agreementTermsSchema = z.object({
+  agreedHelperAmount: z.number().int().min(1).max(100_000),
+  agreedPackageId: z.string().min(1).max(80).nullable().optional(),
+  agreedAddons: z.array(z.string().min(1).max(80)).max(20).optional(),
+  agreedDurationMinutes: z.number().int().min(15).max(24 * 60).nullable().optional(),
+  agreedScheduledAt: z.string().max(40).refine((value) => !Number.isNaN(Date.parse(value)), "Некорректная дата и время").nullable().optional(),
+  agreedTermsComment: z.string().max(1000).nullable().optional()
+});
 
 chatsRouter.get(
   "/",
@@ -148,6 +155,93 @@ chatsRouter.delete(
   })
 );
 
+chatsRouter.patch(
+  "/:id/terms",
+  asyncHandler(async (req, res) => {
+    const input = agreementTermsSchema.parse(req.body);
+    const chat = await loadChatForViewer(req.params.id, req.user!);
+    if (chat.clientId !== req.user!.id && chat.performerId !== req.user!.id) {
+      throw new HttpError(403, "Изменять условия могут только участники чата", "forbidden");
+    }
+    if (
+      chat.agreementFinalizedAt ||
+      chat.status === "in_work" ||
+      chat.archivedAt ||
+      ["completed", "cancelled", "archived"].includes(chat.status) ||
+      ["in_progress", "completed", "cancelled", "archived"].includes(chat.request.status)
+    ) {
+      throw new HttpError(400, "Условия этой заявки больше нельзя изменить", "agreement_terms_locked");
+    }
+
+    const requestPricing = safeJsonObject(chat.request.pricingBreakdownJson);
+    const packageId = input.agreedPackageId === undefined
+      ? chat.agreedPackageId ?? stringOrNull(requestPricing?.packageId)
+      : input.agreedPackageId;
+    if (packageId && !Object.prototype.hasOwnProperty.call(PRICING_PACKAGES, packageId)) {
+      throw new HttpError(400, "Неизвестный пакет помощи", "agreement_package_invalid");
+    }
+    const currentAddons = parseStringArray(chat.agreedAddonsJson);
+    const agreedAddons = input.agreedAddons ?? currentAddons;
+    if (agreedAddons.some((id) => !Object.prototype.hasOwnProperty.call(PRICING_ADDONS, id))) {
+      throw new HttpError(400, "Неизвестная доплата в согласованных условиях", "agreement_addon_invalid");
+    }
+
+    const settings = await getServiceFeeSettings();
+    const termsUpdatedAt = new Date();
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.chat.update({
+        where: { id: chat.id },
+        data: {
+          agreedHelperAmount: input.agreedHelperAmount,
+          customerServiceFeeAmount: settings.clientServiceFeeAmount,
+          helperServiceFeeAmount: settings.performerCommissionAmount,
+          customerTotalAmount: input.agreedHelperAmount + settings.clientServiceFeeAmount,
+          helperNetAmount: Math.max(0, input.agreedHelperAmount - settings.performerCommissionAmount),
+          agreedPackageId: packageId,
+          agreedPackageTitle: packageId ? PRICING_PACKAGES[packageId as keyof typeof PRICING_PACKAGES].title : null,
+          agreedAddonsJson: JSON.stringify(agreedAddons),
+          agreedDurationMinutes: input.agreedDurationMinutes === undefined
+            ? chat.agreedDurationMinutes ?? durationMinutes(chat.request.expectedDurationHours)
+            : input.agreedDurationMinutes,
+          agreedScheduledAt: input.agreedScheduledAt === undefined
+            ? chat.agreedScheduledAt
+            : input.agreedScheduledAt ? new Date(input.agreedScheduledAt) : null,
+          agreedTermsComment: input.agreedTermsComment === undefined ? chat.agreedTermsComment : input.agreedTermsComment?.trim() || null,
+          clientConfirmedAt: null,
+          performerConfirmedAt: null,
+          agreedByCustomerAt: null,
+          agreedByHelperAt: null,
+          status: "open",
+          termsUpdatedAt,
+          termsUpdatedByUserId: req.user!.id
+        }
+      });
+      await tx.clientRequest.update({
+        where: { id: chat.requestId },
+        data: { status: "discussion" }
+      });
+      await tx.chatMessage.create({
+        data: {
+          chatId: chat.id,
+          senderId: null,
+          text: `Условия заявки обновлены. Сумма помощи: ${input.agreedHelperAmount} ₽. Для перехода заявки в работу нужно подтверждение Заказчика и Помощника.`,
+          isSystem: true
+        }
+      });
+      await writeAudit(req.user!.id, "chat.agreement_terms_update", "chat", chat.id, {
+        requestId: chat.requestId,
+        agreedHelperAmount: input.agreedHelperAmount,
+        packageId,
+        agreedAddons,
+        termsUpdatedAt
+      }, tx);
+      return tx.chat.findUnique({ where: { id: chat.id }, include: chatInclude });
+    });
+
+    res.json(serializeChat(result, req.user!));
+  })
+);
+
 chatsRouter.post(
   "/:id/client-confirm",
   requireFeatureConsent("confirm_helper"),
@@ -156,16 +250,32 @@ chatsRouter.post(
     if (chat.clientId !== req.user!.id) {
       throw new HttpError(403, "Подтверждать условия может только заказчик заявки", "forbidden");
     }
+    if (chat.agreementFinalizedAt || chat.status === "in_work") {
+      return res.json(serializeChat(chat, req.user!));
+    }
+    if (!chat.agreedHelperAmount) {
+      throw new HttpError(400, "Сначала согласуйте и сохраните стоимость помощи", "agreement_terms_required");
+    }
     if (["not_agreed", "archived", "completed"].includes(chat.status)) {
       throw new HttpError(400, "Этот чат уже не активен", "chat_not_active");
     }
 
     const result = await prisma.$transaction(async (tx) => {
+      const current = await tx.chat.findUnique({ where: { id: chat.id }, include: chatInclude });
+      if (!current) throw new HttpError(404, "Чат не найден", "chat_not_found");
+      if (current.agreementFinalizedAt || current.status === "in_work") {
+        return serializeChat(current, req.user!);
+      }
+      if (!current.agreedHelperAmount) {
+        throw new HttpError(400, "Сначала согласуйте и сохраните стоимость помощи", "agreement_terms_required");
+      }
+      const confirmedAt = new Date();
       await tx.chat.update({
         where: { id: chat.id },
         data: {
-          clientConfirmedAt: new Date(),
-          status: chat.performerConfirmedAt ? "waiting_performer_confirmation" : "waiting_performer_confirmation"
+          clientConfirmedAt: confirmedAt,
+          agreedByCustomerAt: confirmedAt,
+          status: "waiting_performer_confirmation"
         }
       });
       await tx.clientRequest.update({
@@ -181,7 +291,7 @@ chatsRouter.post(
         }
       });
       await writeAudit(req.user!.id, "chat.client_confirm_conditions", "chat", chat.id, { requestId: chat.requestId }, tx);
-      return finalizeAgreementIfReady(tx, chat.id, req.user!.id);
+      return finalizeAgreementIfReady(tx, chat.id, req.user!);
     });
 
     res.json(result);
@@ -196,21 +306,37 @@ chatsRouter.post(
     if (chat.performerId !== req.user!.id) {
       throw new HttpError(403, "Принимать заявку может только выбранный помощник", "forbidden");
     }
+    if (chat.agreementFinalizedAt || chat.status === "in_work") {
+      return res.json(serializeChat(chat, req.user!));
+    }
+    if (!chat.agreedHelperAmount) {
+      throw new HttpError(400, "Сначала согласуйте и сохраните стоимость помощи", "agreement_terms_required");
+    }
     if (["not_agreed", "archived", "completed"].includes(chat.status)) {
       throw new HttpError(400, "Этот чат уже не активен", "chat_not_active");
     }
 
     const result = await prisma.$transaction(async (tx) => {
+      const current = await tx.chat.findUnique({ where: { id: chat.id }, include: chatInclude });
+      if (!current) throw new HttpError(404, "Чат не найден", "chat_not_found");
+      if (current.agreementFinalizedAt || current.status === "in_work") {
+        return serializeChat(current, req.user!);
+      }
+      if (!current.agreedHelperAmount) {
+        throw new HttpError(400, "Сначала согласуйте и сохраните стоимость помощи", "agreement_terms_required");
+      }
+      const confirmedAt = new Date();
       await tx.chat.update({
         where: { id: chat.id },
         data: {
-          performerConfirmedAt: new Date(),
-          status: chat.clientConfirmedAt ? "waiting_performer_confirmation" : "waiting_client_confirmation"
+          performerConfirmedAt: confirmedAt,
+          agreedByHelperAt: confirmedAt,
+          status: current.clientConfirmedAt ? "waiting_performer_confirmation" : "waiting_client_confirmation"
         }
       });
       await tx.clientRequest.update({
         where: { id: chat.requestId },
-        data: { status: chat.clientConfirmedAt ? "waiting_performer_confirmation" : "waiting_client_confirmation" }
+        data: { status: current.clientConfirmedAt ? "waiting_performer_confirmation" : "waiting_client_confirmation" }
       });
       await tx.chatMessage.create({
         data: {
@@ -221,7 +347,7 @@ chatsRouter.post(
         }
       });
       await writeAudit(req.user!.id, "chat.performer_confirm_work", "chat", chat.id, { requestId: chat.requestId }, tx);
-      return finalizeAgreementIfReady(tx, chat.id, req.user!.id);
+      return finalizeAgreementIfReady(tx, chat.id, req.user!);
     });
 
     res.json(result);
@@ -356,7 +482,11 @@ async function loadChatForViewer(
   return chat;
 }
 
-async function finalizeAgreementIfReady(tx: any, chatId: string, actorUserId: string) {
+async function finalizeAgreementIfReady(
+  tx: any,
+  chatId: string,
+  viewer: { id: string; role: string }
+) {
   const chat = await tx.chat.findUnique({
     where: { id: chatId },
     include: chatInclude
@@ -364,8 +494,14 @@ async function finalizeAgreementIfReady(tx: any, chatId: string, actorUserId: st
   if (!chat) {
     throw new HttpError(404, "Чат не найден", "chat_not_found");
   }
+  if (chat.agreementFinalizedAt || chat.status === "in_work" || chat.request?.status === "in_progress") {
+    return serializeChat(chat, viewer);
+  }
+  if (!chat.agreedHelperAmount) {
+    throw new HttpError(400, "Сначала согласуйте и сохраните стоимость помощи", "agreement_terms_required");
+  }
   if (!chat.clientConfirmedAt || !chat.performerConfirmedAt) {
-    return serializeChat(chat, { id: actorUserId, role: "client" } as any);
+    return serializeChat(chat, viewer);
   }
 
   const settings = await getServiceFeeSettings(tx);
@@ -377,27 +513,41 @@ async function finalizeAgreementIfReady(tx: any, chatId: string, actorUserId: st
     throw new HttpError(404, "Участник заявки не найден", "participant_not_found");
   }
 
-  if (!hasAvailableBalance(client, settings.clientServiceFeeAmount, settings.useBonusForCommission)) {
+  if (!hasAvailableBalance(client, settings.clientServiceFeeAmount, true)) {
     await tx.chat.update({ where: { id: chat.id }, data: { status: "waiting_client_balance" } });
     await tx.clientRequest.update({ where: { id: chat.requestId }, data: { status: "waiting_client_balance" } });
-    await writeAudit(actorUserId, "chat.waiting_client_balance", "chat", chat.id, settings, tx);
+    await writeAudit(viewer.id, "chat.waiting_client_balance", "chat", chat.id, settings, tx);
     const updated = await tx.chat.findUnique({ where: { id: chat.id }, include: chatInclude });
-    return serializeChat(updated, { id: actorUserId, role: "client" } as any);
+    return serializeChat(updated, viewer);
   }
 
-  if (!hasAvailableBalance(performer, settings.performerCommissionAmount, settings.useBonusForCommission)) {
+  if (!hasAvailableBalance(performer, settings.performerCommissionAmount, true)) {
     await tx.chat.update({ where: { id: chat.id }, data: { status: "waiting_performer_balance" } });
     await tx.clientRequest.update({ where: { id: chat.requestId }, data: { status: "waiting_performer_balance" } });
-    await writeAudit(actorUserId, "chat.waiting_performer_balance", "chat", chat.id, settings, tx);
+    await writeAudit(viewer.id, "chat.waiting_performer_balance", "chat", chat.id, settings, tx);
     const updated = await tx.chat.findUnique({ where: { id: chat.id }, include: chatInclude });
-    return serializeChat(updated, { id: actorUserId, role: "performer" } as any);
+    return serializeChat(updated, viewer);
+  }
+
+  const finalizedAt = new Date();
+  const claimed = await tx.chat.updateMany({
+    where: {
+      id: chat.id,
+      agreementFinalizedAt: null,
+      status: { not: "in_work" }
+    },
+    data: { agreementFinalizedAt: finalizedAt }
+  });
+  if (claimed.count === 0) {
+    const current = await tx.chat.findUnique({ where: { id: chat.id }, include: chatInclude });
+    return serializeChat(current, viewer);
   }
 
   await chargeAgreementFeesTx(tx, {
     requestId: chat.requestId,
     clientId: chat.clientId,
     performerId: chat.performerId,
-    actorUserId
+    actorUserId: viewer.id
   });
   await tx.clientRequest.update({
     where: { id: chat.requestId },
@@ -420,15 +570,28 @@ async function finalizeAgreementIfReady(tx: any, chatId: string, actorUserId: st
     where: { id: chat.id },
     data: {
       status: "in_work",
+      customerServiceFeeAmount: settings.clientServiceFeeAmount,
+      helperServiceFeeAmount: settings.performerCommissionAmount,
+      customerTotalAmount: chat.agreedHelperAmount + settings.clientServiceFeeAmount,
+      helperNetAmount: Math.max(0, chat.agreedHelperAmount - settings.performerCommissionAmount),
       conditionsJson: JSON.stringify({
         requestTitle: chat.request.title,
         publicNumber: chat.request.publicNumber,
-        date: chat.request.date,
-        timeFrom: chat.request.timeFrom,
-        timeTo: chat.request.timeTo,
-        expectedDurationHours: chat.request.expectedDurationHours,
-        priceEstimateAmount: chat.request.priceEstimateAmount,
-        pricingBreakdownJson: chat.request.pricingBreakdownJson
+        agreedHelperAmount: chat.agreedHelperAmount,
+        customerServiceFeeAmount: settings.clientServiceFeeAmount,
+        helperServiceFeeAmount: settings.performerCommissionAmount,
+        customerTotalAmount: chat.agreedHelperAmount + settings.clientServiceFeeAmount,
+        helperNetAmount: Math.max(0, chat.agreedHelperAmount - settings.performerCommissionAmount),
+        agreedPackageId: chat.agreedPackageId,
+        agreedPackageTitle: chat.agreedPackageTitle,
+        agreedAddons: parseStringArray(chat.agreedAddonsJson),
+        agreedDurationMinutes: chat.agreedDurationMinutes,
+        agreedScheduledAt: chat.agreedScheduledAt,
+        agreedTermsComment: chat.agreedTermsComment,
+        agreedByCustomerAt: chat.agreedByCustomerAt,
+        agreedByHelperAt: chat.agreedByHelperAt,
+        termsUpdatedAt: chat.termsUpdatedAt,
+        termsUpdatedByUserId: chat.termsUpdatedByUserId
       })
     }
   });
@@ -440,14 +603,15 @@ async function finalizeAgreementIfReady(tx: any, chatId: string, actorUserId: st
       isSystem: true
     }
   });
-  await writeAudit(actorUserId, "chat.agreement_finalized", "chat", chat.id, {
+  await writeAudit(viewer.id, "chat.agreement_finalized", "chat", chat.id, {
     requestId: chat.requestId,
     clientServiceFeeAmount: settings.clientServiceFeeAmount,
-    performerCommissionAmount: settings.performerCommissionAmount
+    performerCommissionAmount: settings.performerCommissionAmount,
+    agreedHelperAmount: chat.agreedHelperAmount
   }, tx);
 
   const updated = await tx.chat.findUnique({ where: { id: chat.id }, include: chatInclude });
-  return serializeChat(updated, { id: actorUserId, role: "client" } as any);
+  return serializeChat(updated, viewer);
 }
 
 function serializeChat(chat: any, viewer: { id: string; role: string }) {
@@ -456,49 +620,112 @@ function serializeChat(chat: any, viewer: { id: string; role: string }) {
     isAdmin ||
     chat.clientId === viewer.id ||
     (chat.performerId === viewer.id && canShowExactAddressToHelper(chat.request?.status, chat.status));
-  const addressParts = {
-    city: chat.request?.addressCity,
-    street: chat.request?.addressStreet,
-    house: chat.request?.addressHouse
-  };
-  const builtPublicMapAddress = buildYandexPublicMapAddress(addressParts);
-  const builtExactMapAddress = buildYandexExactMapAddress(addressParts);
-  const publicMapAddress = chat.request?.yandexPublicMapAddress || builtPublicMapAddress || chat.request?.publicAddress || chat.request?.approximateAddressText || "";
-  const exactMapAddress = chat.request?.yandexExactMapAddress || builtExactMapAddress || "";
   const request = chat.request
-    ? {
-        ...chat.request,
-        addressText: canSeeExactAddress ? chat.request.addressText : null,
-        fullAddress: canSeeExactAddress ? chat.request.fullAddress ?? chat.request.addressText : null,
-        publicAddress: chat.request.publicAddress || builtPublicMapAddress || chat.request.approximateAddressText,
-        addressHouse: canSeeExactAddress ? chat.request.addressHouse : null,
-        addressApartment: canSeeExactAddress ? chat.request.addressApartment : null,
-        addressEntrance: canSeeExactAddress ? chat.request.addressEntrance : null,
-        addressFloor: canSeeExactAddress ? chat.request.addressFloor : null,
-        addressIntercom: canSeeExactAddress ? chat.request.addressIntercom : null,
-        addressComment: canSeeExactAddress ? chat.request.addressComment : null,
-        yandexPublicMapAddress: publicMapAddress,
-        yandexExactMapAddress: canSeeExactAddress ? exactMapAddress : null,
-        yandexPublicMapUrl: buildYandexMapsSearchUrl(publicMapAddress),
-        yandexExactMapUrl: canSeeExactAddress ? buildYandexMapsSearchUrl(exactMapAddress) : null,
-        lat: canSeeExactAddress ? chat.request.lat : chat.request.approximateLat,
-        lng: canSeeExactAddress ? chat.request.lng : chat.request.approximateLng,
-        exactAddressVisible: canSeeExactAddress,
-        phoneVisible: false
-      }
+    ? serializeRequestForUser(chat.request, viewer as any, {
+        id: chat.id,
+        status: chat.status,
+        performerId: chat.performerId,
+        clientConfirmedAt: chat.clientConfirmedAt,
+        performerConfirmedAt: chat.performerConfirmedAt,
+        agreementFinalizedAt: chat.agreementFinalizedAt,
+        agreedHelperAmount: chat.agreedHelperAmount,
+        customerServiceFeeAmount: chat.customerServiceFeeAmount,
+        helperServiceFeeAmount: chat.helperServiceFeeAmount,
+        customerTotalAmount: chat.customerTotalAmount,
+        helperNetAmount: chat.helperNetAmount,
+        agreedPackageId: chat.agreedPackageId,
+        agreedPackageTitle: chat.agreedPackageTitle,
+        agreedAddonsJson: chat.agreedAddonsJson,
+        agreedDurationMinutes: chat.agreedDurationMinutes,
+        agreedScheduledAt: chat.agreedScheduledAt,
+        agreedTermsComment: chat.agreedTermsComment,
+        agreedByCustomerAt: chat.agreedByCustomerAt,
+        agreedByHelperAt: chat.agreedByHelperAt,
+        termsUpdatedAt: chat.termsUpdatedAt,
+        termsUpdatedByUserId: chat.termsUpdatedByUserId,
+        archivedAt: chat.archivedAt
+      })
     : chat.request;
   return {
-    ...chat,
+    id: chat.id,
+    requestId: chat.requestId,
+    responseId: chat.responseId,
+    clientId: chat.clientId,
+    performerId: chat.performerId,
+    status: chat.status,
+    clientConfirmedAt: chat.clientConfirmedAt,
+    performerConfirmedAt: chat.performerConfirmedAt,
+    agreementFinalizedAt: chat.agreementFinalizedAt,
+    agreedHelperAmount: chat.agreedHelperAmount,
+    customerServiceFeeAmount: chat.customerServiceFeeAmount,
+    helperServiceFeeAmount: chat.helperServiceFeeAmount,
+    customerTotalAmount: chat.customerTotalAmount,
+    helperNetAmount: chat.helperNetAmount,
+    agreedPackageId: chat.agreedPackageId,
+    agreedPackageTitle: chat.agreedPackageTitle,
+    agreedAddonsJson: chat.agreedAddonsJson,
+    agreedDurationMinutes: chat.agreedDurationMinutes,
+    agreedScheduledAt: chat.agreedScheduledAt,
+    agreedTermsComment: chat.agreedTermsComment,
+    agreedByCustomerAt: chat.agreedByCustomerAt,
+    agreedByHelperAt: chat.agreedByHelperAt,
+    termsUpdatedAt: chat.termsUpdatedAt,
+    termsUpdatedByUserId: chat.termsUpdatedByUserId,
+    agreedTerms: serializeAgreedTerms(chat),
+    conditionsJson: chat.conditionsJson,
+    notAgreedAt: chat.notAgreedAt,
+    reopenedAt: chat.reopenedAt,
+    createdAt: chat.createdAt,
+    closedAt: chat.closedAt,
+    archivedAt: chat.archivedAt,
     phoneVisible: false,
     exactAddressVisible: canSeeExactAddress,
     request,
+    client: chat.client,
+    performer: chat.performer,
     messages: chat.messages.map((message: any) => ({
-      ...message,
+      id: message.id,
+      chatId: message.chatId,
+      senderId: message.senderId,
       text: message.visibility === "deleted"
         ? "Сообщение удалено администратором"
         : message.isHidden && !isAdmin
           ? "Сообщение скрыто, потому что содержит контактные данные."
-          : message.text
+          : message.text,
+      visibility: message.visibility,
+      isSystem: message.isSystem,
+      moderationStatus: message.moderationStatus,
+      isHidden: message.isHidden,
+      createdAt: message.createdAt,
+      sender: message.sender
     }))
   };
+}
+
+function safeJsonObject(value?: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseStringArray(value?: string | null) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function stringOrNull(value: unknown) {
+  return typeof value === "string" && value ? value : null;
+}
+
+function durationMinutes(hours?: number | null) {
+  return hours && hours > 0 ? Math.round(hours * 60) : null;
 }

@@ -6,6 +6,11 @@ declare global {
       user?: {
         id: string;
         role: UserRole;
+        realRole: UserRole;
+        effectiveRole: UserRole;
+        isActingAsRole: boolean;
+        actingRole: "client" | "performer" | null;
+        realAdminUserId: string | null;
         cityId: string | null;
       };
     }

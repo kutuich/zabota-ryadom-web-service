@@ -18,6 +18,7 @@ import {
   parseAddressText
 } from "../services/addressService";
 import { asyncHandler, HttpError } from "../utils/http";
+import { activateSettlementTx } from "../services/settlementService";
 
 export const requestsRouter = Router();
 
@@ -48,6 +49,22 @@ const requestInclude = {
       performerId: true,
       clientConfirmedAt: true,
       performerConfirmedAt: true,
+      agreementFinalizedAt: true,
+      agreedHelperAmount: true,
+      customerServiceFeeAmount: true,
+      helperServiceFeeAmount: true,
+      customerTotalAmount: true,
+      helperNetAmount: true,
+      agreedPackageId: true,
+      agreedPackageTitle: true,
+      agreedAddonsJson: true,
+      agreedDurationMinutes: true,
+      agreedScheduledAt: true,
+      agreedTermsComment: true,
+      agreedByCustomerAt: true,
+      agreedByHelperAt: true,
+      termsUpdatedAt: true,
+      termsUpdatedByUserId: true,
       archivedAt: true
     },
     orderBy: { createdAt: "desc" as const }
@@ -147,9 +164,15 @@ requestsRouter.get(
       );
     }
 
+    const helperCityRows = await prisma.userCity.findMany({
+      where: { userId: viewer.id, isActive: true, roleScope: { in: ["helper", "both"] } },
+      select: { cityId: true }
+    });
+    const helperCityIds = helperCityRows.length ? helperCityRows.map((row) => row.cityId) : viewer.cityId ? [viewer.cityId] : [];
     const [requests, performer] = await Promise.all([
       prisma.clientRequest.findMany({
       where: {
+        cityId: { in: helperCityIds },
         visibilityStatus: "city_visible",
         status: { in: ["published", "waiting_for_responses", "has_responses"] },
         responses: { none: { performerId: viewer.id } }
@@ -160,7 +183,7 @@ requestsRouter.get(
       }),
       prisma.user.findUnique({
         where: { id: viewer.id },
-        include: { performerProfile: true }
+        include: { performerProfile: true, userCities: true }
       })
     ]);
 
@@ -191,7 +214,7 @@ requestsRouter.post(
     }
 
     const [city, category] = await Promise.all([
-      prisma.city.findFirst({ where: { id: input.cityId, isActive: true } }),
+      prisma.city.findFirst({ where: { id: input.cityId, isActive: true, directoryStatus: { notIn: ["hidden", "duplicate"] } } }),
       prisma.serviceCategory.findFirst({ where: { id: input.categoryId, isActive: true } })
     ]);
 
@@ -231,6 +254,7 @@ requestsRouter.post(
 
     const approximate = toApproximatePoint(input.lat, input.lng, city.mapCenterLat, city.mapCenterLng);
     const request = await prisma.$transaction(async (tx) => {
+      await activateSettlementTx(tx, city.id, req.user!.id);
       const publicNumber = await nextRequestPublicNumber(tx);
       const created = await tx.clientRequest.create({
         data: {
@@ -315,7 +339,7 @@ requestsRouter.get(
       throw new HttpError(404, "Заявка не найдена", "request_not_found");
     }
 
-    ensureCanViewRequest(request, req.user!);
+    await ensureCanViewRequest(request, req.user!);
     res.json(serializeRequestForUser(request, req.user!));
   })
 );
@@ -349,7 +373,7 @@ requestsRouter.patch(
     }
 
     const [city, category] = await Promise.all([
-      input.cityId ? prisma.city.findFirst({ where: { id: input.cityId, isActive: true } }) : Promise.resolve(null),
+      input.cityId ? prisma.city.findFirst({ where: { id: input.cityId, isActive: true, directoryStatus: { notIn: ["hidden", "duplicate"] } } }) : Promise.resolve(null),
       input.categoryId ? prisma.serviceCategory.findFirst({ where: { id: input.categoryId, isActive: true } }) : Promise.resolve(null)
     ]);
     if (input.cityId && !city) {
@@ -393,6 +417,7 @@ requestsRouter.patch(
     const changedFields = collectChangedFields(request, input);
 
     const updated = await prisma.$transaction(async (tx) => {
+      if (input.cityId) await activateSettlementTx(tx, input.cityId, req.user!.id);
       const saved = await tx.clientRequest.update({
         where: { id: request.id },
         data: {
@@ -502,7 +527,10 @@ requestsRouter.post(
       include: { category: true }
     });
 
-    if (!request || request.cityId !== req.user!.cityId) {
+    const cityAccess = request ? await prisma.userCity.findFirst({
+      where: { userId: req.user!.id, cityId: request.cityId, isActive: true, roleScope: { in: ["helper", "both"] } }
+    }) : null;
+    if (!request || (!cityAccess && request.cityId !== req.user!.cityId)) {
       throw new HttpError(404, "Заявка не найдена", "request_not_found");
     }
     if (!["published", "waiting_for_responses", "has_responses"].includes(request.status)) {
@@ -739,13 +767,18 @@ requestsRouter.post(
   })
 );
 
-function ensureCanViewRequest(
+async function ensureCanViewRequest(
   request: { clientId: string; selectedPerformerId: string | null; cityId: string; visibilityStatus: string },
   viewer: { id: string; role: string; cityId: string | null }
 ) {
   if (["admin", "superadmin"].includes(viewer.role)) return;
   if (request.clientId === viewer.id || request.selectedPerformerId === viewer.id) return;
-  if (viewer.role === "performer" && request.cityId === viewer.cityId && request.visibilityStatus === "city_visible") return;
+  if (viewer.role === "performer" && request.visibilityStatus === "city_visible") {
+    const relation = await prisma.userCity.findFirst({
+      where: { userId: viewer.id, cityId: request.cityId, isActive: true, roleScope: { in: ["helper", "both"] } }
+    });
+    if (relation || request.cityId === viewer.cityId) return;
+  }
   throw new HttpError(403, "Нет доступа к заявке", "forbidden");
 }
 

@@ -4,6 +4,7 @@ import type {
   AdminPaymentFilters,
   AdminPaymentListItem,
   Bootstrap,
+  City,
   Chat,
   ClientRequest,
   KnowledgeArticle,
@@ -11,11 +12,17 @@ import type {
   LegalExportPayload,
   PaymentActionResult,
   PaymentTransaction,
+  MyCities,
+  SettlementSearchResult,
+  UserCity,
   PerformerDocument,
   PricingQuote,
   ServiceCategory,
   TopUpPaymentInit,
+  TrialBalanceGrantSummary,
+  TrialBalanceSettings,
   User,
+  UserArchiveSafety,
   UserConsent,
   UserConsentStatus
 } from "../types";
@@ -86,6 +93,15 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
 
 export const api = {
   bootstrap: () => apiFetch<Bootstrap>("/public/bootstrap"),
+  searchSettlements: (query: string) => apiFetch<SettlementSearchResult[]>(`/settlements/search?q=${encodeURIComponent(query)}`),
+  suggestSettlement: (body: { name: string; region?: string; district?: string; type?: string }) =>
+    apiFetch<{ settlement: SettlementSearchResult; existing: boolean }>("/settlements/suggest", { method: "POST", body: JSON.stringify(body) }),
+  myCities: () => apiFetch<MyCities>("/me/cities"),
+  addMyCity: (body: { cityId: string; roleScope: "customer" | "helper" | "both"; isPrimary?: boolean }) =>
+    apiFetch<UserCity>("/me/cities", { method: "POST", body: JSON.stringify(body) }),
+  updateMyCity: (id: string, body: { roleScope?: "customer" | "helper" | "both"; isPrimary?: boolean; isActive?: boolean }) =>
+    apiFetch<UserCity>(`/me/cities/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteMyCity: (id: string) => apiFetch<void>(`/me/cities/${id}`, { method: "DELETE" }),
   login: (body: { phoneOrEmail: string; password: string }) =>
     apiFetch<{ token: string; user: User }>("/auth/login", {
       method: "POST",
@@ -97,7 +113,8 @@ export const api = {
     email?: string;
     password: string;
     displayName: string;
-    cityId: string;
+    cityId?: string;
+    citySuggestion?: { name: string; region?: string };
     acceptedConsentTypes: string[];
     acceptedLegalDocumentTypes?: string[];
     marketingNotificationsAccepted?: boolean;
@@ -109,7 +126,36 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body)
     }),
+  claimOAuthSession: () =>
+    apiFetch<{ token: string; user: User; profileComplete: boolean; nextPath: string }>("/auth/oauth/session", {
+      method: "POST"
+    }),
+  startVkLink: () =>
+    apiFetch<{ authorizationUrl: string }>("/auth/oauth/vk/start", { method: "POST" }),
+  completeOAuthProfile: (body: {
+    role: "client" | "performer";
+    cityId: string;
+    phone: string;
+    acceptedDocuments: string[];
+    marketingNotificationsAccepted: boolean;
+    dependentDataTransferConfirmed: boolean;
+    helperNotEmployerAcknowledged: boolean;
+    helperNoMedicalServicesConfirmed: boolean;
+  }) =>
+    apiFetch<{ user: User; profileComplete: boolean; nextPath: string }>("/auth/oauth/complete-profile", {
+      method: "POST",
+      body: JSON.stringify(body)
+    }),
   me: () => apiFetch<{ user: User }>("/auth/me"),
+  startAdminActing: (role: "customer" | "helper") =>
+    apiFetch<{ token: string; effectiveRole: "client" | "performer"; nextPath: string }>("/admin/acting/start", {
+      method: "POST",
+      body: JSON.stringify({ role })
+    }),
+  stopAdminActing: () =>
+    apiFetch<{ token: string; effectiveRole: "admin" | "superadmin"; nextPath: string }>("/admin/acting/stop", {
+      method: "POST"
+    }),
   legalDocuments: () => apiFetch<LegalDocument[]>("/legal/documents"),
   legalDocument: (slug: string) => apiFetch<LegalDocument>(`/legal/documents/${slug}`),
   legalStatus: () => apiFetch<UserConsentStatus[]>("/legal/my-consents"),
@@ -139,8 +185,6 @@ export const api = {
   createReview: (requestId: string, body: { toUserId: string; rating: number; text: string; likedText?: string; improvementText?: string }) =>
     apiFetch(`/requests/${requestId}/reviews`, { method: "POST", body: JSON.stringify(body) }),
   balance: () => apiFetch<BalanceSummary>("/balance/me"),
-  mockTopUp: (amount: number) =>
-    apiFetch<BalanceSummary>("/balance/mock-top-up", { method: "POST", body: JSON.stringify({ amount }) }),
   createTopUpPayment: (amount: number) =>
     apiFetch<TopUpPaymentInit>("/payments/top-up/init", { method: "POST", body: JSON.stringify({ amount }) }),
   getMyPayments: () => apiFetch<PaymentTransaction[]>("/payments/my"),
@@ -156,6 +200,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ text })
     }),
+  updateChatTerms: (chatId: string, body: {
+    agreedHelperAmount: number;
+    agreedPackageId?: string | null;
+    agreedAddons?: string[];
+    agreedDurationMinutes?: number | null;
+    agreedScheduledAt?: string | null;
+    agreedTermsComment?: string | null;
+  }) => apiFetch<Chat>(`/chats/${chatId}/terms`, { method: "PATCH", body: JSON.stringify(body) }),
   clientConfirmChat: (chatId: string) => apiFetch<Chat>(`/chats/${chatId}/client-confirm`, { method: "POST" }),
   performerConfirmChat: (chatId: string) => apiFetch<Chat>(`/chats/${chatId}/performer-confirm`, { method: "POST" }),
   markChatNotAgreed: (chatId: string) => apiFetch<Chat>(`/chats/${chatId}/not-agreed`, { method: "POST" }),
@@ -176,12 +228,20 @@ export const api = {
   adminRequests: () => apiFetch<ClientRequest[]>("/admin/requests"),
   adminChats: () => apiFetch<Chat[]>("/admin/chats"),
   adminComplaints: () => apiFetch<unknown[]>("/admin/complaints"),
+  adminCities: () => apiFetch<City[]>("/admin/cities"),
+  adminUpdateCity: (cityId: string, body: Partial<City>) =>
+    apiFetch<City>(`/admin/cities/${cityId}`, { method: "PATCH", body: JSON.stringify(body) }),
   adminCategories: () => apiFetch<ServiceCategory[]>("/admin/categories"),
   adminTransactions: () => apiFetch<unknown[]>("/admin/balance-transactions"),
   getAdminPayments: (filters: AdminPaymentFilters = {}) =>
     apiFetch<AdminPaymentListItem[]>(`/admin/payments${queryString(filters)}`),
   getAdminPayment: (id: string) => apiFetch<AdminPaymentDetails>(`/admin/payments/${id}`),
   adminSettings: () => apiFetch<unknown[]>("/admin/settings"),
+  getTrialBalanceSettings: () => apiFetch<TrialBalanceSettings>("/admin/trial-balance/settings"),
+  updateTrialBalanceSettings: (body: Pick<TrialBalanceSettings, "enabled" | "amount" | "autoGrantNewUsers">) =>
+    apiFetch<TrialBalanceSettings>("/admin/trial-balance/settings", { method: "PUT", body: JSON.stringify(body) }),
+  grantTrialBalanceToAll: () =>
+    apiFetch<TrialBalanceGrantSummary>("/admin/trial-balance/grant-all", { method: "POST" }),
   adminUpdateSetting: (key: string, valueJson: string) =>
     apiFetch(`/admin/settings/${key}`, { method: "PATCH", body: JSON.stringify({ valueJson }) }),
   adminKnowledge: () => apiFetch<KnowledgeArticle[]>("/admin/knowledge"),
@@ -218,11 +278,21 @@ export const api = {
       body: JSON.stringify({ amount, reason, comment, bonusExpiresAt })
     }),
   adminBlockUser: (userId: string, reason: string) =>
-    apiFetch<User>(`/admin/users/${userId}/block`, { method: "PATCH", body: JSON.stringify({ reason }) }),
+    apiFetch<User>(`/admin/users/${userId}/block`, { method: "POST", body: JSON.stringify({ reason }) }),
   adminUnblockUser: (userId: string) =>
-    apiFetch<User>(`/admin/users/${userId}/unblock`, { method: "PATCH" }),
-  adminDeleteUser: (userId: string) =>
-    apiFetch<{ mode: string; removedRequests?: number; removedChats?: number }>(`/admin/users/${userId}`, { method: "DELETE" }),
+    apiFetch<User>(`/admin/users/${userId}/unblock`, { method: "POST" }),
+  adminUserArchiveSafety: (userId: string) =>
+    apiFetch<UserArchiveSafety>(`/admin/users/${userId}/archive-safety`),
+  adminRequestUserArchive: (userId: string, reason: string) =>
+    apiFetch<{ user: User; safety: UserArchiveSafety }>(`/admin/users/${userId}/request-archive`, {
+      method: "POST",
+      body: JSON.stringify({ reason })
+    }),
+  adminArchiveUser: (userId: string, reason: string) =>
+    apiFetch<{ user: User; safety: UserArchiveSafety }>(`/admin/users/${userId}/archive`, {
+      method: "POST",
+      body: JSON.stringify({ reason })
+    }),
   adminUpdatePerformerVerification: (userId: string, body: Record<string, unknown>) =>
     apiFetch(`/admin/performers/${userId}/verification`, { method: "PATCH", body: JSON.stringify(body) }),
   adminUpdatePerformerDocumentStatus: (documentId: string, status: string, adminComment?: string) =>

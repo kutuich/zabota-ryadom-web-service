@@ -2,6 +2,10 @@ FROM node:22-bookworm-slim AS build
 
 WORKDIR /app
 
+# Build-time only. Production builds keep the safe default unless explicitly overridden.
+ARG VITE_ENABLE_VISUAL_AUDIT_ROUTES=false
+ENV VITE_ENABLE_VISUAL_AUDIT_ROUTES=$VITE_ENABLE_VISUAL_AUDIT_ROUTES
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends openssl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
@@ -35,11 +39,12 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=4000
 ENV DATABASE_URL=file:/data/zabota.db
+ENV UPLOADS_DIR=/data/uploads
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends openssl ca-certificates \
   && rm -rf /var/lib/apt/lists/* \
-  && mkdir -p /data /app/backend/uploads
+  && mkdir -p /data/uploads
 
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=production-deps /app/node_modules ./node_modules

@@ -1,15 +1,21 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import jwt from "jsonwebtoken";
 import { createApp } from "../app";
 import { prisma } from "../db/prisma";
-import { calculatePrice } from "../services/pricingService";
+import { calculatePrice, PRICING_ADDONS } from "../services/pricingService";
 import { moderateChatMessage } from "../services/moderationService";
 import { detectMedicalTerms } from "../services/requestPolicy";
 import { nextRequestPublicNumber } from "../services/requestNumberService";
-import { hasAvailableBalance } from "../services/balanceService";
+import {
+  ensureFixedServiceFeeSettings,
+  FIXED_SERVICE_FEE_AMOUNT,
+  getServiceFeeSettings,
+  hasAvailableBalance
+} from "../services/balanceService";
 import { evaluateRequestMatch } from "../services/matchingService";
 import {
   buildFullAddress,
@@ -25,10 +31,25 @@ import { mockPaymentAdapter, PAYMENT_STATUSES, tbankPaymentAdapter } from "../se
 import { generateTopUpOrderId } from "../services/paymentOrderId";
 import { buildTbankToken, verifyTbankToken } from "../services/tbankToken";
 import { normalizeRussianPhone } from "../services/phoneService";
-import { env } from "../config/env";
+import { isUserProfileComplete, resolveVkUser } from "../services/vkIdService";
 import {
+  TRIAL_BALANCE_DESCRIPTION,
+  TRIAL_BALANCE_SETTING_KEY,
+  getTrialBalanceSettings,
+  grantTrialBalanceToUser,
+  updateTrialBalanceSettings
+} from "../services/trialBalanceService";
+import { env, resolveDefaultServiceFeeAmount, resolveUploadsDir } from "../config/env";
+import { creditPaymentToBalance, paymentCreditIdempotencyKey } from "../services/paymentService";
+import { normalizeSettlementName } from "../services/settlementService";
+import { getUserArchiveSafety } from "../services/userLifecycleService";
+import { resolveStoragePath, savePerformerDocumentFile } from "../services/uploadStorage";
+import {
+  LEGAL_DOCUMENT_KEYS,
   LEGAL_DOCUMENT_DEFINITIONS,
+  acceptLatestLegalDocuments,
   calculateLegalDocumentHash,
+  ensureLegalDocuments,
   missingAcceptedDocumentTypes,
   requiredDocumentTypesForFeature,
   requiredDocumentTypesForRegistration,
@@ -48,6 +69,8 @@ async function run() {
   assert.equal(orderId, "TOPUP-USER42-20260718191522-A8K3");
   assert.ok(PAYMENT_STATUSES.includes("pending"));
   assert.ok(PAYMENT_STATUSES.includes("succeeded"));
+  assert.equal(resolveDefaultServiceFeeAmount({ DEFAULT_SERVICE_FEE_AMOUNT: "50", DEFAULT_COMMISSION_AMOUNT: "70" }), 50);
+  assert.equal(resolveDefaultServiceFeeAmount({ DEFAULT_COMMISSION_AMOUNT: "70" }), 50);
 
   const pendingMockPayment = await mockPaymentAdapter.createTopUpPayment({
     userId: "user42",
@@ -181,84 +204,64 @@ async function run() {
     performerInstructions: "Согласуйте объём."
   };
 
-  const price = calculatePrice({
+  const expectedPackages = [
+    ["short_help", 400, 700],
+    ["home_help_2h", 700, 1100],
+    ["supervision_2h", 700, 1200],
+    ["accompaniment_standard", 800, 1500],
+    ["help_3_4h", 1200, 2000],
+    ["regular_help", 700, null]
+  ] as const;
+  for (const [packageId, priceMin, priceMax] of expectedPackages) {
+    const quote = calculatePrice({ category: homeHelpCategory, packageId });
+    assert.equal(quote.packageId, packageId);
+    assert.equal(quote.packagePriceMin, priceMin);
+    assert.equal(quote.packagePriceMax, priceMax);
+  }
+
+  const agreedQuote = calculatePrice({
     category: homeHelpCategory,
-    expectedDurationHours: 3,
-    needsCleaning: true,
-    urgency: "urgent"
+    packageId: "home_help_2h",
+    helperAmount: 950
   });
-  assert.equal(price.performerPaymentAmount, 1450);
-  assert.equal(price.clientServiceFeeAmount, 50);
-  assert.equal(price.performerServiceFeeAmount, 50);
-  assert.equal(price.performerCommissionAmount, 50);
-  assert.equal(price.clientTotalExpense, 1500);
-  assert.equal(price.performerNetAmount, 1400);
-  assert.match(price.explanation, /сервисный сбор заказчика 50 ₽/);
-  assert.match(price.performerExplanation, /Сервисный сбор помощника 50 ₽/);
-  assert.match(price.performerExplanation, /Ориентировочный доход после сервисного сбора 1400 ₽/);
+  assert.equal(agreedQuote.customerServiceFeeAmount, 50);
+  assert.equal(agreedQuote.helperServiceFeeAmount, 50);
+  assert.equal(agreedQuote.customerTotalAmount, 1000);
+  assert.equal(agreedQuote.helperNetAmount, 900);
+  assert.equal(agreedQuote.customerTotalMin, 750);
+  assert.equal(agreedQuote.customerTotalMax, 1150);
+  assert.equal(agreedQuote.minTopUpAmount, 150);
+  assert.equal(JSON.stringify(agreedQuote).includes("550 ₽"), false);
+  assert.equal(/комиссия/i.test(JSON.stringify(agreedQuote)), false);
 
-  const standardHomeHelp = calculatePrice({
-    category: { ...homeHelpCategory, includedJson: "[]", excludedJson: "", clientInstructions: "", performerInstructions: "" },
-    expectedDurationHours: 2
-  });
-  assert.equal(standardHomeHelp.performerPaymentAmount, 950);
-  assert.equal(standardHomeHelp.clientServiceFeeAmount, 50);
-  assert.equal(standardHomeHelp.clientTotalExpense, 1000);
-  assert.equal(standardHomeHelp.performerServiceFeeAmount, 50);
-  assert.equal(standardHomeHelp.performerNetAmount, 900);
-
-  const categoryChangeQuote = calculatePrice({
-    category: { ...homeHelpCategory, slug: "cooking", name: "Приготовление еды" },
-    expectedDurationHours: 2,
-    selectedActions: ["fullCookingVisit"]
-  });
-  assert.equal(categoryChangeQuote.packageId, "fullCookingVisit");
-  assert.ok(categoryChangeQuote.performerPaymentAmount > standardHomeHelp.performerPaymentAmount);
-
-  const hygieneQuote = calculatePrice({
-    category: { ...homeHelpCategory, slug: "elderly-care", name: "Сиделка для пожилого человека" },
-    expectedDurationHours: 2,
-    hygieneLevel: "hygieneIntimate"
-  });
-  assert.equal(hygieneQuote.packageId, "advancedCareVisit");
-  assert.ok(hygieneQuote.recommendationReasons.includes("подмывание"));
-
-  const physicalQuote = calculatePrice({
-    category: { ...homeHelpCategory, slug: "elderly-care", name: "Сиделка для пожилого человека" },
-    expectedDurationHours: 2,
-    physicalLoadLevel: "physicalHeavy"
-  });
-  assert.equal(physicalQuote.packageId, "heavyCareVisit");
-  assert.equal(physicalQuote.isManualReviewRequired, true);
-
-  const diaperQuote = calculatePrice({
-    category: { ...homeHelpCategory, slug: "elderly-care", name: "Сиделка для пожилого человека" },
-    expectedDurationHours: 2,
-    selectedActions: ["diaper", "toiletHelp", "hygieneIntimate"]
-  });
-  assert.equal(diaperQuote.packageId, "advancedCareVisit");
-
-  const simpleMealQuote = calculatePrice({
+  const simpleMealInsidePackage = calculatePrice({
     category: homeHelpCategory,
-    expectedDurationHours: 2,
-    selectedActions: ["simpleMealWithinVisit"]
+    packageId: "home_help_2h",
+    selectedActions: ["simple_cooking", "light_cleaning", "trash", "dishes"]
   });
-  assert.equal(simpleMealQuote.performerPaymentAmount, standardHomeHelp.performerPaymentAmount + 200);
-  assert.equal(simpleMealQuote.clientTotalExpense, simpleMealQuote.performerPaymentAmount + 50);
+  assert.equal(simpleMealInsidePackage.addons.length, 0);
+  assert.equal(simpleMealInsidePackage.helperAmount, 700);
 
-  const surchargeQuote = calculatePrice({
+  const explicitMealAddon = calculatePrice({
     category: homeHelpCategory,
-    expectedDurationHours: 2,
-    timeFrom: "19:00",
-    urgencyFlags: ["urgent", "weekend"]
+    packageId: "home_help_2h",
+    selectedAddonIds: ["simple_meal_extra"]
   });
-  assert.equal(surchargeQuote.performerPaymentAmount, 950 + 500);
-  assert.equal(surchargeQuote.isManualReviewRequired, true);
-  assert.equal(surchargeQuote.clientServiceFeeAmount, 50);
-  assert.equal(surchargeQuote.performerServiceFeeAmount, 50);
-  assert.equal(surchargeQuote.performerNetAmount, surchargeQuote.performerPaymentAmount - 50);
-  assert.equal(surchargeQuote.clientTotalExpense, surchargeQuote.performerPaymentAmount + 50);
-  assert.equal(/комиссия/i.test(JSON.stringify(surchargeQuote)), false);
+  assert.equal(explicitMealAddon.addons[0]?.amountMin, 150);
+  assert.equal(explicitMealAddon.addons[0]?.amountMax, 300);
+
+  assert.deepEqual(
+    Object.fromEntries(Object.values(PRICING_ADDONS).map((item) => [item.id, [item.priceMin, item.priceMax]])),
+    {
+      extra_hour: [250, 400],
+      waiting: [200, 300],
+      second_address: [150, 300],
+      shopping: [200, 400],
+      simple_meal_extra: [150, 300],
+      urgent: [200, 500],
+      transport_expenses: [null, null]
+    }
+  );
 
   const addressParts = {
     city: "Югорск",
@@ -298,6 +301,8 @@ async function run() {
     clientId: "client-1",
     selectedPerformerId: "performer-1",
     status: "waiting_for_responses",
+    contactName: "Тест Заказчик",
+    contactPhone: "+79000000002",
     addressText: "Югорск, ул. Мира, 10, подъезд 2, этаж 3, квартира 15",
     approximateAddressText: "Югорск, ул. Мира",
     addressCity: "Югорск",
@@ -323,6 +328,8 @@ async function run() {
   const helperBefore = serializeRequestForUser(requestForAddress, { id: "performer-1", role: "performer" } as any) as any;
   assert.equal(helperBefore.addressHouse, null);
   assert.equal(helperBefore.addressText, null);
+  assert.equal(helperBefore.contactName, null);
+  assert.equal(helperBefore.contactPhone, null);
   assert.equal(helperBefore.publicAddress, "Югорск, ул. Мира");
   const helperAfter = serializeRequestForUser({ ...requestForAddress, status: "in_progress", chats: [{ id: "chat-1", status: "in_work", performerId: "performer-1", archivedAt: null }] }, { id: "performer-1", role: "performer" } as any) as any;
   assert.equal(helperAfter.addressHouse, "10");
@@ -331,14 +338,20 @@ async function run() {
   assert.match(helperAfter.fullAddress, /квартира 15/);
   assert.equal(helperAfter.fullAddress.includes("домофон"), false);
   assert.equal(helperAfter.addressIntercom, "15");
+  assert.equal(helperAfter.contactName, null);
+  assert.equal(helperAfter.contactPhone, null);
   const customerAddress = serializeRequestForUser(requestForAddress, { id: "client-1", role: "client" } as any) as any;
   assert.match(customerAddress.fullAddress, /ул\. Мира, 10/);
+  assert.equal(customerAddress.contactName, "Тест Заказчик");
+  assert.equal(customerAddress.contactPhone, "+79000000002");
   const adminAddress = serializeRequestForUser(requestForAddress, { id: "admin-1", role: "admin" } as any) as any;
   assert.equal(adminAddress.fullAddress, "Югорск, ул. Мира, 10, подъезд 2, этаж 3, квартира 15");
   assert.equal(adminAddress.yandexPublicMapAddress, "Югорск, ул. Мира");
   assert.equal(adminAddress.yandexExactMapAddress, "Югорск, ул. Мира, 10");
   assert.match(adminAddress.yandexPublicMapUrl, /^https:\/\/yandex\.ru\/maps\/\?text=/);
   assert.match(adminAddress.yandexExactMapUrl, /^https:\/\/yandex\.ru\/maps\/\?text=/);
+  assert.equal(adminAddress.contactName, "Тест Заказчик");
+  assert.equal(adminAddress.contactPhone, "+79000000002");
 
   for (const cityName of ["Югорск", "Советский", "Екатеринбург", "Санкт-Петербург", "Москва", "Тюмень", "Волгоград", "Нижний Новгород"]) {
     assert.ok(CITY_DIRECTORY.some((city) => city.name === cityName), `Город ${cityName} должен быть в справочнике`);
@@ -359,7 +372,7 @@ async function run() {
   assert.equal(LEGAL_DOCUMENT_DEFINITIONS.find((document) => document.slug === "privacy")?.title, "Политика обработки персональных данных");
   assert.equal(LEGAL_DOCUMENT_DEFINITIONS.find((document) => document.slug === "privacy")?.version, "1.0");
   for (const type of [
-    "privacy_policy",
+    "privacy",
     "personal_data_consent",
     "customer_agreement",
     "helper_terms",
@@ -374,17 +387,21 @@ async function run() {
   assert.equal(roleToLegalScope("performer"), "helper");
   assert.deepEqual(requiredDocumentTypesForRegistration("client"), [
     "customer_agreement",
+    "privacy",
     "personal_data_consent",
     "service_rules",
     "service_notifications_consent"
   ]);
   assert.deepEqual(requiredDocumentTypesForRegistration("performer"), [
     "helper_terms",
+    "privacy",
     "personal_data_consent",
     "service_rules",
+    "helper_documents_consent",
     "service_notifications_consent"
   ]);
   assert.deepEqual(missingAcceptedDocumentTypes("client", ["customer_agreement"]), [
+    "privacy",
     "personal_data_consent",
     "service_rules",
     "service_notifications_consent"
@@ -464,10 +481,394 @@ async function run() {
 
   await runStaticRoutingTests();
   await runProductionStartupTests();
+  await runSettlementDirectoryTests();
+  await runLegalBootstrapTests();
   await runAuthPhoneTests();
+  await runVkOAuthTests();
+  await runTrialBalanceTests();
+  await runBonusServiceFeeTests();
+  await runCriticalSafetyTests();
+  await runPaymentCreditIdempotencyTests();
   await runPaymentRouteTests();
+  await runAdminActingModeTests();
+  await runUserLifecycleTests();
+  await runUploadStorageTests();
 
   console.log("Business tests passed");
+}
+
+async function runAdminActingModeTests() {
+  const app = createApp();
+  const startedAt = new Date();
+  const [admin, customer, city, category] = await Promise.all([
+    prisma.user.findFirstOrThrow({ where: { role: { in: ["admin", "superadmin"] }, status: "active" } }),
+    prisma.user.findFirstOrThrow({ where: { role: "client", status: "active" } }),
+    prisma.city.findFirstOrThrow({ where: { isActive: true, directoryStatus: { notIn: ["hidden", "duplicate"] } } }),
+    prisma.serviceCategory.findFirstOrThrow({ where: { isActive: true } })
+  ]);
+  const originalAdminCityId = admin.cityId;
+  const adminToken = tokenFor(admin.id, admin.role);
+  const customerToken = tokenFor(customer.id, customer.role);
+  let requestId: string | null = null;
+
+  try {
+    let response = await apiRequest(app, "/api/admin/acting/start", {
+      method: "POST",
+      token: customerToken,
+      body: { role: "customer" }
+    });
+    assert.equal(response.status, 403);
+
+    const forgedToken = jwt.sign({
+      sub: customer.id,
+      role: "client",
+      realRole: "client",
+      actingRole: "performer",
+      isActingAsRole: true
+    }, env.jwtSecret);
+    response = await apiRequest(app, "/api/auth/me", { method: "GET", token: forgedToken });
+    assert.equal(response.status, 401);
+
+    response = await apiRequest(app, "/api/admin/summary", { method: "GET", token: customerToken });
+    assert.equal(response.status, 403);
+
+    response = await apiRequest(app, "/api/admin/acting/start", {
+      method: "POST",
+      token: adminToken,
+      body: { role: "customer" }
+    });
+    assert.equal(response.status, 200);
+    const customerActingToken = response.payload.token as string;
+    assert.equal(response.payload.effectiveRole, "client");
+    assert.equal(response.payload.nextPath, "/app/client/requests");
+
+    response = await apiRequest(app, "/api/auth/me", { method: "GET", token: customerActingToken });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.role, admin.role);
+    assert.equal(response.payload.user.realRole, admin.role);
+    assert.equal(response.payload.user.effectiveRole, "client");
+    assert.equal(response.payload.user.isActingAsRole, true);
+    assert.equal(response.payload.user.actingRole, "client");
+    assert.equal(response.payload.user.displayActingBanner, true);
+
+    response = await apiRequest(app, "/api/requests?scope=mine", { method: "GET", token: customerActingToken });
+    assert.equal(response.status, 200);
+
+    response = await apiRequest(app, "/api/requests", {
+      method: "POST",
+      token: customerActingToken,
+      body: {
+        cityId: city.id,
+        categoryId: category.id,
+        title: "Проверка режима Заказчика",
+        description: "Бытовая помощь для проверки административного режима.",
+        addressStreet: "ул. Мира",
+        addressHouse: "10",
+        scheduleType: "once",
+        urgency: "normal"
+      }
+    });
+    assert.equal(response.status, 201);
+    requestId = response.payload.id;
+
+    response = await apiRequest(app, `/api/requests/${requestId}/publish`, {
+      method: "POST",
+      token: customerActingToken
+    });
+    assert.equal(response.status, 200);
+
+    await prisma.user.update({ where: { id: admin.id }, data: { cityId: city.id } });
+    response = await apiRequest(app, "/api/admin/acting/start", {
+      method: "POST",
+      token: adminToken,
+      body: { role: "helper" }
+    });
+    assert.equal(response.status, 200);
+    const helperActingToken = response.payload.token as string;
+    assert.equal(response.payload.effectiveRole, "performer");
+    assert.equal(response.payload.nextPath, "/app/performer/requests");
+
+    response = await apiRequest(app, "/api/auth/me", { method: "GET", token: helperActingToken });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.role, admin.role);
+    assert.equal(response.payload.user.effectiveRole, "performer");
+    assert.equal(response.payload.user.actingRole, "performer");
+
+    response = await apiRequest(app, "/api/requests", { method: "GET", token: helperActingToken });
+    assert.equal(response.status, 200);
+
+    response = await apiRequest(app, `/api/requests/${requestId}/respond`, {
+      method: "POST",
+      token: helperActingToken,
+      body: { message: "Отклик из административного режима" }
+    });
+    assert.equal(response.status, 201);
+
+    response = await apiRequest(app, "/api/admin/summary", { method: "GET", token: helperActingToken });
+    assert.equal(response.status, 200);
+
+    response = await apiRequest(app, "/api/admin/acting/stop", { method: "POST", token: helperActingToken });
+    assert.equal(response.status, 200);
+    const restoredAdminToken = response.payload.token as string;
+    assert.equal(response.payload.effectiveRole, admin.role);
+    assert.equal(response.payload.isActingAsRole, false);
+    assert.equal(response.payload.nextPath, "/app/admin");
+
+    response = await apiRequest(app, "/api/auth/me", { method: "GET", token: restoredAdminToken });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.effectiveRole, admin.role);
+    assert.equal(response.payload.user.isActingAsRole, false);
+    assert.equal(response.payload.user.actingRole, null);
+
+    const actingAuditRows = await prisma.auditLog.findMany({
+      where: { actorUserId: admin.id, createdAt: { gte: startedAt }, action: { startsWith: "admin.acting" } }
+    });
+    assert.ok(actingAuditRows.some((row) => row.action === "admin.acting.start"));
+    assert.ok(actingAuditRows.some((row) => row.action === "admin.acting.stop"));
+    const actingAction = actingAuditRows.find((row) => row.action === "admin.acting.action" && row.payloadJson?.includes(`/api/requests/${requestId}/respond`));
+    assert.ok(actingAction);
+    const actingMetadata = JSON.parse(actingAction!.payloadJson!);
+    assert.equal(actingMetadata.realUserId, admin.id);
+    assert.equal(actingMetadata.effectiveUserId, admin.id);
+    assert.equal(actingMetadata.realRole, admin.role);
+    assert.equal(actingMetadata.effectiveRole, "performer");
+    assert.equal(actingMetadata.actingRole, "performer");
+    assert.equal(actingMetadata.actionSource, "admin_acting_mode");
+  } finally {
+    if (requestId) {
+      await prisma.clientRequest.delete({ where: { id: requestId } }).catch(() => undefined);
+    }
+    await prisma.user.update({ where: { id: admin.id }, data: { cityId: originalAdminCityId } });
+    await prisma.auditLog.deleteMany({ where: { actorUserId: admin.id, createdAt: { gte: startedAt } } });
+  }
+}
+
+async function runUserLifecycleTests() {
+  const app = createApp();
+  const unique = Date.now().toString().slice(-8);
+  const [admin, performer, city, category] = await Promise.all([
+    prisma.user.findFirstOrThrow({ where: { role: { in: ["admin", "superadmin"] }, status: "active" } }),
+    prisma.user.findFirstOrThrow({ where: { role: "performer", status: "active" } }),
+    prisma.city.findFirstOrThrow(),
+    prisma.serviceCategory.findFirstOrThrow()
+  ]);
+  const adminToken = tokenFor(admin.id, admin.role);
+  const createdUserIds: string[] = [];
+  let requestId: string | null = null;
+
+  try {
+    const protectedUser = await prisma.user.create({
+      data: {
+        role: "client",
+        rolesJson: '["client"]',
+        phone: `+7960${unique}`,
+        normalizedPhone: `+7960${unique}`,
+        displayName: "Lifecycle protected",
+        cityId: city.id,
+        balance: 10,
+        bonusBalance: 5,
+        status: "active",
+        clientProfile: { create: {} },
+        consents: { create: { type: "privacy", version: "1" } }
+      }
+    });
+    createdUserIds.push(protectedUser.id);
+    await prisma.balanceTransaction.create({
+      data: { userId: protectedUser.id, type: "top_up", amount: 10, balanceKind: "main", reason: "Lifecycle test", balanceBefore: 0, balanceAfter: 10 }
+    });
+    await prisma.paymentTransaction.create({
+      data: { userId: protectedUser.id, provider: "mock", orderId: `LIFECYCLE-${unique}`, amount: 150, status: "pending" }
+    });
+    const request = await prisma.clientRequest.create({
+      data: {
+        clientId: protectedUser.id,
+        cityId: city.id,
+        categoryId: category.id,
+        title: "Lifecycle request",
+        description: "Lifecycle request",
+        addressText: "Test",
+        approximateAddressText: "Test",
+        status: "in_progress",
+        selectedPerformerId: performer.id
+      }
+    });
+    requestId = request.id;
+    const chat = await prisma.chat.create({
+      data: { requestId: request.id, clientId: protectedUser.id, performerId: performer.id, status: "in_work" }
+    });
+    await prisma.complaint.create({
+      data: {
+        fromUserId: performer.id,
+        againstUserId: protectedUser.id,
+        requestId: request.id,
+        chatId: chat.id,
+        reason: "Lifecycle open complaint",
+        status: "in_review"
+      }
+    });
+
+    let response = await apiRequest(app, `/api/admin/users/${protectedUser.id}/block`, {
+      method: "POST",
+      token: adminToken,
+      body: { reason: "Проверка безопасности данных" }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "blocked");
+    assert.equal(response.payload.blockedByAdminId, admin.id);
+    assert.equal(response.payload.blockReason, "Проверка безопасности данных");
+    assert.ok(response.payload.blockedAt);
+    assert.equal(await prisma.balanceTransaction.count({ where: { userId: protectedUser.id } }), 1);
+    assert.equal(await prisma.paymentTransaction.count({ where: { userId: protectedUser.id } }), 1);
+    assert.equal(await prisma.clientRequest.count({ where: { clientId: protectedUser.id } }), 1);
+    assert.equal(await prisma.chat.count({ where: { clientId: protectedUser.id } }), 1);
+    assert.equal(await prisma.consent.count({ where: { userId: protectedUser.id } }), 1);
+
+    response = await apiRequest(app, `/api/admin/users/${protectedUser.id}`, { method: "DELETE", token: adminToken });
+    assert.equal(response.status, 405);
+    assert.equal(response.payload.code, "physical_user_deletion_forbidden");
+    assert.ok(await prisma.user.findUnique({ where: { id: protectedUser.id } }));
+
+    response = await apiRequest(app, `/api/admin/users/${protectedUser.id}/request-archive`, {
+      method: "POST",
+      token: adminToken,
+      body: { reason: "Запрос безопасного архива" }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.status, "pending_archive");
+    assert.equal(response.payload.safety.canArchive, false);
+    assert.ok(response.payload.safety.reasons.some((reason: string) => reason.includes("основном балансе")));
+    assert.ok(response.payload.safety.reasons.some((reason: string) => reason.includes("бонусном балансе")));
+    assert.ok(response.payload.safety.reasons.some((reason: string) => reason.includes("платеж")));
+    assert.ok(response.payload.safety.reasons.some((reason: string) => reason.includes("заявк")));
+    assert.ok(response.payload.safety.reasons.some((reason: string) => reason.includes("обращения или споры")));
+    assert.ok(response.payload.safety.reasons.some((reason: string) => reason.includes("60 дней")));
+
+    response = await apiRequest(app, `/api/admin/users/${protectedUser.id}/archive`, {
+      method: "POST",
+      token: adminToken,
+      body: { reason: "Попытка архива" }
+    });
+    assert.equal(response.status, 409);
+    assert.ok(await prisma.user.findUnique({ where: { id: protectedUser.id } }));
+
+    const blockedToken = tokenFor(protectedUser.id, "client");
+    response = await apiRequest(app, "/api/requests", { method: "POST", token: blockedToken, body: {} });
+    assert.equal(response.status, 401);
+    response = await apiRequest(app, `/api/chats/${chat.id}/client-confirm`, { method: "POST", token: blockedToken });
+    assert.equal(response.status, 401);
+    response = await apiRequest(app, `/api/admin/users/${protectedUser.id}/unblock`, { method: "POST", token: adminToken });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "active");
+
+    const oldDate = new Date(Date.now() - 61 * 86_400_000);
+    const archivable = await prisma.user.create({
+      data: {
+        role: "client",
+        rolesJson: '["client"]',
+        phone: `+7961${unique}`,
+        normalizedPhone: `+7961${unique}`,
+        displayName: "Lifecycle archivable",
+        cityId: city.id,
+        status: "pending_archive",
+        blockedAt: oldDate,
+        blockedByAdminId: admin.id,
+        archiveRequestedAt: oldDate,
+        archiveRequestedByAdminId: admin.id,
+        archiveReason: "Истёк срок ожидания",
+        clientProfile: { create: {} },
+        consents: { create: { type: "privacy", version: "1" } }
+      }
+    });
+    createdUserIds.push(archivable.id);
+    const safety = await getUserArchiveSafety(archivable.id);
+    assert.equal(safety.canArchive, true);
+    assert.ok((safety.daysSinceBlockedOrRequested ?? 0) >= 60);
+
+    response = await apiRequest(app, `/api/admin/users/${archivable.id}/archive`, {
+      method: "POST",
+      token: adminToken,
+      body: { reason: "Безопасное архивирование после срока" }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.status, "archived");
+    assert.ok(response.payload.user.archivedAt);
+    assert.equal(await prisma.consent.count({ where: { userId: archivable.id } }), 1);
+    assert.ok(await prisma.user.findUnique({ where: { id: archivable.id } }));
+
+    const adminUsers = await apiRequest(app, "/api/admin/users", { method: "GET", token: adminToken });
+    assert.equal(adminUsers.status, 200);
+    assert.ok(adminUsers.payload.some((user: { id: string; status: string }) => user.id === archivable.id && user.status === "archived"));
+    const auditActions = await prisma.auditLog.findMany({ where: { entityType: "user", entityId: { in: createdUserIds } } });
+    for (const action of ["user.block", "user.unblock", "user.archive_requested", "user.archive_blocked", "user.archived"]) {
+      assert.ok(auditActions.some((row) => row.action === action), `Missing lifecycle audit action ${action}`);
+    }
+  } finally {
+    await prisma.auditLog.deleteMany({ where: { entityType: "user", entityId: { in: createdUserIds } } });
+    if (requestId) {
+      await prisma.complaint.deleteMany({ where: { requestId } });
+      await prisma.chatMessage.deleteMany({ where: { chat: { requestId } } });
+      await prisma.chat.deleteMany({ where: { requestId } });
+      await prisma.requestResponse.deleteMany({ where: { requestId } });
+      await prisma.balanceTransaction.deleteMany({ where: { relatedRequestId: requestId } });
+      await prisma.clientRequest.deleteMany({ where: { id: requestId } });
+    }
+    await prisma.paymentTransaction.deleteMany({ where: { userId: { in: createdUserIds } } });
+    await prisma.balanceTransaction.deleteMany({ where: { userId: { in: createdUserIds } } });
+    await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+  }
+}
+
+async function runUploadStorageTests() {
+  assert.equal(resolveUploadsDir({ NODE_ENV: "production" }, "/app"), "/data/uploads");
+  const root = mkdtempSync(path.join(tmpdir(), "zabota-uploads-"));
+  try {
+    const saved = await savePerformerDocumentFile({
+      performerId: "performer-test",
+      type: "self_employed",
+      fileName: "../../private document.pdf",
+      fileData: `data:application/pdf;base64,${Buffer.from("test-pdf").toString("base64")}`
+    }, root);
+    assert.match(saved.fileUrl, /^\/uploads\/performer-documents\/performer-test\//);
+    assert.equal(saved.fileUrl.includes("/app/backend/uploads"), false);
+    const storedDirectory = path.join(root, "performer-documents", "performer-test");
+    assert.equal(existsSync(storedDirectory), true);
+    assert.equal(readdirSync(storedDirectory).length, 1);
+    assert.throws(() => resolveStoragePath(root, "..", "outside.pdf"), /Недопустимый путь файла/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+async function runLegalBootstrapTests() {
+  await ensureLegalDocuments();
+  const firstPass = await prisma.legalDocument.findMany({
+    where: { type: { in: [...LEGAL_DOCUMENT_KEYS] }, isActive: true, isPublished: true }
+  });
+  assert.deepEqual(
+    [...new Set(firstPass.map((document) => document.type))].sort(),
+    [...LEGAL_DOCUMENT_KEYS].sort()
+  );
+
+  const exactVersionsBefore = await prisma.legalDocument.count({
+    where: {
+      OR: LEGAL_DOCUMENT_DEFINITIONS.map((document) => ({ type: document.type, version: document.version }))
+    }
+  });
+  await ensureLegalDocuments();
+  const exactVersionsAfter = await prisma.legalDocument.count({
+    where: {
+      OR: LEGAL_DOCUMENT_DEFINITIONS.map((document) => ({ type: document.type, version: document.version }))
+    }
+  });
+  assert.equal(exactVersionsBefore, LEGAL_DOCUMENT_DEFINITIONS.length);
+  assert.equal(exactVersionsAfter, exactVersionsBefore);
+
+  const app = createApp();
+  for (const definition of LEGAL_DOCUMENT_DEFINITIONS) {
+    const response = await apiRequest(app, `/api/legal/documents/${definition.slug}`, { method: "GET" });
+    assert.equal(response.status, 200, `Документ ${definition.type} должен открываться по ссылке`);
+    assert.equal(response.payload.type, definition.type);
+  }
 }
 
 async function runStaticRoutingTests() {
@@ -486,6 +887,25 @@ async function runStaticRoutingTests() {
   assert.doesNotMatch(landingIndex, /href="index\.html"/);
   assert.doesNotMatch(landingIndex, /медицинские услуги/i);
   assert.match(landingPrices, /Цены/);
+  for (const expectedPriceText of [
+    "Короткая помощь",
+    "400–700 ₽",
+    "Бытовая помощь 2 часа",
+    "700–1 100 ₽",
+    "Присмотр 2 часа",
+    "700–1 200 ₽",
+    "Сопровождение стандарт",
+    "800–1 500 ₽",
+    "Помощь 3–4 часа",
+    "1 200–2 000 ₽",
+    "Регулярная помощь",
+    "обычно от 700 ₽"
+  ]) {
+    assert.match(landingPrices, new RegExp(expectedPriceText.replace(/[–]/g, "–")));
+  }
+  assert.match(landingPrices, /сервисный сбор Заказчика — 50 ₽/);
+  assert.match(landingPrices, /доход Помощника после сервисного сбора — 900 ₽/);
+  assert.doesNotMatch(landingPrices, /комиссия|исполнитель|клиент|550 ₽/i);
   assert.match(frontendIndex, /<div id="root"><\/div>/);
   assert.match(frontendIndex, /\/app\/assets\//);
 
@@ -549,6 +969,7 @@ async function runProductionStartupTests() {
   assert.match(startupScript, /process\.env\.SEED_DEMO_DATA === "true"/);
   assert.match(startupScript, /backend\/dist\/prisma\/seed\.js/);
   assert.match(startupScript, /scripts\/bootstrap-production-admin\.mjs/);
+  assert.match(startupScript, /bootstrapCityDirectory\.js/);
   assert.match(startupScript, /PRODUCTION_ADMIN_EMAIL/);
   assert.match(startupScript, /PRODUCTION_ADMIN_PASSWORD/);
   assert.match(startupScript, /PRODUCTION_ADMIN_PHONE/);
@@ -569,6 +990,933 @@ async function runProductionStartupTests() {
   assert.match(productionEnvExample, /PRODUCTION_ADMIN_PHONE=/);
   assert.doesNotMatch(productionEnvExample, /admin@zabota\.local/);
   assert.doesNotMatch(productionEnvExample, /password123/);
+
+  assert.equal(CITY_DIRECTORY.find((city) => city.slug === "yugorsk")?.isActive, true);
+  assert.equal(CITY_DIRECTORY.find((city) => city.slug === "sovetsky")?.isActive, true);
+  assert.equal(CITY_DIRECTORY.find((city) => city.slug === "moscow")?.isActive, true);
+  assert.ok(CITY_DIRECTORY.every((city) => city.serviceStatus === "inactive"));
+  for (const cityName of ["Югорск", "Советский", "Урай", "Ханты-Мансийск", "Сургут", "Тюмень", "Екатеринбург", "Челябинск", "Москва", "Санкт-Петербург"]) {
+    assert.ok(CITY_DIRECTORY.some((city) => city.name === cityName));
+  }
+}
+
+async function runSettlementDirectoryTests() {
+  const suffix = Date.now().toString(36);
+  const searchable = await prisma.city.upsert({
+    where: { slug: `search-yugorsk-${suffix}` },
+    update: {},
+    create: {
+      name: `Югорск Тест ${suffix}`,
+      normalizedName: normalizeSettlementName(`Югорск Тест ${suffix}`),
+      slug: `search-yugorsk-${suffix}`,
+      region: "ХМАО — Югра",
+      source: "seed",
+      directoryStatus: "verified",
+      serviceStatus: "inactive",
+      status: "inactive",
+      isActive: true,
+      mapCenterLat: 61.31,
+      mapCenterLng: 63.33
+    }
+  });
+  const app = createApp();
+  const search = await apiRequest(app, `/api/settlements/search?q=${encodeURIComponent("Югорск Тест")}`, { method: "GET" });
+  assert.equal(search.status, 200);
+  assert.ok(search.payload.some((item: any) => item.id === searchable.id && item.region === "ХМАО — Югра"));
+
+  const user = await prisma.user.create({
+    data: { role: "client", rolesJson: '["client"]', displayName: "Тест городов", status: "active" }
+  });
+  const token = jwt.sign({ sub: user.id, role: "client" }, env.jwtSecret);
+  const suggestedName = `Посёлок Проверочный ${suffix}`;
+  const suggested = await apiRequest(app, "/api/settlements/suggest", {
+    method: "POST",
+    token,
+    body: { name: suggestedName, region: "Тестовый регион", type: "settlement" }
+  });
+  assert.equal(suggested.status, 201);
+  assert.equal(suggested.payload.settlement.directoryStatus, "needs_review");
+  assert.equal(suggested.payload.settlement.serviceStatus, "inactive");
+  const suggestedId = suggested.payload.settlement.id as string;
+
+  const primary = await apiRequest(app, "/api/me/cities", {
+    method: "POST",
+    token,
+    body: { cityId: suggestedId, roleScope: "customer" }
+  });
+  assert.equal(primary.status, 201);
+  assert.equal(primary.payload.isPrimary, true);
+  assert.equal((await prisma.city.findUnique({ where: { id: suggestedId } }))?.serviceStatus, "active");
+  assert.equal((await prisma.user.findUnique({ where: { id: user.id } }))?.cityId, suggestedId);
+
+  const duplicate = await apiRequest(app, "/api/me/cities", {
+    method: "POST",
+    token,
+    body: { cityId: suggestedId, roleScope: "customer" }
+  });
+  assert.equal(duplicate.status, 409);
+
+  const additional = await apiRequest(app, "/api/me/cities", {
+    method: "POST",
+    token,
+    body: { cityId: searchable.id, roleScope: "both" }
+  });
+  assert.equal(additional.status, 201);
+  assert.equal(additional.payload.isPrimary, false);
+  const makePrimary = await apiRequest(app, `/api/me/cities/${additional.payload.id}`, {
+    method: "PATCH",
+    token,
+    body: { isPrimary: true }
+  });
+  assert.equal(makePrimary.status, 200);
+  assert.equal(makePrimary.payload.isPrimary, true);
+  const oldPrimary = await prisma.userCity.findUnique({ where: { userId_cityId: { userId: user.id, cityId: suggestedId } } });
+  assert.equal(oldPrimary?.isPrimary, false);
+  const removed = await apiRequest(app, `/api/me/cities/${oldPrimary!.id}`, { method: "DELETE", token });
+  assert.equal(removed.status, 204);
+  const cannotDeletePrimary = await apiRequest(app, `/api/me/cities/${additional.payload.id}`, { method: "DELETE", token });
+  assert.equal(cannotDeletePrimary.status, 400);
+
+  const vkCity = CITY_DIRECTORY.find((city) => city.slug === "moscow")!;
+  assert.equal(vkCity.serviceStatus, "inactive");
+
+  const registrationSettlementName = `Село Регистрация ${suffix}`;
+  const registration = await apiRequest(app, "/api/auth/register", {
+    method: "POST",
+    body: {
+      role: "client",
+      phone: `+7910${String(Date.now()).slice(-7)}`,
+      password: "password123",
+      displayName: "Регистрация села",
+      citySuggestion: { name: registrationSettlementName, region: "Новый регион" },
+      acceptedLegalDocumentTypes: requiredDocumentTypesForRegistration("client"),
+      dependentDataTransferConfirmed: true
+    }
+  });
+  assert.equal(registration.status, 201);
+  const registeredCity = await prisma.city.findFirst({ where: { normalizedName: normalizeSettlementName(registrationSettlementName) } });
+  assert.equal(registeredCity?.directoryStatus, "needs_review");
+  assert.equal(registeredCity?.serviceStatus, "active");
+  assert.equal(await prisma.userCity.count({ where: { userId: registration.payload.user.id, cityId: registeredCity?.id, isPrimary: true } }), 1);
+
+  const requestCity = await prisma.city.create({
+    data: {
+      name: `Деревня Заявка ${suffix}`,
+      normalizedName: normalizeSettlementName(`Деревня Заявка ${suffix}`),
+      slug: `request-village-${suffix}`,
+      type: "village",
+      region: "Тестовый регион",
+      source: "seed",
+      directoryStatus: "verified",
+      serviceStatus: "inactive",
+      status: "inactive",
+      isActive: true,
+      mapCenterLat: 0,
+      mapCenterLng: 0
+    }
+  });
+  const category = await prisma.serviceCategory.findFirst({ where: { isActive: true } });
+  assert.ok(category);
+  const createdRequest = await apiRequest(app, "/api/requests", {
+    method: "POST",
+    token: registration.payload.token,
+    body: {
+      cityId: requestCity.id,
+      categoryId: category!.id,
+      title: "Помощь в другом населённом пункте",
+      description: "Нужна безопасная бытовая помощь для Подопечного.",
+      addressStreet: "ул. Центральная",
+      addressHouse: "1",
+      addressText: "",
+      approximateAddressText: "район центра",
+      additionalActions: [],
+      dependentState: [],
+      urgencyFlags: []
+    }
+  });
+  assert.equal(createdRequest.status, 201);
+  assert.equal(createdRequest.payload.cityId, requestCity.id);
+  assert.equal((await prisma.city.findUnique({ where: { id: requestCity.id } }))?.serviceStatus, "active");
+
+  const helper = await prisma.user.create({
+    data: { role: "performer", rolesJson: '["performer"]', displayName: "Помощник по городам", cityId: searchable.id, status: "active" }
+  });
+  await prisma.userCity.create({
+    data: { userId: helper.id, cityId: searchable.id, roleScope: "helper", isPrimary: true, isActive: true }
+  });
+  const visibleRequest = await prisma.clientRequest.create({
+    data: {
+      clientId: user.id,
+      cityId: searchable.id,
+      categoryId: category!.id,
+      title: "Заявка в городе Помощника",
+      description: "Безопасная бытовая помощь в выбранном городе.",
+      addressText: "Тестовый адрес",
+      approximateAddressText: "Тестовый район",
+      status: "waiting_for_responses",
+      visibilityStatus: "city_visible"
+    }
+  });
+  const hiddenRequest = await prisma.clientRequest.create({
+    data: {
+      clientId: user.id,
+      cityId: requestCity.id,
+      categoryId: category!.id,
+      title: "Заявка вне городов Помощника",
+      description: "Эта заявка не должна попадать в выдачу Помощника.",
+      addressText: "Другой адрес",
+      approximateAddressText: "Другой район",
+      status: "waiting_for_responses",
+      visibilityStatus: "city_visible"
+    }
+  });
+  const helperToken = jwt.sign({ sub: helper.id, role: "performer" }, env.jwtSecret);
+  const helperRequests = await apiRequest(app, "/api/requests", { method: "GET", token: helperToken });
+  assert.equal(helperRequests.status, 200);
+  assert.ok(helperRequests.payload.some((request: any) => request.id === visibleRequest.id));
+  assert.equal(helperRequests.payload.some((request: any) => request.id === hiddenRequest.id), false);
+}
+
+async function runTrialBalanceTests() {
+  const app = createApp();
+  const admin = await prisma.user.findUnique({ where: { email: "admin@zabota.local" } });
+  const client = await prisma.user.findUnique({ where: { email: "client@zabota.local" } });
+  assert.ok(admin && client?.cityId, "Нужны demo-admin и город заказчика для trial balance tests");
+
+  const startedAt = new Date();
+  const originalSetting = await prisma.serviceSetting.findUnique({ where: { key: TRIAL_BALANCE_SETTING_KEY } });
+  const originalUsers = await prisma.user.findMany({ select: { id: true, balance: true, bonusBalance: true } });
+  const createdUserIds: string[] = [];
+  const unique = String(Date.now()).slice(-7);
+  const adminToken = tokenFor(admin.id, admin.role);
+  const clientToken = tokenFor(client.id, "client");
+
+  try {
+    await updateTrialBalanceSettings({ enabled: true, amount: 100, autoGrantNewUsers: true });
+    let response = await apiRequest(app, "/api/auth/register", {
+      method: "POST",
+      body: {
+        role: "client",
+        phone: `+7901${unique}`,
+        email: `trial-registration-${unique}@zabota.local`,
+        password: "password123",
+        displayName: "Пробный Заказчик",
+        cityId: client.cityId,
+        acceptedConsentTypes: ["terms", "privacy", "personal_data_processing", "chat_rules", "payment_rules"],
+        acceptedLegalDocumentTypes: requiredDocumentTypesForRegistration("client"),
+        dependentDataTransferConfirmed: true
+      }
+    });
+    assert.equal(response.status, 201);
+    const registrationUserId = response.payload.user.id;
+    const registrationToken = response.payload.token;
+    createdUserIds.push(registrationUserId);
+    assert.equal(response.payload.user.bonusBalance, 100);
+    let trialRows = await prisma.balanceTransaction.findMany({ where: { userId: registrationUserId, type: "trial_bonus" } });
+    assert.equal(trialRows.length, 1);
+    assert.equal(trialRows[0].amount, 100);
+    assert.equal(trialRows[0].source, "registration");
+    assert.equal(trialRows[0].reason, TRIAL_BALANCE_DESCRIPTION);
+    response = await apiRequest(app, "/api/balance/me", { method: "GET", token: registrationToken });
+    assert.equal(response.status, 200);
+    assert.ok(response.payload.transactions.some((transaction: any) =>
+      transaction.type === "trial_bonus" && transaction.reason === TRIAL_BALANCE_DESCRIPTION
+    ));
+    response = await apiRequest(app, "/api/admin/balance-transactions", { method: "GET", token: adminToken });
+    assert.equal(response.status, 200);
+    assert.ok(response.payload.some((transaction: any) =>
+      transaction.userId === registrationUserId && transaction.type === "trial_bonus"
+    ));
+
+    const repeatedGrant = await grantTrialBalanceToUser(registrationUserId, "registration");
+    assert.deepEqual(repeatedGrant, { granted: false, reason: "already_granted" });
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: registrationUserId } })).bonusBalance, 100);
+
+    await updateTrialBalanceSettings({ enabled: false, amount: 100, autoGrantNewUsers: false });
+    response = await apiRequest(app, "/api/auth/register", {
+      method: "POST",
+      body: {
+        role: "client",
+        phone: `+7902${unique}`,
+        email: `trial-disabled-${unique}@zabota.local`,
+        password: "password123",
+        displayName: "Без пробного баланса",
+        cityId: client.cityId,
+        acceptedConsentTypes: ["terms", "privacy", "personal_data_processing", "chat_rules", "payment_rules"],
+        acceptedLegalDocumentTypes: requiredDocumentTypesForRegistration("client"),
+        dependentDataTransferConfirmed: true
+      }
+    });
+    assert.equal(response.status, 201);
+    const disabledUserId = response.payload.user.id;
+    createdUserIds.push(disabledUserId);
+    assert.equal(response.payload.user.bonusBalance, 0);
+    assert.equal(await prisma.balanceTransaction.count({ where: { userId: disabledUserId, type: "trial_bonus" } }), 0);
+
+    const oauthPending = await prisma.user.create({
+      data: {
+        role: "oauth_pending",
+        rolesJson: "[]",
+        displayName: "VK trial pending",
+        status: "active",
+        identities: {
+          create: { provider: "vk", providerUserId: `trial-vk-${unique}`, displayName: "VK trial pending" }
+        }
+      }
+    });
+    createdUserIds.push(oauthPending.id);
+    await updateTrialBalanceSettings({ enabled: true, amount: 100, autoGrantNewUsers: true });
+    assert.deepEqual(await grantTrialBalanceToUser(oauthPending.id, "oauth_complete"), { granted: false, reason: "admin_skipped" });
+    assert.equal(await prisma.balanceTransaction.count({ where: { userId: oauthPending.id, type: "trial_bonus" } }), 0);
+
+    const oauthBody = {
+      role: "performer",
+      cityId: client.cityId,
+      phone: `+7903${unique}`,
+      acceptedLegalDocumentTypes: requiredDocumentTypesForRegistration("performer"),
+      helperNotEmployerAcknowledged: true,
+      helperNoMedicalServicesConfirmed: true
+    };
+    const oauthToken = tokenFor(oauthPending.id, "oauth_pending");
+    response = await apiRequest(app, "/api/auth/oauth/complete-profile", { method: "POST", token: oauthToken, body: oauthBody });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.bonusBalance, 100);
+    response = await apiRequest(app, "/api/auth/oauth/complete-profile", { method: "POST", token: oauthToken, body: oauthBody });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.bonusBalance, 100);
+    trialRows = await prisma.balanceTransaction.findMany({ where: { userId: oauthPending.id, type: "trial_bonus" } });
+    assert.equal(trialRows.length, 1);
+    assert.equal(trialRows[0].source, "oauth_complete");
+
+    const bulkEligible = await prisma.user.create({
+      data: {
+        role: "client",
+        rolesJson: JSON.stringify(["client"]),
+        phone: `+7904${unique}`,
+        normalizedPhone: `+7904${unique}`,
+        displayName: "Массовое начисление",
+        cityId: client.cityId,
+        status: "active"
+      }
+    });
+    const bulkBlocked = await prisma.user.create({
+      data: {
+        role: "performer",
+        rolesJson: JSON.stringify(["performer"]),
+        phone: `+7905${unique}`,
+        normalizedPhone: `+7905${unique}`,
+        displayName: "Заблокированный без бонуса",
+        cityId: client.cityId,
+        status: "blocked",
+        blockedAt: new Date()
+      }
+    });
+    createdUserIds.push(bulkEligible.id, bulkBlocked.id);
+
+    response = await apiRequest(app, "/api/admin/trial-balance/settings", { method: "GET" });
+    assert.equal(response.status, 401);
+    response = await apiRequest(app, "/api/admin/trial-balance/settings", { method: "GET", token: clientToken });
+    assert.equal(response.status, 403);
+    response = await apiRequest(app, "/api/admin/trial-balance/settings", {
+      method: "PUT",
+      token: adminToken,
+      body: { enabled: true, amount: 100, autoGrantNewUsers: false }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.enabled, true);
+    assert.equal(response.payload.amount, 100);
+    assert.equal(response.payload.autoGrantNewUsers, false);
+    assert.deepEqual(await getTrialBalanceSettings(), {
+      enabled: true,
+      amount: 100,
+      autoGrantNewUsers: false,
+      lastBulkGrantAt: null
+    });
+
+    response = await apiRequest(app, "/api/admin/trial-balance/grant-all", { method: "POST", token: adminToken });
+    assert.equal(response.status, 200);
+    assert.ok(response.payload.granted >= 1);
+    assert.ok(response.payload.skippedBlocked >= 1);
+    assert.ok(response.payload.skippedAdmin >= 1);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: bulkEligible.id } })).bonusBalance, 100);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: bulkBlocked.id } })).bonusBalance, 0);
+    assert.equal(await prisma.balanceTransaction.count({ where: { userId: admin.id, type: "trial_bonus" } }), 0);
+
+    const secondBulk = await apiRequest(app, "/api/admin/trial-balance/grant-all", { method: "POST", token: adminToken });
+    assert.equal(secondBulk.status, 200);
+    assert.equal(secondBulk.payload.granted, 0);
+    assert.ok(secondBulk.payload.skippedAlreadyGranted >= 1);
+    assert.equal(await prisma.balanceTransaction.count({ where: { userId: bulkEligible.id, type: "trial_bonus" } }), 1);
+    assert.ok((await getTrialBalanceSettings()).lastBulkGrantAt);
+  } finally {
+    await prisma.auditLog.deleteMany({
+      where: {
+        createdAt: { gte: startedAt },
+        OR: [
+          { action: { startsWith: "trial_balance." } },
+          { action: "balance.trial_bonus" },
+          { actorUserId: { in: createdUserIds } },
+          { entityType: "user", entityId: { in: createdUserIds } }
+        ]
+      }
+    });
+    await prisma.balanceTransaction.deleteMany({ where: { type: "trial_bonus", createdAt: { gte: startedAt } } });
+    for (const user of originalUsers) {
+      await prisma.user.updateMany({ where: { id: user.id }, data: { balance: user.balance, bonusBalance: user.bonusBalance } });
+    }
+    if (createdUserIds.length) await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+    if (originalSetting) {
+      await prisma.serviceSetting.upsert({
+        where: { key: originalSetting.key },
+        create: originalSetting,
+        update: {
+          valueJson: originalSetting.valueJson,
+          label: originalSetting.label,
+          group: originalSetting.group,
+          updatedAt: originalSetting.updatedAt
+        }
+      });
+    } else {
+      await prisma.serviceSetting.deleteMany({ where: { key: TRIAL_BALANCE_SETTING_KEY } });
+    }
+  }
+}
+
+async function runBonusServiceFeeTests() {
+  const app = createApp();
+  const client = await prisma.user.findUnique({ where: { email: "client@zabota.local" } });
+  const performer = await prisma.user.findUnique({ where: { email: "performer@zabota.local" } });
+  const admin = await prisma.user.findUnique({ where: { email: "admin@zabota.local" } });
+  const category = await prisma.serviceCategory.findFirst({ where: { isActive: true, isChildcare: false } });
+  assert.ok(client?.cityId && performer && admin && category, "Нужны demo users и категория для bonus fee tests");
+
+  await acceptLatestLegalDocuments({
+    userId: client.id,
+    documentTypes: requiredDocumentTypesForRegistration("client"),
+    source: "bonus_fee_test"
+  });
+  await acceptLatestLegalDocuments({
+    userId: performer.id,
+    documentTypes: requiredDocumentTypesForRegistration("performer"),
+    source: "bonus_fee_test"
+  });
+
+  const originalClientBalance = { balance: client.balance, bonusBalance: client.bonusBalance };
+  const originalPerformerBalance = { balance: performer.balance, bonusBalance: performer.bonusBalance };
+  const settingKeys = ["useBonusForCommission", "chargeBonusFirst"];
+  const feeSettingKeys = ["clientServiceFeeAmount", "performerServiceFeeAmount", "performerCommissionAmount", "serviceCommissionAmount"];
+  const trackedSettingKeys = [...settingKeys, ...feeSettingKeys];
+  const originalSettings = await prisma.serviceSetting.findMany({ where: { key: { in: trackedSettingKeys } } });
+  const requestIds: string[] = [];
+
+  try {
+    await prisma.serviceSetting.updateMany({
+      where: { key: { in: feeSettingKeys } },
+      data: { valueJson: "70" }
+    });
+    const fixedFeeSettings = await getServiceFeeSettings();
+    assert.equal(fixedFeeSettings.clientServiceFeeAmount, FIXED_SERVICE_FEE_AMOUNT);
+    assert.equal(fixedFeeSettings.performerCommissionAmount, FIXED_SERVICE_FEE_AMOUNT);
+    const lockedSettingResponse = await apiRequest(app, "/api/admin/settings/clientServiceFeeAmount", {
+      method: "PATCH",
+      token: tokenFor(admin.id, admin.role),
+      body: { valueJson: "70" }
+    });
+    assert.equal(lockedSettingResponse.status, 403);
+    assert.equal(lockedSettingResponse.payload.code, "service_fee_setting_locked");
+    await ensureFixedServiceFeeSettings();
+    const normalizedFeeSettings = await prisma.serviceSetting.findMany({ where: { key: { in: feeSettingKeys } } });
+    assert.equal(normalizedFeeSettings.length, feeSettingKeys.length);
+    assert.ok(normalizedFeeSettings.every((setting) => setting.valueJson === "50"));
+
+    await Promise.all(settingKeys.map((key) => prisma.serviceSetting.upsert({
+      where: { key },
+      create: { key, valueJson: "false", label: key, group: "payments" },
+      update: { valueJson: "false" }
+    })));
+    await Promise.all([
+      prisma.user.update({ where: { id: client.id }, data: { balance: 0, bonusBalance: 0 } }),
+      prisma.user.update({ where: { id: performer.id }, data: { balance: 0, bonusBalance: 0 } })
+    ]);
+
+    const clientToken = tokenFor(client.id, "client");
+    const performerToken = tokenFor(performer.id, "performer");
+    let response = await apiRequest(app, "/api/requests", {
+      method: "POST",
+      token: clientToken,
+      body: {
+        cityId: client.cityId,
+        categoryId: category.id,
+        title: "Заявка без пополнения",
+        description: "Бытовая помощь для проверки баланса",
+        addressStreet: "ул. Мира",
+        addressHouse: "10",
+        additionalActions: [],
+        dependentState: []
+      }
+    });
+    assert.equal(response.status, 201, "Создание заявки не должно требовать 150 ₽");
+    const zeroBalanceRequestId = response.payload.id;
+    requestIds.push(zeroBalanceRequestId);
+    response = await apiRequest(app, `/api/requests/${zeroBalanceRequestId}/publish`, { method: "POST", token: clientToken });
+    assert.equal(response.status, 200);
+    response = await apiRequest(app, `/api/requests/${zeroBalanceRequestId}/respond`, {
+      method: "POST",
+      token: performerToken,
+      body: { message: "Готов обсудить условия" }
+    });
+    assert.equal(response.status, 201, "Отклик с нулевым балансом не должен требовать 150 ₽");
+    const responseId = response.payload.response.id;
+    response = await apiRequest(app, `/api/requests/responses/${responseId}/accept`, { method: "POST", token: clientToken });
+    assert.equal(response.status, 200, "Открытие чата не должно требовать 150 ₽");
+    const chatId = response.payload.chat.id;
+
+    response = await apiRequest(app, `/api/chats/${chatId}/terms`, {
+      method: "PATCH",
+      token: clientToken,
+      body: { agreedHelperAmount: 700, agreedDurationMinutes: 120, agreedTermsComment: "Бытовая помощь по заявке" }
+    });
+    assert.equal(response.status, 200);
+
+    response = await apiRequest(app, `/api/chats/${chatId}/client-confirm`, { method: "POST", token: clientToken });
+    assert.equal(response.status, 200);
+    response = await apiRequest(app, `/api/chats/${chatId}/performer-confirm`, { method: "POST", token: performerToken });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "waiting_client_balance");
+    assert.equal((await prisma.clientRequest.findUniqueOrThrow({ where: { id: zeroBalanceRequestId } })).status, "waiting_client_balance");
+    assert.equal(await countServiceFeeTransactions(zeroBalanceRequestId), 0);
+
+    await Promise.all([
+      prisma.user.update({ where: { id: client.id }, data: { balance: 0, bonusBalance: 100 } }),
+      prisma.user.update({ where: { id: performer.id }, data: { balance: 0, bonusBalance: 100 } })
+    ]);
+    response = await apiRequest(app, `/api/chats/${chatId}/client-confirm`, { method: "POST", token: clientToken });
+    assert.equal(response.status, 200);
+    response = await apiRequest(app, `/api/chats/${chatId}/performer-confirm`, { method: "POST", token: performerToken });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "in_work");
+    const afterBonusCharge = await Promise.all([
+      prisma.user.findUniqueOrThrow({ where: { id: client.id }, select: { balance: true, bonusBalance: true } }),
+      prisma.user.findUniqueOrThrow({ where: { id: performer.id }, select: { balance: true, bonusBalance: true } })
+    ]);
+    assert.deepEqual(afterBonusCharge[0], { balance: 0, bonusBalance: 50 });
+    assert.deepEqual(afterBonusCharge[1], { balance: 0, bonusBalance: 50 });
+    const bonusFeeRows = await prisma.balanceTransaction.findMany({
+      where: { relatedRequestId: zeroBalanceRequestId },
+      orderBy: { createdAt: "asc" }
+    });
+    assert.equal(bonusFeeRows.length, 2);
+    assert.ok(bonusFeeRows.every((row) => row.balanceKind === "bonus" && row.amount === -50));
+    assert.ok(bonusFeeRows.every((row) => row.balanceBefore === 100 && row.balanceAfter === 50));
+    assert.ok(bonusFeeRows.every((row) => row.reason.includes("Сервисный сбор")));
+    await Promise.all([
+      apiRequest(app, `/api/chats/${chatId}/client-confirm`, { method: "POST", token: clientToken }),
+      apiRequest(app, `/api/chats/${chatId}/performer-confirm`, { method: "POST", token: performerToken })
+    ]);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).bonusBalance, 50);
+    assert.equal(await countServiceFeeTransactions(zeroBalanceRequestId), 2);
+
+    await Promise.all([
+      prisma.user.update({ where: { id: client.id }, data: { balance: 20, bonusBalance: 30 } }),
+      prisma.user.update({ where: { id: performer.id }, data: { balance: 0, bonusBalance: 50 } })
+    ]);
+    const combinedRequest = await prisma.clientRequest.create({
+      data: {
+        seedKey: `combined-bonus-fee-${Date.now()}`,
+        clientId: client.id,
+        cityId: client.cityId,
+        categoryId: category.id,
+        title: "Комбинированное списание",
+        description: "Проверка бонусного и основного баланса",
+        addressText: "Югорск, ул. Мира, 10",
+        approximateAddressText: "Югорск, ул. Мира",
+        status: "discussion",
+        visibilityStatus: "city_visible"
+      }
+    });
+    requestIds.push(combinedRequest.id);
+    const combinedResponse = await prisma.requestResponse.create({
+      data: { requestId: combinedRequest.id, performerId: performer.id, status: "discussion" }
+    });
+    const combinedChat = await prisma.chat.create({
+      data: {
+        requestId: combinedRequest.id,
+        responseId: combinedResponse.id,
+        clientId: client.id,
+        performerId: performer.id,
+        status: "open"
+      }
+    });
+    await apiRequest(app, `/api/chats/${combinedChat.id}/terms`, {
+      method: "PATCH",
+      token: clientToken,
+      body: { agreedHelperAmount: 700 }
+    });
+    await apiRequest(app, `/api/chats/${combinedChat.id}/client-confirm`, { method: "POST", token: clientToken });
+    response = await apiRequest(app, `/api/chats/${combinedChat.id}/performer-confirm`, { method: "POST", token: performerToken });
+    assert.equal(response.payload.status, "in_work");
+    assert.deepEqual(
+      await prisma.user.findUniqueOrThrow({ where: { id: client.id }, select: { balance: true, bonusBalance: true } }),
+      { balance: 0, bonusBalance: 0 }
+    );
+    const combinedRows = await prisma.balanceTransaction.findMany({
+      where: { relatedRequestId: combinedRequest.id, userId: client.id },
+      orderBy: { balanceKind: "asc" }
+    });
+    assert.equal(combinedRows.length, 2);
+    const combinedBonus = combinedRows.find((row) => row.balanceKind === "bonus");
+    const combinedReal = combinedRows.find((row) => row.balanceKind === "real");
+    assert.deepEqual(
+      { amount: combinedBonus?.amount, before: combinedBonus?.balanceBefore, after: combinedBonus?.balanceAfter },
+      { amount: -30, before: 30, after: 0 }
+    );
+    assert.deepEqual(
+      { amount: combinedReal?.amount, before: combinedReal?.balanceBefore, after: combinedReal?.balanceAfter },
+      { amount: -20, before: 20, after: 0 }
+    );
+  } finally {
+    if (requestIds.length) {
+      await prisma.balanceTransaction.deleteMany({ where: { relatedRequestId: { in: requestIds } } });
+      await prisma.chatMessage.deleteMany({ where: { chat: { requestId: { in: requestIds } } } });
+      await prisma.chat.deleteMany({ where: { requestId: { in: requestIds } } });
+      await prisma.requestResponse.deleteMany({ where: { requestId: { in: requestIds } } });
+      await prisma.clientRequest.deleteMany({ where: { id: { in: requestIds } } });
+    }
+    await Promise.all([
+      prisma.user.update({ where: { id: client.id }, data: originalClientBalance }),
+      prisma.user.update({ where: { id: performer.id }, data: originalPerformerBalance })
+    ]);
+    for (const setting of originalSettings) {
+      await prisma.serviceSetting.update({ where: { key: setting.key }, data: { valueJson: setting.valueJson } });
+    }
+    const originalSettingKeys = new Set(originalSettings.map((setting) => setting.key));
+    await prisma.serviceSetting.deleteMany({
+      where: { key: { in: trackedSettingKeys.filter((key) => !originalSettingKeys.has(key)) } }
+    });
+  }
+}
+
+async function runCriticalSafetyTests() {
+  const app = createApp();
+  const client = await prisma.user.findUnique({ where: { email: "client@zabota.local" } });
+  const performer = await prisma.user.findUnique({ where: { email: "performer@zabota.local" } });
+  const admin = await prisma.user.findUnique({ where: { email: "admin@zabota.local" } });
+  const category = await prisma.serviceCategory.findFirst({ where: { isActive: true } });
+  assert.ok(client && performer && admin && category, "Нужны demo users и категория для safety tests");
+
+  await acceptLatestLegalDocuments({
+    userId: client.id,
+    documentTypes: requiredDocumentTypesForRegistration("client"),
+    source: "critical_safety_test"
+  });
+  await acceptLatestLegalDocuments({
+    userId: performer.id,
+    documentTypes: requiredDocumentTypesForRegistration("performer"),
+    source: "critical_safety_test"
+  });
+
+  const originalClientBalance = { balance: client.balance, bonusBalance: client.bonusBalance };
+  const originalPerformerBalance = { balance: performer.balance, bonusBalance: performer.bonusBalance };
+  const originalEnv = { nodeEnv: env.nodeEnv, allowLegacyMockTopUp: env.allowLegacyMockTopUp };
+  const testStartedAt = new Date();
+  let requestId = "";
+
+  try {
+    await Promise.all([
+      prisma.user.update({ where: { id: client.id }, data: { balance: 500, bonusBalance: 0 } }),
+      prisma.user.update({ where: { id: performer.id }, data: { balance: 500, bonusBalance: 0 } })
+    ]);
+    const request = await prisma.clientRequest.create({
+      data: {
+        seedKey: `critical-safety-${Date.now()}`,
+        clientId: client.id,
+        cityId: client.cityId!,
+        categoryId: category.id,
+        contactName: "Приватный Заказчик",
+        contactPhone: "+79990000001",
+        title: "Проверка безопасной финализации",
+        description: "Тестовая бытовая задача",
+        addressText: "Югорск, ул. Мира, 10, подъезд 2, этаж 3, квартира 15",
+        approximateAddressText: "Югорск, ул. Мира",
+        addressCity: "Югорск",
+        addressStreet: "ул. Мира",
+        addressHouse: "10",
+        addressApartment: "15",
+        addressEntrance: "2",
+        addressFloor: "3",
+        addressIntercom: "15",
+        addressComment: "вход со двора",
+        fullAddress: "Югорск, ул. Мира, 10, подъезд 2, этаж 3, квартира 15",
+        publicAddress: "Югорск, ул. Мира",
+        yandexPublicMapAddress: "Югорск, ул. Мира",
+        yandexExactMapAddress: "Югорск, ул. Мира, 10",
+        priceEstimateAmount: 700,
+        status: "discussion",
+        visibilityStatus: "city_visible"
+      }
+    });
+    requestId = request.id;
+    const responseRow = await prisma.requestResponse.create({
+      data: { requestId: request.id, performerId: performer.id, status: "discussion" }
+    });
+    const chat = await prisma.chat.create({
+      data: {
+        requestId: request.id,
+        responseId: responseRow.id,
+        clientId: client.id,
+        performerId: performer.id,
+        status: "open"
+      }
+    });
+
+    const clientToken = tokenFor(client.id, "client");
+    const performerToken = tokenFor(performer.id, "performer");
+    const adminToken = tokenFor(admin.id, admin.role);
+
+    let response = await apiRequest(app, `/api/chats/${chat.id}/messages`, { method: "GET", token: performerToken });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.phoneVisible, false);
+    assert.equal(response.payload.request.contactName, null);
+    assert.equal(response.payload.request.contactPhone, null);
+    assert.equal(response.payload.request.addressHouse, null);
+    assert.equal(response.payload.request.addressApartment, null);
+
+    response = await apiRequest(app, `/api/chats/${chat.id}/client-confirm`, { method: "POST", token: clientToken });
+    assert.equal(response.status, 400);
+    assert.equal(response.payload.code, "agreement_terms_required");
+
+    response = await apiRequest(app, `/api/chats/${chat.id}/terms`, {
+      method: "PATCH",
+      token: clientToken,
+      body: {
+        agreedHelperAmount: 950,
+        agreedPackageId: "home_help_2h",
+        agreedAddons: ["shopping"],
+        agreedDurationMinutes: 120,
+        agreedScheduledAt: "2026-08-01T10:00:00.000Z",
+        agreedTermsComment: "Две бытовые задачи и покупки"
+      }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.agreedTerms.agreedHelperAmount, 950);
+    assert.equal(response.payload.agreedTerms.customerTotalAmount, 1000);
+    assert.equal(response.payload.agreedTerms.helperNetAmount, 900);
+    assert.equal(response.payload.agreedTerms.agreedPackageTitle, "Бытовая помощь 2 часа");
+    assert.deepEqual(response.payload.agreedTerms.agreedAddons, ["shopping"]);
+    assert.equal(response.payload.clientConfirmedAt, null);
+    assert.equal(response.payload.performerConfirmedAt, null);
+    const structuredTerms = await prisma.chat.findUniqueOrThrow({ where: { id: chat.id } });
+    assert.equal(structuredTerms.agreedHelperAmount, 950);
+    assert.equal(structuredTerms.customerTotalAmount, 1000);
+    assert.equal(structuredTerms.helperNetAmount, 900);
+    assert.equal(structuredTerms.termsUpdatedByUserId, client.id);
+    assert.ok(structuredTerms.termsUpdatedAt);
+
+    const adminTermsView = await apiRequest(app, `/api/chats/${chat.id}/messages`, { method: "GET", token: adminToken });
+    assert.equal(adminTermsView.status, 200);
+    assert.equal(adminTermsView.payload.agreedTerms.agreedHelperAmount, 950);
+
+    response = await apiRequest(app, `/api/chats/${chat.id}/client-confirm`, { method: "POST", token: clientToken });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "waiting_performer_confirmation");
+    assert.ok(response.payload.agreedTerms.agreedByCustomerAt);
+
+    response = await apiRequest(app, `/api/chats/${chat.id}/terms`, {
+      method: "PATCH",
+      token: performerToken,
+      body: {
+        agreedHelperAmount: 950,
+        agreedPackageId: "home_help_2h",
+        agreedAddons: ["shopping"],
+        agreedDurationMinutes: 120,
+        agreedTermsComment: "Условия проверены Помощником"
+      }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "open");
+    assert.equal(response.payload.clientConfirmedAt, null);
+    assert.equal(response.payload.performerConfirmedAt, null);
+    assert.equal(response.payload.agreedTerms.agreedByCustomerAt, null);
+    assert.equal(response.payload.agreedTerms.termsUpdatedByUserId, performer.id);
+
+    response = await apiRequest(app, `/api/chats/${chat.id}/client-confirm`, { method: "POST", token: clientToken });
+    assert.equal(response.status, 200);
+    response = await apiRequest(app, `/api/chats/${chat.id}/performer-confirm`, { method: "POST", token: performerToken });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "in_work");
+    assert.ok(response.payload.agreementFinalizedAt);
+
+    const balancesAfterHappyPath = await Promise.all([
+      prisma.user.findUniqueOrThrow({ where: { id: client.id }, select: { balance: true } }),
+      prisma.user.findUniqueOrThrow({ where: { id: performer.id }, select: { balance: true } })
+    ]);
+    assert.equal(balancesAfterHappyPath[0].balance, 450);
+    assert.equal(balancesAfterHappyPath[1].balance, 450);
+    assert.equal(await countServiceFeeTransactions(request.id), 2);
+    const finalizedChat = await prisma.chat.findUniqueOrThrow({ where: { id: chat.id } });
+    const conditions = JSON.parse(finalizedChat.conditionsJson ?? "{}");
+    assert.equal(conditions.agreedHelperAmount, 950);
+    assert.equal(conditions.customerTotalAmount, 1000);
+    assert.equal(conditions.helperNetAmount, 900);
+    assert.equal(conditions.priceEstimateAmount, undefined);
+    assert.equal(finalizedChat.agreedHelperAmount, 950);
+    const adminRequestsView = await apiRequest(app, "/api/admin/requests", { method: "GET", token: adminToken });
+    const adminRequest = adminRequestsView.payload.find((item: any) => item.id === request.id);
+    assert.equal(adminRequest.chat.agreedTerms.agreedHelperAmount, 950);
+    assert.equal(adminRequest.chat.agreedTerms.customerTotalAmount, 1000);
+
+    response = await apiRequest(app, `/api/chats/${chat.id}/terms`, {
+      method: "PATCH",
+      token: clientToken,
+      body: { agreedHelperAmount: 1000 }
+    });
+    assert.equal(response.status, 400);
+    assert.equal(response.payload.code, "agreement_terms_locked");
+
+    response = await apiRequest(app, `/api/chats/${chat.id}/messages`, { method: "GET", token: performerToken });
+    assert.equal(response.payload.request.addressHouse, "10");
+    assert.equal(response.payload.request.addressApartment, "15");
+    assert.equal(response.payload.request.contactName, null);
+    assert.equal(response.payload.request.contactPhone, null);
+
+    const [clientView, adminView] = await Promise.all([
+      apiRequest(app, `/api/chats/${chat.id}/messages`, { method: "GET", token: clientToken }),
+      apiRequest(app, `/api/chats/${chat.id}/messages`, { method: "GET", token: adminToken })
+    ]);
+    assert.equal(clientView.payload.request.contactName, "Приватный Заказчик");
+    assert.equal(clientView.payload.request.contactPhone, "+79990000001");
+    assert.equal(adminView.payload.request.contactName, "Приватный Заказчик");
+    assert.equal(adminView.payload.request.contactPhone, "+79990000001");
+
+    const repeatResponses = await Promise.all([
+      apiRequest(app, `/api/chats/${chat.id}/client-confirm`, { method: "POST", token: clientToken }),
+      apiRequest(app, `/api/chats/${chat.id}/client-confirm`, { method: "POST", token: clientToken }),
+      apiRequest(app, `/api/chats/${chat.id}/performer-confirm`, { method: "POST", token: performerToken }),
+      apiRequest(app, `/api/chats/${chat.id}/performer-confirm`, { method: "POST", token: performerToken })
+    ]);
+    assert.ok(repeatResponses.every((item) => item.status === 200 && item.payload.status === "in_work"));
+    assert.equal(await countServiceFeeTransactions(request.id), 2);
+    const balancesAfterRepeats = await Promise.all([
+      prisma.user.findUniqueOrThrow({ where: { id: client.id }, select: { balance: true } }),
+      prisma.user.findUniqueOrThrow({ where: { id: performer.id }, select: { balance: true } })
+    ]);
+    assert.equal(balancesAfterRepeats[0].balance, 450);
+    assert.equal(balancesAfterRepeats[1].balance, 450);
+
+    env.nodeEnv = "production";
+    env.allowLegacyMockTopUp = true;
+    response = await legacyMockTopUpRequest(app, clientToken);
+    assert.equal(response.status, 403);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, 450);
+
+    env.nodeEnv = "test";
+    env.allowLegacyMockTopUp = false;
+    response = await legacyMockTopUpRequest(app, clientToken);
+    assert.equal(response.status, 403);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, 450);
+
+    env.allowLegacyMockTopUp = true;
+    response = await legacyMockTopUpRequest(app, clientToken);
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.realBalance, 600);
+  } finally {
+    env.nodeEnv = originalEnv.nodeEnv;
+    env.allowLegacyMockTopUp = originalEnv.allowLegacyMockTopUp;
+    if (requestId) {
+      await prisma.balanceTransaction.deleteMany({ where: { relatedRequestId: requestId } });
+      await prisma.chatMessage.deleteMany({ where: { chat: { requestId } } });
+      await prisma.chat.deleteMany({ where: { requestId } });
+      await prisma.requestResponse.deleteMany({ where: { requestId } });
+      await prisma.clientRequest.deleteMany({ where: { id: requestId } });
+    }
+    await prisma.balanceTransaction.deleteMany({
+      where: { userId: client.id, reason: "Тестовое пополнение", createdAt: { gte: testStartedAt } }
+    });
+    await Promise.all([
+      prisma.user.update({ where: { id: client.id }, data: originalClientBalance }),
+      prisma.user.update({ where: { id: performer.id }, data: originalPerformerBalance })
+    ]);
+  }
+}
+
+function countServiceFeeTransactions(requestId: string) {
+  return prisma.balanceTransaction.count({
+    where: { relatedRequestId: requestId, type: { in: ["client_service_fee", "performer_service_fee"] } }
+  });
+}
+
+function legacyMockTopUpRequest(app: ReturnType<typeof createApp>, token: string) {
+  return apiRequest(app, "/api/balance/mock-top-up", {
+    method: "POST",
+    token,
+    body: { amount: 150 }
+  });
+}
+
+async function runPaymentCreditIdempotencyTests() {
+  const client = await prisma.user.findUnique({ where: { email: "client@zabota.local" } });
+  assert.ok(client, "Нужен demo-заказчик для payment credit tests");
+
+  const originalBalance = client.balance;
+  const paymentIds: string[] = [];
+  const idempotencyKeys: string[] = [];
+  try {
+    const payment = await prisma.paymentTransaction.create({
+      data: {
+        userId: client.id,
+        provider: "mock",
+        providerPaymentId: `MOCK-IDEMPOTENCY-${Date.now()}`,
+        orderId: `TOPUP-IDEMPOTENCY-${Date.now()}`,
+        amount: 150,
+        status: "pending"
+      }
+    });
+    paymentIds.push(payment.id);
+    const idempotencyKey = paymentCreditIdempotencyKey(payment.id);
+    idempotencyKeys.push(idempotencyKey);
+
+    const results = await Promise.all([
+      creditPaymentToBalance(payment.id, { comment: payment.orderId }),
+      creditPaymentToBalance(payment.id, { comment: payment.orderId })
+    ]);
+    assert.equal(results.filter((result) => result.credited).length, 1);
+    assert.equal(await prisma.balanceTransaction.count({ where: { idempotencyKey } }), 1);
+    const ledger = await prisma.balanceTransaction.findUniqueOrThrow({ where: { idempotencyKey } });
+    assert.equal(ledger.idempotencyKey, `payment_credit:${payment.id}`);
+    const creditedPayment = await prisma.paymentTransaction.findUniqueOrThrow({ where: { id: payment.id } });
+    assert.ok(creditedPayment.creditedAt);
+    assert.equal(creditedPayment.balanceTransactionId, ledger.id);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, originalBalance + 150);
+
+    const repeated = await creditPaymentToBalance(payment.id, { comment: payment.orderId });
+    assert.equal(repeated.credited, false);
+    assert.equal(await prisma.balanceTransaction.count({ where: { idempotencyKey } }), 1);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, originalBalance + 150);
+
+    for (const status of ["failed", "cancelled"] as const) {
+      const terminalPayment = await prisma.paymentTransaction.create({
+        data: {
+          userId: client.id,
+          provider: "mock",
+          providerPaymentId: `MOCK-${status.toUpperCase()}-${Date.now()}`,
+          orderId: `TOPUP-${status.toUpperCase()}-${Date.now()}`,
+          amount: 150,
+          status
+        }
+      });
+      paymentIds.push(terminalPayment.id);
+      const terminalKey = paymentCreditIdempotencyKey(terminalPayment.id);
+      idempotencyKeys.push(terminalKey);
+      const result = await creditPaymentToBalance(terminalPayment.id);
+      assert.equal(result.credited, false);
+      assert.equal(await prisma.balanceTransaction.count({ where: { idempotencyKey: terminalKey } }), 0);
+    }
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, originalBalance + 150);
+  } finally {
+    await prisma.paymentTransaction.deleteMany({ where: { id: { in: paymentIds } } });
+    await prisma.balanceTransaction.deleteMany({ where: { idempotencyKey: { in: idempotencyKeys } } });
+    await prisma.user.update({ where: { id: client.id }, data: { balance: originalBalance } });
+  }
 }
 
 async function runPaymentRouteTests() {
@@ -579,6 +1927,17 @@ async function runPaymentRouteTests() {
   assert.ok(client, "Нужен demo-заказчик для payment route tests");
   assert.ok(performer, "Нужен demo-помощник для payment route tests");
   assert.ok(admin, "Нужен demo-admin для payment route tests");
+
+  await acceptLatestLegalDocuments({
+    userId: client.id,
+    documentTypes: requiredDocumentTypesForRegistration("client"),
+    source: "test_setup"
+  });
+  await acceptLatestLegalDocuments({
+    userId: performer.id,
+    documentTypes: requiredDocumentTypesForRegistration("performer"),
+    source: "test_setup"
+  });
 
   const originalBalances = new Map<string, { balance: number; bonusBalance: number }>();
   for (const user of [client, performer]) {
@@ -694,6 +2053,30 @@ async function runPaymentRouteTests() {
     orderIds.push(response.payload.orderId);
     paymentIds.push(performerPaymentId);
 
+    response = await apiRequest(app, `/api/payments/mock/${performerPaymentId}/succeed`, {
+      method: "POST",
+      token: clientToken
+    });
+    assert.equal(response.status, 403);
+    assert.equal(response.payload.code, "forbidden");
+    response = await apiRequest(app, `/api/payments/mock/${performerPaymentId}/fail`, {
+      method: "POST",
+      token: clientToken
+    });
+    assert.equal(response.status, 403);
+    response = await apiRequest(app, `/api/payments/mock/${performerPaymentId}/succeed`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 403, "Mock endpoints используют owner-only политику и для администратора");
+
+    response = await apiRequest(app, `/api/payments/mock/${performerPaymentId}/fail`, {
+      method: "POST",
+      token: performerToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.payment.status, "failed");
+
     response = await apiRequest(app, "/api/payments/my", {
       method: "GET",
       token: clientToken
@@ -792,7 +2175,7 @@ async function runAuthPhoneTests() {
   assert.ok(admin, "Нужен demo-admin для auth phone tests");
 
   const suffix = Date.now();
-  let createdUserId = "";
+  const createdUserIds: string[] = [];
   try {
     let response = await apiRequest(app, "/api/auth/register", {
       method: "POST",
@@ -803,17 +2186,21 @@ async function runAuthPhoneTests() {
         password: "password123",
         displayName: "Тест телефона",
         cityId: client.cityId,
-        acceptedConsentTypes: ["terms", "privacy_policy", "personal_data_processing", "chat_rules", "payment_rules"],
+        acceptedConsentTypes: ["terms", "privacy", "personal_data_processing", "chat_rules", "payment_rules"],
         acceptedLegalDocumentTypes: requiredDocumentTypesForRegistration("client"),
         dependentDataTransferConfirmed: true
       }
     });
     assert.equal(response.status, 201);
-    createdUserId = response.payload.user.id;
+    const createdUserId = response.payload.user.id;
+    createdUserIds.push(createdUserId);
     const created = await prisma.user.findUniqueOrThrow({ where: { id: createdUserId } });
     assert.equal(created.phone, "+79224000320");
     assert.equal(created.normalizedPhone, "+79224000320");
     assert.equal(created.email, null);
+    assert.equal(await prisma.userConsent.count({
+      where: { userId: createdUserId, documentType: "marketing_notifications_consent" }
+    }), 0);
 
     response = await apiRequest(app, "/api/auth/register", {
       method: "POST",
@@ -824,13 +2211,34 @@ async function runAuthPhoneTests() {
         password: "password123",
         displayName: "Дубль телефона",
         cityId: client.cityId,
-        acceptedConsentTypes: ["terms", "privacy_policy", "personal_data_processing", "chat_rules", "payment_rules"],
+        acceptedConsentTypes: ["terms", "privacy", "personal_data_processing", "chat_rules", "payment_rules"],
         acceptedLegalDocumentTypes: requiredDocumentTypesForRegistration("client"),
         dependentDataTransferConfirmed: true
       }
     });
     assert.equal(response.status, 409);
     assert.equal(response.payload.error, "Пользователь с таким телефоном уже зарегистрирован");
+
+    response = await apiRequest(app, "/api/auth/register", {
+      method: "POST",
+      body: {
+        role: "performer",
+        phone: `+7 901 ${String(suffix).slice(-7, -4)} ${String(suffix).slice(-4, -2)} ${String(suffix).slice(-2)}`,
+        email: `helper-legal-${suffix}@zabota.local`,
+        password: "password123",
+        displayName: "Тест согласий помощника",
+        cityId: client.cityId,
+        acceptedConsentTypes: ["terms", "privacy", "personal_data_processing", "chat_rules", "payment_rules"],
+        acceptedLegalDocumentTypes: requiredDocumentTypesForRegistration("performer"),
+        helperNotEmployerAcknowledged: true,
+        helperNoMedicalServicesConfirmed: true
+      }
+    });
+    assert.equal(response.status, 201);
+    createdUserIds.push(response.payload.user.id);
+    assert.equal(await prisma.userConsent.count({
+      where: { userId: response.payload.user.id, documentType: "marketing_notifications_consent" }
+    }), 0);
 
     response = await apiRequest(app, "/api/auth/login", {
       method: "POST",
@@ -860,18 +2268,151 @@ async function runAuthPhoneTests() {
     assert.equal(response.status, 200);
     assert.equal(response.payload.user.id, admin.id);
   } finally {
-    if (createdUserId) {
+    if (createdUserIds.length > 0) {
       await prisma.auditLog.deleteMany({
         where: {
           OR: [
-            { actorUserId: createdUserId },
-            { entityType: "user", entityId: createdUserId }
+            { actorUserId: { in: createdUserIds } },
+            { entityType: "user", entityId: { in: createdUserIds } }
           ]
         }
       });
-      await prisma.user.delete({ where: { id: createdUserId } }).catch(() => null);
+      await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
     }
   }
+}
+
+async function runVkOAuthTests() {
+  const app = createApp();
+  const original = {
+    oauthEnabled: env.oauthEnabled,
+    vkIdEnabled: env.vkIdEnabled,
+    clientId: env.vkIdClientId,
+    clientSecret: env.vkIdClientSecret,
+    redirectUri: env.vkIdRedirectUri
+  };
+  const originalFetch = globalThis.fetch;
+  const providerUserId = `vk-test-${Date.now()}`;
+  let createdUserId: string | undefined;
+  try {
+    env.oauthEnabled = false;
+    env.vkIdEnabled = false;
+    let response = await apiRequest(app, "/api/auth/oauth/vk/start", { method: "GET" });
+    assert.equal(response.status, 503);
+
+    env.oauthEnabled = true;
+    env.vkIdEnabled = true;
+    env.vkIdClientId = "vk-test-client";
+    env.vkIdClientSecret = "vk-test-secret";
+    env.vkIdRedirectUri = "http://localhost:4000/api/auth/oauth/vk/callback";
+
+    const start = await rawAppRequest(app, "/api/auth/oauth/vk/start");
+    assert.equal(start.status, 302);
+    const authorizationUrl = new URL(String(start.headers.location));
+    assert.equal(authorizationUrl.origin, "https://id.vk.ru");
+    assert.ok(authorizationUrl.searchParams.get("state"));
+    assert.ok(authorizationUrl.searchParams.get("code_challenge"));
+    assert.equal(authorizationUrl.searchParams.get("code_challenge_method"), "s256");
+    const transactionCookie = cookieHeader(start.headers["set-cookie"]);
+    const state = authorizationUrl.searchParams.get("state")!;
+
+    const invalidState = await rawAppRequest(app, "/api/auth/oauth/vk/callback?code=bad&device_id=device&state=wrong", {
+      headers: { cookie: transactionCookie }
+    });
+    assert.equal(invalidState.status, 302);
+    assert.match(String(invalidState.headers.location), /oauthError=vk/);
+
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.startsWith("https://id.vk.ru/oauth2/auth")) {
+        assert.match(url, /code_verifier=/);
+        return new Response(JSON.stringify({ access_token: "test-access-token", user_id: providerUserId, state }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.startsWith("https://id.vk.ru/oauth2/user_info")) {
+        return new Response(JSON.stringify({ user: { user_id: providerUserId, first_name: "VK", last_name: "Test" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      throw new Error(`Unexpected VK test request: ${url}`);
+    }) as typeof fetch;
+
+    const callback = await rawAppRequest(app, `/api/auth/oauth/vk/callback?code=ok&device_id=device&state=${encodeURIComponent(state)}`, {
+      headers: { cookie: transactionCookie }
+    });
+    assert.equal(callback.status, 302);
+    assert.equal(callback.headers.location, "/app/oauth/complete");
+    const sessionCookie = cookieHeader(callback.headers["set-cookie"]);
+    const session = await rawAppRequest(app, "/api/auth/oauth/session", { method: "POST", headers: { cookie: sessionCookie } });
+    assert.equal(session.status, 200);
+    const sessionPayload = JSON.parse(session.text);
+    assert.equal(sessionPayload.user.role, "oauth_pending");
+    assert.equal(sessionPayload.nextPath, "/app/oauth/complete");
+    createdUserId = sessionPayload.user.id;
+    assert.equal(await prisma.userIdentity.count({ where: { provider: "vk", providerUserId } }), 1);
+
+    const city = await prisma.city.findFirstOrThrow({ where: { isActive: true }, orderBy: { sortOrder: "asc" } });
+    response = await apiRequest(app, "/api/auth/oauth/complete-profile", {
+      method: "POST",
+      token: sessionPayload.token,
+      body: {
+        role: "client",
+        cityId: city.id,
+        phone: `+7901${String(Date.now()).slice(-7)}`,
+        acceptedDocuments: requiredDocumentTypesForRegistration("client"),
+        dependentDataTransferConfirmed: true
+      }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.role, "client");
+    assert.equal(response.payload.nextPath, "/app/client/requests");
+    assert.equal(await isUserProfileComplete(sessionPayload.user.id), true);
+
+    const repeatedIdentity = await resolveVkUser({
+      providerUserId,
+      profile: { user_id: providerUserId, first_name: "VK", last_name: "Updated" }
+    });
+    assert.equal(repeatedIdentity.user.id, createdUserId);
+    assert.equal(await prisma.userIdentity.count({ where: { provider: "vk", providerUserId } }), 1);
+
+    const demoClient = await prisma.user.findUniqueOrThrow({ where: { email: "client@zabota.local" } });
+    const emailProviderUserId = `${providerUserId}-email`;
+    const linkedByEmail = await resolveVkUser({
+      providerUserId: emailProviderUserId,
+      profile: { user_id: emailProviderUserId, email: demoClient.email ?? undefined, first_name: "Existing" }
+    });
+    assert.equal(linkedByEmail.user.id, demoClient.id);
+    await prisma.userIdentity.delete({ where: { provider_providerUserId: { provider: "vk", providerUserId: emailProviderUserId } } });
+
+    response = await apiRequest(app, "/api/auth/oauth/complete-profile", {
+      method: "POST",
+      token: sessionPayload.token,
+      body: { role: "admin", cityId: city.id, phone: "+79000000099", acceptedDocuments: [] }
+    });
+    assert.equal(response.status, 400);
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.assign(env, {
+      oauthEnabled: original.oauthEnabled,
+      vkIdEnabled: original.vkIdEnabled,
+      vkIdClientId: original.clientId,
+      vkIdClientSecret: original.clientSecret,
+      vkIdRedirectUri: original.redirectUri
+    });
+    if (createdUserId) {
+      await prisma.auditLog.deleteMany({ where: { actorUserId: createdUserId } });
+      await prisma.user.delete({ where: { id: createdUserId } }).catch(() => undefined);
+    }
+  }
+}
+
+function cookieHeader(setCookie: unknown) {
+  const value = Array.isArray(setCookie) ? String(setCookie[0]) : String(setCookie ?? "");
+  assert.ok(value, "Expected Set-Cookie header");
+  return value.split(";")[0]!;
 }
 
 function tokenFor(userId: string, role: string) {
@@ -918,9 +2459,10 @@ async function apiRequest(
   app: ReturnType<typeof createApp>,
   path: string,
   options: {
-    method: "GET" | "POST";
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
     token?: string;
     body?: unknown;
+    headers?: Record<string, string>;
   }
 ) {
   const response = await rawAppRequest(app, path, options);
@@ -932,14 +2474,15 @@ async function rawAppRequest(
   app: ReturnType<typeof createApp>,
   path: string,
   options: {
-    method?: "GET" | "POST";
+    method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
     token?: string;
     body?: unknown;
+    headers?: Record<string, string>;
   } = {}
 ) {
   const method = options.method ?? "GET";
   const bodyText = options.body === undefined ? "" : JSON.stringify(options.body);
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...(options.headers ?? {}) };
   if (options.body !== undefined) {
     headers["content-type"] = "application/json";
     headers["content-length"] = String(Buffer.byteLength(bodyText));

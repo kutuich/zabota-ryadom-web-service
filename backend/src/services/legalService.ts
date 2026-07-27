@@ -36,9 +36,20 @@ export type ConsentFeature =
   | "admin_view_documents"
   | "admin_export_consents";
 
+export const LEGAL_DOCUMENT_KEYS = [
+  "privacy",
+  "personal_data_consent",
+  "customer_agreement",
+  "helper_terms",
+  "service_notifications_consent",
+  "marketing_notifications_consent",
+  "helper_documents_consent",
+  "service_rules"
+] as const;
+
 export const LEGAL_DOCUMENT_DEFINITIONS: LegalDocumentDefinition[] = [
   {
-    type: "privacy_policy",
+    type: "privacy",
     roleScope: "all",
     title: "Политика обработки персональных данных",
     slug: "privacy",
@@ -137,7 +148,7 @@ export const LEGAL_DOCUMENT_DEFINITIONS: LegalDocumentDefinition[] = [
     title: "Согласие на получение информационных сообщений",
     slug: "marketing-notifications-consent",
     version: "1.0",
-    isRequired: false,
+    isRequired: true,
     contentMarkdown: `# Согласие на получение информационных сообщений
 
 Редакция 1.0. Пользователь может добровольно согласиться получать новости сервиса, полезные материалы, акции, предложения и информационные сообщения.
@@ -182,8 +193,15 @@ export const LEGAL_DOCUMENT_DEFINITIONS: LegalDocumentDefinition[] = [
 ];
 
 const REGISTRATION_REQUIRED: Record<"client" | "performer", string[]> = {
-  client: ["customer_agreement", "personal_data_consent", "service_rules", "service_notifications_consent"],
-  performer: ["helper_terms", "personal_data_consent", "service_rules", "service_notifications_consent"]
+  client: ["customer_agreement", "privacy", "personal_data_consent", "service_rules", "service_notifications_consent"],
+  performer: [
+    "helper_terms",
+    "privacy",
+    "personal_data_consent",
+    "service_rules",
+    "helper_documents_consent",
+    "service_notifications_consent"
+  ]
 };
 
 const FEATURE_REQUIRED: Record<ConsentFeature, Partial<Record<"client" | "performer" | "admin", string[]>>> = {
@@ -226,6 +244,7 @@ export function requiredDocumentTypesForRegistration(role: "client" | "performer
 }
 
 export function requiredDocumentTypesForFeature(role: UserRole, feature: ConsentFeature) {
+  if (role === "oauth_pending") return [];
   const normalizedRole = role === "superadmin" ? "admin" : role;
   return FEATURE_REQUIRED[feature]?.[normalizedRole] ?? [];
 }
@@ -236,7 +255,19 @@ export function missingAcceptedDocumentTypes(role: "client" | "performer", accep
 }
 
 export async function seedLegalDocuments(client: DbClient = prisma, createdByAdminId?: string | null) {
+  await ensureLegalDocuments(client, createdByAdminId);
+}
+
+export async function ensureLegalDocuments(client: DbClient = prisma, createdByAdminId?: string | null) {
+  await migrateLegacyPrivacyDocument(client);
+
   for (const definition of LEGAL_DOCUMENT_DEFINITIONS) {
+    const published = await client.legalDocument.findFirst({
+      where: { type: definition.type, isActive: true, isPublished: true },
+      orderBy: { publishedAt: "desc" }
+    });
+    if (published) continue;
+
     const contentHash = calculateLegalDocumentHash(definition);
     const existing = await client.legalDocument.findUnique({
       where: {
@@ -247,6 +278,7 @@ export async function seedLegalDocuments(client: DbClient = prisma, createdByAdm
       }
     });
 
+    const now = new Date();
     const data = {
       type: definition.type,
       roleScope: definition.roleScope,
@@ -258,8 +290,8 @@ export async function seedLegalDocuments(client: DbClient = prisma, createdByAdm
       isRequired: definition.isRequired,
       isPublished: true,
       isActive: true,
-      publishedAt: new Date(),
-      effectiveFrom: new Date(),
+      publishedAt: now,
+      effectiveFrom: now,
       archivedAt: null,
       createdByAdminId: createdByAdminId ?? null
     };
@@ -276,6 +308,23 @@ export async function seedLegalDocuments(client: DbClient = prisma, createdByAdm
       await client.legalDocument.create({ data });
     }
   }
+}
+
+async function migrateLegacyPrivacyDocument(client: DbClient) {
+  const current = await client.legalDocument.findUnique({
+    where: { type_version: { type: "privacy", version: "1.0" } }
+  });
+  if (current) return;
+
+  const legacy = await client.legalDocument.findUnique({
+    where: { type_version: { type: "privacy_policy", version: "1.0" } }
+  });
+  if (!legacy) return;
+
+  await client.legalDocument.update({
+    where: { id: legacy.id },
+    data: { type: "privacy" }
+  });
 }
 
 export async function getPublishedLegalDocuments(client: DbClient = prisma) {
@@ -424,7 +473,8 @@ export async function getConsentStatuses(userId: string, role: UserRole, client:
   });
 }
 
-export async function getMissingConsents(user: { id: string; role: UserRole }, feature: ConsentFeature, client: DbClient = prisma) {
+export async function getMissingConsents(user: { id: string; role: UserRole; realRole?: UserRole; isActingAsRole?: boolean }, feature: ConsentFeature, client: DbClient = prisma) {
+  if (user.isActingAsRole && user.realRole && ["admin", "superadmin"].includes(user.realRole)) return [];
   if (user.role === "admin" || user.role === "superadmin") return [];
   const requiredTypes = requiredDocumentTypesForFeature(user.role, feature);
   if (requiredTypes.length === 0) return [];

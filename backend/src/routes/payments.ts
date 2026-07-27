@@ -8,7 +8,7 @@ import { getBalanceSummary } from "../services/balanceService";
 import { requireFeatureConsent } from "../services/legalService";
 import { createTopUpPayment, PaymentInitError, type PaymentStatus } from "../services/paymentAdapter";
 import { generateTopUpOrderId } from "../services/paymentOrderId";
-import { creditPaymentToBalanceTx, getPaymentBalanceSummary } from "../services/paymentService";
+import { creditPaymentToBalance, getPaymentBalanceSummary } from "../services/paymentService";
 import { writeAudit } from "../services/auditService";
 import { verifyTbankToken } from "../services/tbankToken";
 import { asyncHandler, HttpError } from "../utils/http";
@@ -139,28 +139,26 @@ paymentsRouter.post(
     if (!payment) {
       throw new HttpError(404, "Платёж не найден", "payment_not_found");
     }
+    assertPaymentOwner(payment.userId, req.user!.id);
     if (payment.provider !== "mock") {
       throw new HttpError(400, "Тестовое подтверждение доступно только для mock-платежей", "payment_provider_mismatch");
     }
 
-    const result = await prisma.$transaction(async (tx) => {
-      const credit = await creditPaymentToBalanceTx(tx, payment, {
-        reason: "Пополнение баланса через тестовую платёжную форму",
-        comment: payment.orderId
-      });
-      if (credit.credited) {
-        await writeAudit(req.user!.id, "payment.mock_succeed", "payment", payment.id, {
-          orderId: payment.orderId,
-          amount: payment.amount,
-          balanceTransactionId: credit.balanceTransaction?.id
-        }, tx);
-      }
-      return credit.payment;
+    const credit = await creditPaymentToBalance(payment.id, {
+      reason: "Пополнение баланса через тестовую платёжную форму",
+      comment: payment.orderId
     });
+    if (credit.credited) {
+      await writeAudit(req.user!.id, "payment.mock_succeed", "payment", payment.id, {
+        orderId: payment.orderId,
+        amount: payment.amount,
+        balanceTransactionId: credit.balanceTransaction?.id
+      });
+    }
 
     res.json({
-      payment: serializePayment(result, ["admin", "superadmin"].includes(req.user!.role)),
-      balance: await getPaymentBalanceSummary(result.userId)
+      payment: serializePayment(credit.payment, ["admin", "superadmin"].includes(req.user!.role)),
+      balance: await getPaymentBalanceSummary(credit.payment.userId)
     });
   })
 );
@@ -174,6 +172,7 @@ paymentsRouter.post(
     if (!payment) {
       throw new HttpError(404, "Платёж не найден", "payment_not_found");
     }
+    assertPaymentOwner(payment.userId, req.user!.id);
     if (payment.provider !== "mock") {
       throw new HttpError(400, "Тестовое отклонение доступно только для mock-платежей", "payment_provider_mismatch");
     }
@@ -283,20 +282,6 @@ paymentsRouter.post(
         }
       });
 
-      if (normalizedStatus === "succeeded") {
-        const credit = await creditPaymentToBalanceTx(tx, updated, {
-          reason: "Пополнение баланса через платёжную форму Т-Банка",
-          comment: updated.orderId
-        });
-        await writeAudit(null, "payment.tbank_webhook_succeed", "payment", updated.id, {
-          orderId: updated.orderId,
-          providerPaymentId,
-          credited: credit.credited,
-          balanceTransactionId: credit.balanceTransaction?.id ?? updated.balanceTransactionId
-        }, tx);
-        return credit.payment;
-      }
-
       await writeAudit(null, "payment.tbank_webhook_status", "payment", updated.id, {
         orderId: updated.orderId,
         providerPaymentId,
@@ -304,6 +289,20 @@ paymentsRouter.post(
       }, tx);
       return updated;
     });
+
+    if (normalizedStatus === "succeeded") {
+      const credit = await creditPaymentToBalance(result.id, {
+        reason: "Пополнение баланса через платёжную форму Т-Банка",
+        comment: result.orderId
+      });
+      await writeAudit(null, "payment.tbank_webhook_succeed", "payment", result.id, {
+        orderId: result.orderId,
+        providerPaymentId,
+        credited: credit.credited,
+        balanceTransactionId: credit.balanceTransaction?.id ?? credit.payment.balanceTransactionId
+      });
+      return res.json({ ok: true, matched: true, status: credit.payment.status });
+    }
 
     res.json({ ok: true, matched: true, status: result.status });
   })
@@ -399,6 +398,12 @@ function ensureMockEndpointAllowed(role: string) {
     return;
   }
   throw new HttpError(403, "Тестовая платёжная форма недоступна", "mock_payment_forbidden");
+}
+
+function assertPaymentOwner(paymentUserId: string, authenticatedUserId: string) {
+  if (paymentUserId !== authenticatedUserId) {
+    throw new HttpError(403, "Нет доступа к платежу", "forbidden");
+  }
 }
 
 function valueAsString(value: unknown) {

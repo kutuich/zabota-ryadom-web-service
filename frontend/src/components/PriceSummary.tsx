@@ -1,10 +1,10 @@
 import type { PricingQuote } from "../types";
 
 export const clientPriceExplanation =
-  "Мы рассчитали рекомендуемую оплату с учётом выбранного формата визита, длительности и объёма помощи. Оплата за работу передаётся помощнику напрямую, сервисный сбор оплачивается отдельно. Если в чате изменятся объём, продолжительность или условия визита, согласуйте итоговую оплату до начала работы.";
+  "Точная стоимость согласовывается в чате до двойного подтверждения. Действия внутри выбранного пакета и согласованного времени не создают отдельную доплату.";
 
 export const performerPriceExplanation =
-  "Рекомендуемая оплата рассчитана по указанному заказчиком объёму и условиям. Если фактическая задача отличается от заявки, согласуйте изменения с заказчиком до начала дополнительной работы.";
+  "Точная стоимость согласовывается с Заказчиком до двойного подтверждения. Изменение времени, адреса или характера заявки нужно согласовать отдельно.";
 
 export function PriceSummary({
   pricing,
@@ -23,6 +23,9 @@ export function PriceSummary({
   const performerFee = pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? fallbackServiceFee;
   const performerNet = pricing?.performerNetAmount ?? Math.max(0, payment - performerFee);
   const visitFormat = pricing?.packageLabel ?? pricing?.visitFormat ?? pricing?.packageName;
+  const packageRange = pricing ? formatRange(pricing.packagePriceMin, pricing.packagePriceMax) : null;
+  const customerRange = pricing ? formatRange(pricing.customerTotalMin, pricing.customerTotalMax) : null;
+  const helperRange = pricing ? formatRange(pricing.helperNetMin, pricing.helperNetMax) : null;
   const reasons = pricing?.recommendationReasons?.length ? pricing.recommendationReasons : pricing?.increaseFactors ?? [];
   const included = pricing?.includedActions?.length ? pricing.includedActions : pricing?.included ?? [];
   const notIncluded = pricing?.notIncluded?.length ? pricing.notIncluded : pricing?.excluded ?? [];
@@ -41,21 +44,21 @@ export function PriceSummary({
       <p className="eyebrow">Рекомендуемая стоимость визита</p>
       {role === "performer" ? (
         <>
-          <strong>{payment} ₽</strong>
+          <strong>{packageRange ?? `${payment} ₽`}</strong>
           <dl>
-            <div><dt>Рекомендуемая оплата за визит</dt><dd>{payment} ₽</dd></div>
+            <div><dt>Стоимость помощи</dt><dd>{packageRange ?? `${payment} ₽`}</dd></div>
             <div><dt>Сервисный сбор помощника</dt><dd>{performerFee} ₽</dd></div>
-            <div><dt>Ориентировочный доход после сервисного сбора</dt><dd>{performerNet} ₽</dd></div>
+            <div><dt>Доход после сервисного сбора</dt><dd>{helperRange ?? `${performerNet} ₽`}</dd></div>
           </dl>
           <p>{performerPriceExplanation}</p>
         </>
       ) : (
         <>
-          <strong>{payment} ₽</strong>
+          <strong>{packageRange ?? `${payment} ₽`}</strong>
           <dl>
-            <div><dt>Рекомендуемая оплата помощнику</dt><dd>{payment} ₽</dd></div>
+            <div><dt>Стоимость помощи Помощника</dt><dd>{packageRange ?? `${payment} ₽`}</dd></div>
             <div><dt>Сервисный сбор заказчика</dt><dd>{clientFee} ₽</dd></div>
-            <div><dt>Ориентировочные общие расходы</dt><dd>{clientTotal} ₽</dd></div>
+            <div><dt>Итого расходы Заказчика</dt><dd>{customerRange ?? `${clientTotal} ₽`}</dd></div>
             {role === "admin" && <div><dt>Сервисный сбор помощника</dt><dd>{performerFee} ₽</dd></div>}
           </dl>
           <p>{clientPriceExplanation}</p>
@@ -93,8 +96,25 @@ export function PriceSummary({
           ) : null}
         </details>
       )}
+      {pricing?.possibleAddons?.length ? (
+        <details className="details-box price-summary__details">
+          <summary>Возможные доплаты</summary>
+          <ul>{pricing.possibleAddons.map((item) => <li key={item.id}>{item.title}: {item.priceLabel}</li>)}</ul>
+        </details>
+      ) : null}
     </section>
   );
+}
+
+function formatRange(min?: number, max?: number | null) {
+  if (min === undefined) return null;
+  if (max === null || max === undefined) return `от ${formatMoney(min)} ₽`;
+  if (min === max) return `${formatMoney(min)} ₽`;
+  return `${formatMoney(min)}–${formatMoney(max)} ₽`;
+}
+
+function formatMoney(value: number) {
+  return new Intl.NumberFormat("ru-RU").format(value);
 }
 
 export function parsePricing(value?: string | null): PricingQuote | null {

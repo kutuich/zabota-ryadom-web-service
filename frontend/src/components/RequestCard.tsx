@@ -5,6 +5,7 @@ import { labelStatus, requestDisplayTitle } from "../utils/labels";
 import { parsePricing, PriceSummary } from "./PriceSummary";
 import { buildPublicAddressFromRequest, buildYandexExactAddressFromRequest, buildYandexMapsSearchUrl } from "../utils/address";
 import { formatDateRu, formatTimeRu } from "../utils/dateTime";
+import { AgreedTermsSummary } from "./AgreedTermsSummary";
 
 export function RequestCard({
   request,
@@ -22,7 +23,8 @@ export function RequestCard({
   children?: React.ReactNode;
 }) {
   const pricing = request.pricing ?? parsePricing(request.pricingBreakdownJson);
-  const performerPayment = pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? request.budgetAmount ?? pricing?.total ?? 0;
+  const agreedTerms = request.chat?.agreedTerms ?? request.chats?.find((chat) => chat.agreedTerms)?.agreedTerms ?? null;
+  const performerPayment = agreedTerms?.agreedHelperAmount ?? pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? request.budgetAmount ?? pricing?.total ?? 0;
   const builtPublicAddress = buildPublicAddressFromRequest(request);
   const publicAddress = request.yandexPublicMapAddress || builtPublicAddress || request.publicAddress || "";
   const exactAddress = request.yandexExactMapAddress ?? buildYandexExactAddressFromRequest(request);
@@ -66,11 +68,11 @@ export function RequestCard({
         <span>
           <CheckCircle2 size={16} />
           {performerPayment
-            ? `Рекомендуемая оплата ${performerPayment} ₽`
+            ? agreedTerms ? `Согласованная оплата ${performerPayment} ₽` : `Рекомендуемая оплата ${performerPayment} ₽`
             : "Рекомендуемая стоимость визита будет рассчитана"}
         </span>
       </div>
-      {(pricing || performerPayment > 0) && (
+      {agreedTerms ? <AgreedTermsSummary terms={agreedTerms} /> : (pricing || performerPayment > 0) && (
         <PriceSummary
           pricing={pricing}
           fallbackPayment={performerPayment}

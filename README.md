@@ -2,8 +2,7 @@
 
 Локальное web-приложение для сервиса помощи семье, дому и близким. Публичное позиционирование: локальный сервис помощи. Внутри заложена платформа заявок, откликов, чата по заявке, баланса, сервисных сборов, доверительных статусов и админского контроля.
 
-Главный источник требований: `./ZABOTA_RYADOM_2_0_MASTER_CONTEXT.md`.
-Ценовая логика: `./CONCEPT_PRICING_ZABOTA_RYADOM_V3.md`.
+Единственный актуальный источник требований: [`ZABOTA_RYADOM_CURRENT_SOURCE_OF_TRUTH.md`](./ZABOTA_RYADOM_CURRENT_SOURCE_OF_TRUTH.md).
 
 Старый сайт, VK, Bitrix24-интеграции и старые папки проекта в этой итерации не используются и не меняются.
 
@@ -55,7 +54,7 @@ JWT_SECRET="replace-with-a-long-random-secret"
 CORS_ORIGIN="http://localhost:5173"
 YANDEX_MAPS_API_KEY=""
 VITE_YANDEX_MAPS_API_KEY=""
-DEFAULT_COMMISSION_AMOUNT=50
+DEFAULT_SERVICE_FEE_AMOUNT=50
 DEFAULT_MIN_TOP_UP_AMOUNT=150
 PAYMENT_PROVIDER=mock
 PAYMENT_RECEIPT_ENABLED=false
@@ -66,11 +65,19 @@ TBANK_SUCCESS_URL=http://localhost:4000/app/balance/payment-success
 TBANK_FAIL_URL=http://localhost:4000/app/balance/payment-fail
 TBANK_NOTIFICATION_URL=http://localhost:4000/api/payments/tbank/webhook
 SEED_DEMO_DATA=true
+OAUTH_ENABLED=false
+VK_ID_ENABLED=false
+VK_ID_CLIENT_ID=
+VK_ID_CLIENT_SECRET=
+VK_ID_REDIRECT_URI=http://localhost:4000/api/auth/oauth/vk/callback
+VK_ID_SUCCESS_REDIRECT_PATH=/app/oauth/complete
+VK_ID_FAIL_REDIRECT_PATH=/app/login?oauthError=vk
 ```
 
 Для Яндекс.Карт добавьте ключ в `YANDEX_MAPS_API_KEY` и, если карта будет рендериться на заказчике, в `VITE_YANDEX_MAPS_API_KEY`.
 Для разработки платёжный модуль работает с `PAYMENT_PROVIDER=mock`. Реальный сценарий Т-Банка должен вести пользователя на платёжную форму банка, без ввода карты в приложении.
 Для тестового подключения Т-Банка используйте инструкцию `docs/TBANK_PAYMENT_SETUP.md` и шаблон `.env.tbank.test.example`.
+Вход через VK ID настраивается по инструкции `docs/vk-id-auth.md`. По умолчанию он выключен и не влияет на обычный вход.
 
 Backend загружает env из корневого `.env`. Prisma-команды запускаются из корня с явным `--schema backend/prisma/schema.prisma`, поэтому отдельный `backend/.env` не нужен.
 
@@ -264,7 +271,7 @@ JWT_SECRET=replace-with-a-long-random-preview-secret
 CORS_ORIGIN=https://your-service-name.onrender.com
 YANDEX_MAPS_API_KEY=
 VITE_YANDEX_MAPS_API_KEY=
-DEFAULT_COMMISSION_AMOUNT=50
+DEFAULT_SERVICE_FEE_AMOUNT=50
 DEFAULT_MIN_TOP_UP_AMOUNT=150
 PAYMENT_PROVIDER=mock
 PAYMENT_RECEIPT_ENABLED=false

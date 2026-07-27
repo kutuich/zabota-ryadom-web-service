@@ -1,10 +1,32 @@
-export type UserRole = "client" | "performer" | "admin" | "superadmin";
+export type UserRole = "client" | "performer" | "admin" | "superadmin" | "oauth_pending";
+
+export type UserIdentity = {
+  id: string;
+  provider: "vk" | string;
+  providerUserId: string;
+  displayName?: string | null;
+  avatarUrl?: string | null;
+  createdAt: string;
+};
 
 export type City = {
   id: string;
   name: string;
   slug: string;
   region: string;
+  normalizedName?: string;
+  type?: string;
+  district?: string | null;
+  municipalDistrict?: string | null;
+  source?: string;
+  directoryStatus?: string;
+  serviceStatus?: string;
+  activatedAt?: string | null;
+  activatedByUserId?: string | null;
+  customerCount?: number;
+  helperCount?: number;
+  requestCount?: number;
+  needsReview?: boolean;
   status: string;
   isActive: boolean;
   defaultCommissionAmount: number;
@@ -17,6 +39,28 @@ export type City = {
   timezone?: string;
   pricingZone?: string;
   sortOrder?: number;
+};
+
+export type SettlementSearchResult = Pick<City, "id" | "name" | "type" | "region" | "district" | "directoryStatus" | "serviceStatus"> & {
+  displayName: string;
+};
+
+export type UserCity = {
+  id: string;
+  userId: string;
+  cityId: string;
+  roleScope: "customer" | "helper" | "both";
+  isPrimary: boolean;
+  isActive: boolean;
+  city: City;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MyCities = {
+  primaryCity: UserCity | null;
+  additionalCities: UserCity[];
+  cities: UserCity[];
 };
 
 export type ServiceCategory = {
@@ -44,8 +88,14 @@ export type ServiceCategory = {
 export type User = {
   id: string;
   role: UserRole;
+  realRole?: UserRole;
+  effectiveRole?: UserRole;
+  isActingAsRole?: boolean;
+  actingRole?: "client" | "performer" | null;
+  realAdminUserId?: string | null;
+  displayActingBanner?: boolean;
   rolesJson: string;
-  phone: string;
+  phone: string | null;
   normalizedPhone?: string | null;
   email?: string | null;
   displayName: string;
@@ -59,12 +109,34 @@ export type User = {
   phoneVerifiedAt?: string | null;
   emailVerifiedAt?: string | null;
   blockedAt?: string | null;
+  blockedByAdminId?: string | null;
   blockReason?: string | null;
+  archiveRequestedAt?: string | null;
+  archiveRequestedByAdminId?: string | null;
+  archiveReason?: string | null;
+  archivedAt?: string | null;
+  archivedByAdminId?: string | null;
+  archiveBlockedReason?: string | null;
   city?: City | null;
   clientProfile?: ClientProfile | null;
   performerProfile?: PerformerProfile | null;
   performerDocuments?: PerformerDocument[];
   legalConsents?: UserConsent[];
+  identities?: UserIdentity[];
+  userCities?: UserCity[];
+};
+
+export type UserArchiveSafety = {
+  canArchive: boolean;
+  reasons: string[];
+  balance: number;
+  bonusBalance: number;
+  activeRequestsCount: number;
+  activeChatsCount: number;
+  pendingPaymentsCount: number;
+  openComplaintsCount: number;
+  daysSinceBlockedOrRequested: number | null;
+  requiredWaitDays: number;
 };
 
 export type ClientProfile = {
@@ -188,8 +260,8 @@ export type ClientRequest = {
   city?: City;
   category?: ServiceCategory;
   responses?: RequestResponse[];
-  chat?: { id: string; status: string; performerId?: string } | null;
-  chats?: Array<{ id: string; status: string; performerId: string; archivedAt?: string | null }>;
+  chat?: { id: string; status: string; performerId?: string; agreedTerms?: AgreedTerms | null } | null;
+  chats?: Array<{ id: string; status: string; performerId: string; agreedTerms?: AgreedTerms | null; archivedAt?: string | null }>;
   client?: Pick<User, "id" | "displayName">;
   responseId?: string;
   responseStatus?: string;
@@ -206,6 +278,9 @@ export type PricingQuote = {
   billableHours: number;
   calculationUnit: string;
   packageId?: string;
+  packageTitle?: string;
+  packagePriceMin?: number;
+  packagePriceMax?: number | null;
   packageLabel?: string;
   packageShortLabel?: string;
   additions: Array<{ label: string; amount: number; appliesTo?: string }>;
@@ -239,6 +314,36 @@ export type PricingQuote = {
   included: string[];
   excluded: string[];
   performerPaymentAmount: number;
+  helperAmount?: number;
+  customerServiceFeeAmount?: number;
+  helperServiceFeeAmount?: number;
+  customerTotalAmount?: number;
+  helperNetAmount?: number;
+  customerTotalMin?: number;
+  customerTotalMax?: number | null;
+  helperNetMin?: number;
+  helperNetMax?: number | null;
+  minTopUpAmount?: number;
+  possibleAddons?: Array<{
+    id: string;
+    title: string;
+    priceMin: number | null;
+    priceMax: number | null;
+    unit: string;
+    priceLabel: string;
+  }>;
+  addons?: Array<{
+    id: string;
+    title: string;
+    priceMin: number | null;
+    priceMax: number | null;
+    unit: string;
+    priceLabel: string;
+    quantity: number;
+    amountMin: number | null;
+    amountMax: number | null;
+    selectedAmount: number | null;
+  }>;
   clientServiceFeeAmount: number;
   performerServiceFeeAmount: number;
   performerCommissionAmount: number;
@@ -341,6 +446,24 @@ export type ChatMessage = {
   sender?: Pick<User, "id" | "displayName" | "role">;
 };
 
+export type AgreedTerms = {
+  agreedHelperAmount: number;
+  customerServiceFeeAmount: number;
+  helperServiceFeeAmount: number;
+  customerTotalAmount: number;
+  helperNetAmount: number;
+  agreedPackageId?: string | null;
+  agreedPackageTitle?: string | null;
+  agreedAddons: string[];
+  agreedDurationMinutes?: number | null;
+  agreedScheduledAt?: string | null;
+  agreedTermsComment?: string | null;
+  agreedByCustomerAt?: string | null;
+  agreedByHelperAt?: string | null;
+  termsUpdatedAt?: string | null;
+  termsUpdatedByUserId?: string | null;
+};
+
 export type Chat = {
   id: string;
   requestId: string;
@@ -349,6 +472,9 @@ export type Chat = {
   status: string;
   clientConfirmedAt?: string | null;
   performerConfirmedAt?: string | null;
+  agreementFinalizedAt?: string | null;
+  agreedTerms?: AgreedTerms | null;
+  conditionsJson?: string | null;
   archivedAt?: string | null;
   exactAddressVisible: boolean;
   phoneVisible: boolean;
@@ -369,6 +495,36 @@ export type BalanceSummary = {
   useBonusForCommission: boolean;
   chargeBonusFirst: boolean;
   minTopUpAmount: number;
+  transactions: Array<{
+    id: string;
+    type: string;
+    source?: string | null;
+    amount: number;
+    balanceKind: string;
+    reason: string;
+    createdAt: string;
+  }>;
+};
+
+export type TrialBalanceSettings = {
+  enabled: boolean;
+  amount: number;
+  autoGrantNewUsers: boolean;
+  lastBulkGrantAt: string | null;
+  totals: {
+    totalUsers: number;
+    usersWithTrialBonus: number;
+    eligibleUsers: number;
+  };
+};
+
+export type TrialBalanceGrantSummary = {
+  checked: number;
+  granted: number;
+  skippedAlreadyGranted: number;
+  skippedBlocked: number;
+  skippedAdmin: number;
+  errors: Array<{ userId: string; message: string }>;
 };
 
 export type PaymentTransaction = {
@@ -455,6 +611,7 @@ export type Bootstrap = {
     defaultCommissionAmount: number;
     defaultMinTopUpAmount: number;
     yandexMapsEnabled: boolean;
+    vkIdEnabled: boolean;
     servicePositioning: string;
     medicalServicesForbidden: boolean;
   };

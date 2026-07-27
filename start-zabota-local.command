@@ -48,6 +48,9 @@ fi
 chmod 600 "$ENV_FILE"
 
 SEED_DEMO_DATA_VALUE="$(sed -n 's/^[[:space:]]*SEED_DEMO_DATA[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" | tail -n 1 | tr -d '\r')"
+# The local development image always includes frontend-only visual audit routes.
+# Production builds keep Dockerfile's safe default: false.
+VISUAL_AUDIT_ROUTES_VALUE="true"
 if [ "$SEED_DEMO_DATA_VALUE" != "true" ]; then
   env_value_is_set "PRODUCTION_ADMIN_EMAIL" || fail "В $ENV_FILE не заполнен PRODUCTION_ADMIN_EMAIL."
   env_value_is_set "PRODUCTION_ADMIN_PASSWORD" || fail "В $ENV_FILE не заполнен PRODUCTION_ADMIN_PASSWORD."
@@ -76,7 +79,11 @@ if lsof -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 
 echo "Собираю свежий Docker image $IMAGE_NAME из текущего кода..."
-docker build -t "$IMAGE_NAME" .
+echo "Локальные visual audit routes: $VISUAL_AUDIT_ROUTES_VALUE"
+docker build \
+  --build-arg VITE_ENABLE_VISUAL_AUDIT_ROUTES="$VISUAL_AUDIT_ROUTES_VALUE" \
+  -t "$IMAGE_NAME" \
+  .
 
 echo "Запускаю контейнер $CONTAINER_NAME на порту $PORT..."
 docker run -d \
@@ -120,11 +127,19 @@ docker ps --filter "name=^/${CONTAINER_NAME}$" --filter 'status=running' --forma
 curl -fsS "http://localhost:$PORT/api/health" >/dev/null || fail "Не отвечает /api/health."
 curl -fsS -o /dev/null "http://localhost:$PORT/" || fail "Не отвечает лендинг /."
 curl -fsS -o /dev/null "http://localhost:$PORT/app" || fail "Не отвечает приложение /app."
+if [ "$VISUAL_AUDIT_ROUTES_VALUE" = "true" ]; then
+  curl -fsS -o /dev/null "http://localhost:$PORT/app/audit/client" || fail "Не отвечает audit route Заказчика."
+  curl -fsS -o /dev/null "http://localhost:$PORT/app/audit/performer" || fail "Не отвечает audit route Помощника."
+  curl -fsS -o /dev/null "http://localhost:$PORT/app/audit/admin" || fail "Не отвечает audit route админки."
+fi
 
 echo ""
 echo "Локальный запуск выполнен успешно."
 echo "Лендинг: http://localhost:$PORT/"
 echo "Приложение: http://localhost:$PORT/app"
+if [ "$VISUAL_AUDIT_ROUTES_VALUE" = "true" ]; then
+  echo "Audit routes: http://localhost:$PORT/app/audit/client, /performer, /admin"
+fi
 
 if [ "$OPEN_BROWSER" = "true" ]; then
   open "http://localhost:$PORT/"

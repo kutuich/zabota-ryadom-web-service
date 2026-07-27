@@ -3,6 +3,7 @@ const statusLabels: Record<string, string> = {
   inactive: "Неактивен",
   archived: "Архив",
   blocked: "Заблокирован",
+  pending_archive: "Ожидает архивирования",
   draft: "Черновик",
   published: "Опубликована",
   waiting_for_responses: "Ждёт откликов",

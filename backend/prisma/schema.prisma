@@ -10,8 +10,19 @@ datasource db {
 model City {
   id                      String          @id @default(cuid())
   name                    String
+  normalizedName          String          @default("")
   slug                    String          @unique
+  type                    String          @default("city")
   region                  String
+  district                String?
+  municipalDistrict       String?
+  fiasId                  String?         @unique
+  garId                   String?         @unique
+  source                  String          @default("seed")
+  directoryStatus         String          @default("directory")
+  serviceStatus           String          @default("inactive")
+  activatedAt             DateTime?
+  activatedByUserId       String?
   status                  String          @default("active")
   isActive                Boolean         @default(true)
   defaultCommissionAmount Int             @default(50)
@@ -27,19 +38,25 @@ model City {
   createdAt               DateTime        @default(now())
   updatedAt               DateTime        @updatedAt
   users                   User[]
+  userCities              UserCity[]
+  activatedByUser         User?           @relation("CityActivatedBy", fields: [activatedByUserId], references: [id], onDelete: SetNull)
   requests                ClientRequest[]
 
   @@index([isActive])
+  @@index([normalizedName])
+  @@index([region])
+  @@index([directoryStatus, serviceStatus])
+  @@index([activatedByUserId])
 }
 
 model User {
   id                       String               @id @default(cuid())
   role                     String
   rolesJson                String               @default("[]")
-  phone                    String               @unique
+  phone                    String?              @unique
   normalizedPhone          String?              @unique
   email                    String?              @unique
-  passwordHash             String
+  passwordHash             String?
   displayName              String
   avatarUrl                String?
   cityId                   String?
@@ -53,9 +70,15 @@ model User {
   createdAt                DateTime             @default(now())
   updatedAt                DateTime             @updatedAt
   blockedAt                DateTime?
+  blockedByAdminId         String?
   blockReason              String?
+  archiveRequestedAt       DateTime?
+  archiveRequestedByAdminId String?
+  archiveReason            String?
   lastSeenAt               DateTime?
   archivedAt               DateTime?
+  archivedByAdminId        String?
+  archiveBlockedReason     String?
   city                     City?                @relation(fields: [cityId], references: [id])
   clientProfile            ClientProfile?
   performerProfile         PerformerProfile?
@@ -82,10 +105,51 @@ model User {
   adminConsentExports      ConsentExportLog[]   @relation("AdminConsentExports")
   userConsentExports       ConsentExportLog[]   @relation("UserConsentExports")
   performerDocuments       PerformerDocument[]
+  identities               UserIdentity[]
+  userCities               UserCity[]
+  activatedCities          City[]               @relation("CityActivatedBy")
 
   @@index([role])
   @@index([cityId])
   @@index([status])
+  @@index([blockedByAdminId])
+  @@index([archiveRequestedAt])
+  @@index([archivedAt])
+}
+
+model UserCity {
+  id        String   @id @default(cuid())
+  userId    String
+  cityId    String
+  roleScope String   @default("both")
+  isPrimary Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  city      City     @relation(fields: [cityId], references: [id])
+
+  @@unique([userId, cityId])
+  @@index([userId, isPrimary, isActive])
+  @@index([cityId, roleScope, isActive])
+}
+
+model UserIdentity {
+  id               String   @id @default(cuid())
+  userId           String
+  provider         String
+  providerUserId   String
+  email            String?
+  displayName      String?
+  avatarUrl        String?
+  rawProfileJson   String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+  @@index([provider])
 }
 
 model ClientProfile {
@@ -267,6 +331,22 @@ model Chat {
   status      String        @default("open")
   clientConfirmedAt DateTime?
   performerConfirmedAt DateTime?
+  agreedHelperAmount Int?
+  customerServiceFeeAmount Int?
+  helperServiceFeeAmount Int?
+  customerTotalAmount Int?
+  helperNetAmount Int?
+  agreedPackageId String?
+  agreedPackageTitle String?
+  agreedAddonsJson String?
+  agreedDurationMinutes Int?
+  agreedScheduledAt DateTime?
+  agreedTermsComment String?
+  agreedByCustomerAt DateTime?
+  agreedByHelperAt DateTime?
+  termsUpdatedAt DateTime?
+  termsUpdatedByUserId String?
+  agreementFinalizedAt DateTime?
   conditionsJson String?
   notAgreedAt DateTime?
   reopenedAt  DateTime?
@@ -305,6 +385,8 @@ model BalanceTransaction {
   id               String         @id @default(cuid())
   userId           String
   type             String
+  source           String?
+  idempotencyKey   String?        @unique
   amount           Int
   balanceKind      String
   reason           String
@@ -320,6 +402,7 @@ model BalanceTransaction {
   relatedRequest   ClientRequest? @relation(fields: [relatedRequestId], references: [id])
 
   @@index([userId, createdAt])
+  @@index([type])
   @@index([createdByAdminId])
 }
 
@@ -338,7 +421,7 @@ model PaymentTransaction {
   successUrl           String?
   failUrl              String?
   notificationUrl      String?
-  balanceTransactionId String?
+  balanceTransactionId String?  @unique
   rawInitRequestJson   String?
   rawInitResponseJson  String?
   rawWebhookJson       String?

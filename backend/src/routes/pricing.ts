@@ -9,6 +9,11 @@ export const pricingRouter = Router();
 
 const quoteSchema = z.object({
   categoryId: z.string().min(1),
+  packageId: z.string().optional(),
+  helperAmount: z.number().int().positive().optional(),
+  selectedAddonIds: z.array(z.string()).optional(),
+  addonQuantities: z.record(z.number().positive()).optional(),
+  addonAmounts: z.record(z.number().int().positive()).optional(),
   expectedDurationHours: z.number().positive().optional(),
   durationHours: z.number().positive().optional(),
   urgency: z.string().optional(),

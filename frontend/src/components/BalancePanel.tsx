@@ -121,6 +121,24 @@ export function BalancePanel() {
           </div>
         )}
       </section>
+      <section className="plain-section span-2">
+        <h2>История операций баланса</h2>
+        {!balance?.transactions.length ? (
+          <p className="empty-text">Операций пока нет.</p>
+        ) : (
+          <div className="transaction-list">
+            {balance.transactions.slice(0, 20).map((transaction) => (
+              <div className="transaction-row" key={transaction.id}>
+                <span>{formatDateTimeRu(transaction.createdAt)}</span>
+                <strong>{transaction.amount > 0 ? "+" : ""}{transaction.amount} ₽</strong>
+                <span>{transaction.balanceKind === "bonus" ? "Бонусный" : "Основной"}</span>
+                <span>{transaction.type === "trial_bonus" ? "Пробный баланс" : transaction.type}</span>
+                <small>{transaction.reason}</small>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
       <p className="privacy-note span-2">
         Доступно для заявок = основной баланс + бонусный баланс.
         После двойного подтверждения условий списывается сервисный сбор заказчика {balance?.clientServiceFeeAmount ?? 0} ₽

@@ -5,6 +5,7 @@ import { prisma } from "../db/prisma";
 import { writeAudit } from "../services/auditService";
 import { normalizeRussianPhone } from "../services/phoneService";
 import { asyncHandler, HttpError } from "../utils/http";
+import { linkUserCityTx } from "../services/settlementService";
 
 export const performerProfileRouter = Router();
 
@@ -65,6 +66,9 @@ performerProfileRouter.patch(
             cityId: input.cityId
           }
         });
+        if (input.cityId) {
+          await linkUserCityTx(tx, { userId: req.user!.id, cityId: input.cityId, roleScope: "helper", isPrimary: true });
+        }
       }
 
       const profile = await tx.performerProfile.upsert({

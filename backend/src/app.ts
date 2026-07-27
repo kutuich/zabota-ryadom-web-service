@@ -18,6 +18,8 @@ import { knowledgeRouter } from "./routes/knowledge";
 import { legalRouter } from "./routes/legal";
 import { publicRouter } from "./routes/public";
 import { requestsRouter } from "./routes/requests";
+import { settlementsRouter } from "./routes/settlements";
+import { meCitiesRouter } from "./routes/meCities";
 import { sendError } from "./utils/http";
 
 export function createApp() {
@@ -40,6 +42,8 @@ export function createApp() {
   });
 
   app.use("/api/public", publicRouter);
+  app.use("/api/settlements", settlementsRouter);
+  app.use("/api/me/cities", meCitiesRouter);
   app.use("/api/auth", authRouter);
   app.use("/api/requests", requestsRouter);
   app.use("/api/pricing", pricingRouter);

@@ -16,6 +16,8 @@ import type { Chat, ClientRequest, KnowledgeArticle, PricingQuote } from "../typ
 import { labelCriminalRecord, labelStatus, requestDisplayTitle } from "../utils/labels";
 import { chatPathForRole, clientNavigation, sectionTitleForPath } from "../routes/navigation";
 import { formatDateRu, formatTimeRu } from "../utils/dateTime";
+import { CityCombobox } from "../components/CityCombobox";
+import { UserCitiesPanel } from "../components/UserCitiesPanel";
 
 export function ClientDashboard() {
   const { bootstrap, user } = useAuth();
@@ -36,6 +38,8 @@ export function ClientDashboard() {
   const [editForm, setEditForm] = useState({
     contactName: user?.displayName ?? "",
     contactPhone: user?.phone ?? "",
+    packageId: "",
+    selectedAddonIds: [] as string[],
     helpFor: "",
     additionalActions: [] as string[],
     dependentState: [] as string[],
@@ -74,6 +78,8 @@ export function ClientDashboard() {
   const [form, setForm] = useState({
     contactName: user?.displayName ?? "",
     contactPhone: user?.phone ?? "",
+    packageId: "",
+    selectedAddonIds: [] as string[],
     helpFor: "",
     additionalActions: [] as string[],
     dependentState: [] as string[],
@@ -150,6 +156,8 @@ export function ClientDashboard() {
   }, [
     bootstrap?.categories,
     form.categoryId,
+    form.packageId,
+    form.selectedAddonIds,
     form.expectedDurationHours,
     form.scheduleType,
     form.additionalActions,
@@ -177,6 +185,8 @@ export function ClientDashboard() {
   }, [
     editingRequest,
     editForm.categoryId,
+    editForm.packageId,
+    editForm.selectedAddonIds,
     editForm.expectedDurationHours,
     editForm.scheduleType,
     editForm.additionalActions,
@@ -283,6 +293,8 @@ export function ClientDashboard() {
     setEditForm({
       contactName: request.contactName ?? user?.displayName ?? "",
       contactPhone: request.contactPhone ?? user?.phone ?? "",
+      packageId: pricingOptions.packageId || request.pricing?.packageId || "",
+      selectedAddonIds: pricingOptions.selectedAddonIds,
       helpFor: request.helpFor ?? "",
       additionalActions: additionalActions.filter((action) => additionalActionOptions.some((option) => option.value === action)),
       dependentState,
@@ -571,17 +583,10 @@ export function ClientDashboard() {
               </ul>
             </div>
           )}
-          <label>
-            Город
-            <select value={form.cityId} onChange={(event) => setForm({ ...form, cityId: event.target.value })}>
-              <option value="">Выберите город</option>
-              {bootstrap?.cities.map((city) => (
-                <option key={city.id} value={city.id}>
-                  {city.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <CityCombobox cities={bootstrap?.cities ?? []} value={form.cityId} onChange={(cityId) => setForm({ ...form, cityId })} label="Город Подопечного" />
+          {form.cityId && bootstrap?.cities.find((city) => city.id === form.cityId)?.serviceStatus !== "active" && (
+            <p className="notice">В этом городе пока может быть мало Помощников. Заявка будет доступна тем, кто зарегистрируется в этом городе.</p>
+          )}
           <label>
             Имя
             <input value={form.contactName} onChange={(event) => setForm({ ...form, contactName: event.target.value })} />
@@ -603,6 +608,16 @@ export function ClientDashboard() {
                 </option>
               ))}
             </select>
+          </label>
+          <label className="span-2">
+            Пакет помощи
+            <select value={form.packageId} onChange={(event) => setForm({ ...form, packageId: event.target.value })}>
+              <option value="">Подобрать по заявке</option>
+              {pricingPackageOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label} — {option.price}</option>
+              ))}
+            </select>
+            <small>Действия, которые входят в пакет и укладываются в согласованное время, отдельно не оплачиваются.</small>
           </label>
           <label>
             Кому нужна помощь
@@ -806,13 +821,13 @@ export function ClientDashboard() {
             />
           </label>
           <fieldset className="span-2 checkbox-grid">
-            <legend>Дополнительные условия времени</legend>
-            {urgencyFlagOptions.map((option) => (
+            <legend>Возможные доплаты</legend>
+            {pricingAddonOptions.map((option) => (
               <label className="checkbox-row" key={option.value}>
                 <input
                   type="checkbox"
-                  checked={form.urgencyFlags.includes(option.value)}
-                  onChange={() => setForm({ ...form, urgencyFlags: toggleValue(form.urgencyFlags, option.value) })}
+                  checked={form.selectedAddonIds.includes(option.value)}
+                  onChange={() => setForm({ ...form, selectedAddonIds: toggleValue(form.selectedAddonIds, option.value) })}
                 />
                 <span>{option.label}<small>{option.description}</small></span>
               </label>
@@ -825,11 +840,11 @@ export function ClientDashboard() {
               <details className="details-box">
                 <summary>Подробности расчёта</summary>
                 <ul>
-                  <li>Пакет визита: {quote.packageName}</li>
-                  <li>Почему выбран этот пакет: {quote.packageDescription}</li>
-                  <li>Рекомендуемая оплата помощнику: {quote.performerPaymentAmount} ₽</li>
+                  <li>Пакет помощи: {quote.packageTitle ?? quote.packageName}</li>
+                  <li>Описание: {quote.packageDescription}</li>
+                  <li>Диапазон стоимости помощи: {formatQuoteRange(quote.packagePriceMin, quote.packagePriceMax)}</li>
                   <li>Сервисный сбор заказчика: {quote.clientServiceFeeAmount} ₽</li>
-                  <li>Ориентировочные общие расходы: {quote.clientTotalExpense} ₽</li>
+                  <li>Итого расходы Заказчика: {formatQuoteRange(quote.customerTotalMin, quote.customerTotalMax)}</li>
                   <li>Расчётная длительность: {quote.billableHours} ч</li>
                   {quote.included.length > 0 && <li>Что входит: {quote.included.slice(0, 6).join(", ")}</li>}
                   {quote.excluded.length > 0 && <li>Что не входит: {quote.excluded.slice(0, 6).join(", ")}</li>}
@@ -907,6 +922,7 @@ export function ClientDashboard() {
             <h2>Профиль заказчика</h2>
             <p className="privacy-note">Редактирование профиля будет доступно позже.</p>
           </section>
+          <UserCitiesPanel />
           <ConsentDocumentsPanel />
         </section>
       )}
@@ -1020,15 +1036,7 @@ export function ClientDashboard() {
             ) : (
               <form className="form-grid" onSubmit={saveRequestEdit}>
                 <h3 className="form-section-title span-2">Кому и какая помощь нужна</h3>
-                <label>
-                  Город
-                  <select value={editForm.cityId} onChange={(event) => setEditForm({ ...editForm, cityId: event.target.value })}>
-                    <option value="">Выберите город</option>
-                    {bootstrap?.cities.map((city) => (
-                      <option key={city.id} value={city.id}>{city.name}</option>
-                    ))}
-                  </select>
-                </label>
+                <CityCombobox cities={bootstrap?.cities ?? []} value={editForm.cityId} onChange={(cityId) => setEditForm({ ...editForm, cityId })} label="Город Подопечного" />
                 <label>
                   Категория
                   <select value={editForm.categoryId} onChange={(event) => setEditForm({ ...editForm, categoryId: event.target.value })}>
@@ -1037,6 +1045,16 @@ export function ClientDashboard() {
                       <option key={category.id} value={category.id}>{category.name}</option>
                     ))}
                   </select>
+                </label>
+                <label className="span-2">
+                  Пакет помощи
+                  <select value={editForm.packageId} onChange={(event) => setEditForm({ ...editForm, packageId: event.target.value })}>
+                    <option value="">Подобрать по заявке</option>
+                    {pricingPackageOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label} — {option.price}</option>
+                    ))}
+                  </select>
+                  <small>Действия внутри выбранного пакета и согласованного времени не создают отдельную доплату.</small>
                 </label>
                 <label>
                   Кому нужна помощь
@@ -1210,13 +1228,13 @@ export function ClientDashboard() {
                   <input type="number" min={1} step={0.5} value={editForm.expectedDurationHours} onChange={(event) => setEditForm({ ...editForm, expectedDurationHours: Number(event.target.value) })} />
                 </label>
                 <fieldset className="span-2 checkbox-grid">
-                  <legend>Дополнительные условия времени</legend>
-                  {urgencyFlagOptions.map((option) => (
+                  <legend>Возможные доплаты</legend>
+                  {pricingAddonOptions.map((option) => (
                     <label className="checkbox-row" key={option.value}>
                       <input
                         type="checkbox"
-                        checked={editForm.urgencyFlags.includes(option.value)}
-                        onChange={() => setEditForm({ ...editForm, urgencyFlags: toggleValue(editForm.urgencyFlags, option.value) })}
+                        checked={editForm.selectedAddonIds.includes(option.value)}
+                        onChange={() => setEditForm({ ...editForm, selectedAddonIds: toggleValue(editForm.selectedAddonIds, option.value) })}
                       />
                       <span>{option.label}<small>{option.description}</small></span>
                     </label>
@@ -1249,9 +1267,9 @@ const additionalActionOptions = [
   { value: "laundry", label: "стирка", description: "Расширяет бытовой объём." },
   { value: "ironing", label: "глажка", description: "Расширяет бытовой объём." },
   { value: "bed_linen", label: "смена постельного", description: "Может повысить объём бытового визита." },
-  { value: "simple_cooking", label: "простая еда в рамках визита", description: "Добавляет 200 ₽ к оплате помощнику, если согласована дополнительно." },
-  { value: "full_cooking", label: "полноценная готовка", description: "Переводит заявку в формат готовки." },
-  { value: "food_help", label: "помощь с едой", description: "Влияет на уходовый формат." },
+  { value: "simple_cooking", label: "помощь с простой едой", description: "Если действие входит в пакет и укладывается во время, отдельной доплаты нет." },
+  { value: "full_cooking", label: "приготовление еды", description: "Объём и время согласуются до подтверждения заявки." },
+  { value: "food_help", label: "помощь с едой", description: "Может входить в бытовую помощь или присмотр." },
   { value: "clothes_help", label: "помощь с одеждой", description: "Влияет на уровень физической поддержки." },
   { value: "wash_help", label: "помощь умыться", description: "Лёгкая гигиена влияет на формат ухода." },
   { value: "toilet_help", label: "помощь с туалетом", description: "Поднимает уровень ухода." },
@@ -1262,7 +1280,26 @@ const additionalActionOptions = [
   { value: "walk", label: "прогулка", description: "Учитывается как сопровождение." },
   { value: "errands", label: "покупки / поручения", description: "Учитывается как поручение или сопровождение." },
   { value: "companionship", label: "присмотр и общение", description: "Влияет на длительный присмотр." },
-  { value: "hygiene", label: "бытовая гигиеническая помощь", description: "Повышает формат уходового визита." }
+  { value: "hygiene", label: "бытовая гигиеническая помощь", description: "Объём должен быть безопасным и заранее согласованным." }
+];
+
+const pricingPackageOptions = [
+  { value: "short_help", label: "Короткая помощь", price: "400–700 ₽" },
+  { value: "home_help_2h", label: "Бытовая помощь 2 часа", price: "700–1 100 ₽" },
+  { value: "supervision_2h", label: "Присмотр 2 часа", price: "700–1 200 ₽" },
+  { value: "accompaniment_standard", label: "Сопровождение стандарт", price: "800–1 500 ₽" },
+  { value: "help_3_4h", label: "Помощь 3–4 часа", price: "1 200–2 000 ₽" },
+  { value: "regular_help", label: "Регулярная помощь", price: "по согласованию, обычно от 700 ₽" }
+];
+
+const pricingAddonOptions = [
+  { value: "extra_hour", label: "Дополнительный час", description: "250–400 ₽/час" },
+  { value: "waiting", label: "Ожидание сверх согласованного", description: "200–300 ₽/час" },
+  { value: "second_address", label: "Второй адрес", description: "150–300 ₽" },
+  { value: "shopping", label: "Покупки как отдельное поручение", description: "200–400 ₽" },
+  { value: "simple_meal_extra", label: "Помощь с простой едой сверх пакета", description: "150–300 ₽" },
+  { value: "urgent", label: "Срочная заявка", description: "200–500 ₽" },
+  { value: "transport_expenses", label: "Транспорт / такси / парковка", description: "по факту расходов" }
 ];
 
 const hygieneLevelOptions = [
@@ -1280,17 +1317,10 @@ const physicalLevelOptions = [
 ];
 
 const taskVolumeOptions = [
-  { value: "minimal", label: "Минимальный объём, корректировка -150 ₽" },
+  { value: "minimal", label: "Минимальный объём" },
   { value: "basic", label: "Базовый объём" },
-  { value: "extended", label: "Расширенный объём, +150 ₽" },
-  { value: "manual", label: "Требуется ручная корректировка" }
-];
-
-const urgencyFlagOptions = [
-  { value: "urgent", label: "Срочно сегодня/завтра", description: "+200 ₽ к рекомендуемой оплате" },
-  { value: "evening", label: "Вечер после 18:00", description: "+200 ₽ к рекомендуемой оплате" },
-  { value: "weekend", label: "Выходной", description: "+200 ₽ к рекомендуемой оплате" },
-  { value: "holiday", label: "Праздник", description: "+400 ₽ к рекомендуемой оплате" }
+  { value: "extended", label: "Расширенный объём" },
+  { value: "manual", label: "Объём нужно уточнить в чате" }
 ];
 
 const dependentStateOptions = [
@@ -1312,6 +1342,8 @@ function toggleValue(values: string[], value: string) {
 
 function buildPricingPayload(form: {
   categoryId: string;
+  packageId: string;
+  selectedAddonIds: string[];
   expectedDurationHours: number | string;
   scheduleType: string;
   date?: string;
@@ -1330,6 +1362,8 @@ function buildPricingPayload(form: {
   const additionalActions = buildSavedActions(form);
   return {
     categoryId: form.categoryId,
+    packageId: form.packageId,
+    selectedAddonIds: form.selectedAddonIds,
     expectedDurationHours: Number(form.expectedDurationHours) || 1,
     durationHours: Number(form.expectedDurationHours) || 1,
     scheduleType: form.scheduleType,
@@ -1349,7 +1383,7 @@ function buildPricingPayload(form: {
     transportOption: form.transportOption,
     urgency: form.scheduleType === "urgent" ? "urgent" : form.scheduleType === "regular" ? "regular" : "normal",
     hasLimitedMobility: derivedHasLimitedMobility(form),
-    needsCooking: additionalActions.some((action) => ["simple_cooking", "full_cooking", "simpleMealWithinVisit", "simpleCookingVisit", "fullCookingVisit"].includes(action)),
+    needsCooking: additionalActions.some((action) => ["simple_cooking", "full_cooking"].includes(action)),
     needsCleaning: additionalActions.some((action) => ["light_cleaning", "laundry", "ironing", "bed_linen"].includes(action)),
     needsWalk: additionalActions.includes("walk") || additionalActions.includes("escort"),
     needsHygieneHelp: derivedNeedsHygiene(form),
@@ -1357,9 +1391,11 @@ function buildPricingPayload(form: {
   };
 }
 
-function buildSavedActions(form: { additionalActions: string[]; hygieneLevel?: string; physicalLoadLevel?: string; taskVolumeLevel?: string; transportOption?: string; urgencyFlags?: string[] }) {
+function buildSavedActions(form: { additionalActions: string[]; packageId?: string; selectedAddonIds?: string[]; hygieneLevel?: string; physicalLoadLevel?: string; taskVolumeLevel?: string; transportOption?: string; urgencyFlags?: string[] }) {
   return Array.from(new Set([
     ...form.additionalActions,
+    form.packageId ? `pricingPackage:${form.packageId}` : "",
+    ...(form.selectedAddonIds ?? []).map((id) => `pricingAddon:${id}`),
     form.hygieneLevel && form.hygieneLevel !== "none" ? form.hygieneLevel : "",
     form.physicalLoadLevel && form.physicalLoadLevel !== "none" ? form.physicalLoadLevel : "",
     form.taskVolumeLevel && form.taskVolumeLevel !== "basic" ? `taskVolume:${form.taskVolumeLevel}` : "",
@@ -1370,7 +1406,13 @@ function buildSavedActions(form: { additionalActions: string[]; hygieneLevel?: s
 
 function extractStoredPricingOptions(actions: string[], physicalHelpLevel?: string | null) {
   const taskVolume = actions.find((action) => action.startsWith("taskVolume:"))?.split(":")[1];
+  const storedPackage = actions.find((action) => action.startsWith("pricingPackage:"))?.split(":")[1];
   return {
+    packageId: pricingPackageOptions.some((option) => option.value === storedPackage) ? storedPackage! : "",
+    selectedAddonIds: actions
+      .filter((action) => action.startsWith("pricingAddon:"))
+      .map((action) => action.split(":")[1])
+      .filter((id) => pricingAddonOptions.some((option) => option.value === id)),
     hygieneLevel: actions.includes("hygieneIntimate") || actions.includes("washing") ? "hygieneIntimate"
       : actions.includes("hygieneHousehold") || actions.includes("hygiene") ? "hygieneHousehold"
         : actions.includes("hygieneLight") || actions.includes("wash_help") ? "hygieneLight"
@@ -1381,7 +1423,7 @@ function extractStoredPricingOptions(actions: string[], physicalHelpLevel?: stri
           : "none",
     taskVolumeLevel: taskVolume && taskVolumeOptions.some((option) => option.value === taskVolume) ? taskVolume : "basic",
     transportOption: actions.includes("transportSeparate") ? "separate" : "city",
-    urgencyFlags: actions.filter((action) => urgencyFlagOptions.some((option) => option.value === action))
+    urgencyFlags: []
   };
 }
 
@@ -1410,6 +1452,12 @@ function parseJsonArray(value?: string | null) {
   } catch {
     return [];
   }
+}
+
+function formatQuoteRange(min?: number, max?: number | null) {
+  if (min === undefined) return "по согласованию";
+  const format = (value: number) => new Intl.NumberFormat("ru-RU").format(value);
+  return max === null || max === undefined ? `от ${format(min)} ₽` : `${format(min)}–${format(max)} ₽`;
 }
 
 function extractCommentLine(comment: string | null | undefined, prefix: string) {

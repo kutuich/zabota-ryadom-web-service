@@ -1,22 +1,23 @@
-import { Archive, Ban, BookOpen, CheckCircle2, Coins, Download, RefreshCcw, Search, ShieldAlert, Trash2 } from "lucide-react";
+import { Archive, Ban, BookOpen, CheckCircle2, Coins, Download, RefreshCcw, Search, ShieldAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import { AdminPaymentsPage } from "./AdminPaymentsPage";
 import { Shell } from "../components/Shell";
 import { StatusBadge, statusTone } from "../components/StatusBadge";
 import { ChatPanel } from "../components/ChatPanel";
 import { EmptyState } from "../components/EmptyState";
 import { PriceSummary } from "../components/PriceSummary";
+import { AgreedTermsSummary } from "../components/AgreedTermsSummary";
 import { ResponsiveDataList } from "../components/ResponsiveDataList";
-import { useAuth } from "../context/AuthContext";
-import type { Chat, ClientRequest, KnowledgeArticle, LegalDocument, ServiceCategory, User, UserConsent, UserConsentStatus } from "../types";
+import type { Chat, City, ClientRequest, KnowledgeArticle, LegalDocument, ServiceCategory, TrialBalanceSettings, User, UserArchiveSafety, UserConsent, UserConsentStatus } from "../types";
 import { labelChildcare, labelCriminalRecord, labelSelfEmployed, labelStatus, labelTrust, requestDisplayTitle } from "../utils/labels";
 import { adminNavigation, chatPathForRole, sectionTitleForPath } from "../routes/navigation";
 import { downloadXlsx, downloadZip } from "../utils/xlsx";
 import { buildPublicAddressFromRequest, buildYandexExactAddressFromRequest, buildYandexMapsSearchUrl } from "../utils/address";
 import { formatDateRu, formatDateTimeRu, formatTimeRu } from "../utils/dateTime";
+import { useAuth } from "../context/AuthContext";
 
 const summaryLabels: Record<string, string> = {
   usersTotal: "Пользователей",
@@ -29,10 +30,16 @@ const summaryLabels: Record<string, string> = {
   riskFlagsTotal: "Риски"
 };
 
-const hiddenLegacySettingKeys = new Set(["performerCommissionAmount", "serviceCommissionAmount"]);
+const lockedServiceFeeSettingKeys = new Set([
+  "clientServiceFeeAmount",
+  "performerServiceFeeAmount",
+  "performerCommissionAmount",
+  "serviceCommissionAmount"
+]);
+const hiddenLegacySettingKeys = new Set(["trialBalanceSettings", ...lockedServiceFeeSettingKeys]);
 
 export function AdminDashboard() {
-  const { bootstrap } = useAuth();
+  const { startActing } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const activeTab = adminTabFromPath(location.pathname);
@@ -44,18 +51,27 @@ export function AdminDashboard() {
   const [complaints, setComplaints] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [settings, setSettings] = useState<any[]>([]);
+  const [trialBalanceSettings, setTrialBalanceSettings] = useState<TrialBalanceSettings>({
+    enabled: false,
+    amount: 100,
+    autoGrantNewUsers: false,
+    lastBulkGrantAt: null,
+    totals: { totalUsers: 0, usersWithTrialBonus: 0, eligibleUsers: 0 }
+  });
   const [settingDrafts, setSettingDrafts] = useState<Record<string, string>>({});
   const [knowledge, setKnowledge] = useState<KnowledgeArticle[]>([]);
   const [legalDocuments, setLegalDocuments] = useState<LegalDocument[]>([]);
   const [legalConsents, setLegalConsents] = useState<UserConsent[]>([]);
   const [legalExportLogs, setLegalExportLogs] = useState<any[]>([]);
   const [adminCategories, setAdminCategories] = useState<ServiceCategory[]>([]);
+  const [adminCities, setAdminCities] = useState<City[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chatSearch, setChatSearch] = useState("");
   const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
   const [cityInfoCityId, setCityInfoCityId] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [selectedUserLegalStatuses, setSelectedUserLegalStatuses] = useState<UserConsentStatus[]>([]);
+  const [selectedUserArchiveSafety, setSelectedUserArchiveSafety] = useState<UserArchiveSafety | null>(null);
   const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<{ request: ClientRequest; response: any } | null>(null);
   const [expandedBalanceUserId, setExpandedBalanceUserId] = useState<string | null>(null);
@@ -71,29 +87,42 @@ export function AdminDashboard() {
   });
   const categories = adminCategories;
 
+  async function openActingCabinet(role: "customer" | "helper") {
+    try {
+      const result = await startActing(role);
+      navigate(result.nextPath, { replace: true });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Не удалось открыть кабинет.");
+    }
+  }
+
   async function load() {
-    const [summaryRows, userRows, requestRows, chatRows, complaintRows, categoryRows, transactionRows, settingRows, knowledgeRows, legalDocumentRows, legalConsentRows, legalExportLogRows] = await Promise.all([
+    const [summaryRows, userRows, requestRows, chatRows, complaintRows, cityRows, categoryRows, transactionRows, settingRows, knowledgeRows, legalDocumentRows, legalConsentRows, legalExportLogRows, trialSettingsRows] = await Promise.all([
       api.adminSummary(),
       api.adminUsers(),
       api.adminRequests(),
       api.adminChats(),
       api.adminComplaints(),
+      api.adminCities(),
       api.adminCategories(),
       api.adminTransactions(),
       api.adminSettings(),
       api.adminKnowledge(),
       api.adminLegalDocuments(),
       api.adminLegalConsents(),
-      api.adminLegalExportLogs()
+      api.adminLegalExportLogs(),
+      api.getTrialBalanceSettings()
     ]);
     setSummary(summaryRows);
     setUsers(userRows);
     setRequests(requestRows);
     setChats(chatRows);
     setComplaints(complaintRows);
+    setAdminCities(cityRows);
     setAdminCategories(categoryRows);
     setTransactions(transactionRows);
     setSettings(settingRows);
+    setTrialBalanceSettings(trialSettingsRows);
     setSettingDrafts(Object.fromEntries((settingRows as any[]).map((setting) => [setting.key, setting.valueJson])));
     setKnowledge(knowledgeRows);
     setLegalDocuments(legalDocumentRows);
@@ -112,11 +141,11 @@ export function AdminDashboard() {
 
   const clients = useMemo(() => users.filter((user) => user.role === "client"), [users]);
   const performers = useMemo(() => users.filter((user) => user.role === "performer"), [users]);
-  const selectedCity = bootstrap?.cities.find((city) => city.id === cityInfoCityId) ?? null;
+  const selectedCity = adminCities.find((city) => city.id === cityInfoCityId) ?? null;
   const selectedCityRequests = cityInfoCityId ? requests.filter((request) => request.cityId === cityInfoCityId) : [];
   const selectedCityResponses = selectedCityRequests.flatMap((request) => (request.responses ?? []).map((response: any) => ({ request, response })));
-  const selectedCityClients = cityInfoCityId ? users.filter((user) => user.cityId === cityInfoCityId && user.role === "client") : [];
-  const selectedCityPerformers = cityInfoCityId ? users.filter((user) => user.cityId === cityInfoCityId && user.role === "performer") : [];
+  const selectedCityClients = cityInfoCityId ? users.filter((user) => userHasCity(user, cityInfoCityId) && user.role === "client") : [];
+  const selectedCityPerformers = cityInfoCityId ? users.filter((user) => userHasCity(user, cityInfoCityId) && user.role === "performer") : [];
   const sortedChats = useMemo(() => [...chats].sort((left, right) => {
     const leftNumber = left.request?.publicNumber ?? "";
     const rightNumber = right.request?.publicNumber ?? "";
@@ -142,32 +171,57 @@ export function AdminDashboard() {
   }), [knowledge]);
 
   async function block(userId: string) {
-    await api.adminBlockUser(userId, "Ручная блокировка администратором");
+    const reason = window.prompt("Укажите причину блокировки:", "Ручная блокировка администратором");
+    if (!reason?.trim()) return;
+    await api.adminBlockUser(userId, reason.trim());
+    setNotice("Пользователь заблокирован. История заявок, платежей, баланса и согласий сохранена.");
     await load();
   }
 
   async function unblock(userId: string) {
     await api.adminUnblockUser(userId);
+    setNotice("Пользователь разблокирован.");
     await load();
   }
 
-  async function deleteUser(user: User) {
-    const confirmed = window.confirm(
-      `Удалить пользователя ${user.displayName} полностью из базы данных?\n\n` +
-      "Будут удалены связанные заявки, отклики, чаты, обращения и операции. Восстановление возможно только новой регистрацией."
-    );
-    if (!confirmed) return;
-    const result = await api.adminDeleteUser(user.id);
-    setSelectedUser(null);
-    setNotice(`Пользователь удалён. Удалено заявок: ${result.removedRequests ?? 0}, чатов: ${result.removedChats ?? 0}.`);
+  async function requestArchive(user: User) {
+    const reason = window.prompt("Укажите причину запроса на архивирование:");
+    if (!reason?.trim()) return;
+    const result = await api.adminRequestUserArchive(user.id, reason.trim());
+    setSelectedUser(result.user);
+    setSelectedUserArchiveSafety(result.safety);
+    setNotice("Профиль помечен как ожидающий архивирования. Вся история сохранена.");
     await load();
+  }
+
+  async function archiveUser(user: User) {
+    if (!window.confirm(`Проверить и архивировать профиль ${user.displayName}?`)) return;
+    const reason = window.prompt("Укажите итоговую причину архивирования:", user.archiveReason ?? "");
+    if (!reason?.trim()) return;
+    try {
+      const result = await api.adminArchiveUser(user.id, reason.trim());
+      setSelectedUser(result.user);
+      setSelectedUserArchiveSafety(result.safety);
+      setNotice("Профиль архивирован. Финансовая, юридическая и операционная история сохранена.");
+      await load();
+    } catch (error) {
+      const safety = error instanceof ApiError ? error.details as UserArchiveSafety | undefined : undefined;
+      if (safety) setSelectedUserArchiveSafety(safety);
+      setNotice(error instanceof Error ? error.message : "Архивирование сейчас недоступно.");
+    }
   }
 
   async function openUserProfile(user: User) {
     setSelectedUser(user);
     setSelectedUserLegalStatuses([]);
+    setSelectedUserArchiveSafety(null);
     try {
-      setSelectedUserLegalStatuses(await api.adminUserLegalConsents(user.id));
+      const [legalStatuses, safety] = await Promise.all([
+        api.adminUserLegalConsents(user.id),
+        api.adminUserArchiveSafety(user.id)
+      ]);
+      setSelectedUserLegalStatuses(legalStatuses);
+      setSelectedUserArchiveSafety(safety);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Не удалось загрузить юридические согласия пользователя.");
     }
@@ -225,9 +279,43 @@ export function AdminDashboard() {
     await load();
   }
 
+  async function updateCityConnection(city: City, isActive: boolean) {
+    const updated = await api.adminUpdateCity(city.id, {
+      serviceStatus: isActive ? "active" : "inactive",
+      status: isActive ? "active" : "inactive"
+    });
+    setAdminCities((current) => current.map((item) => item.id === updated.id ? updated : item));
+    setNotice(`${updated.name}: сервис ${isActive ? "активирован" : "деактивирован"}.`);
+  }
+
   async function saveSettings() {
-    await Promise.all(settings.map((setting: any) => api.adminUpdateSetting(setting.key, settingDrafts[setting.key] ?? setting.valueJson)));
+    const editableSettings = settings.filter((setting: any) => !hiddenLegacySettingKeys.has(setting.key));
+    await Promise.all(editableSettings.map((setting: any) => api.adminUpdateSetting(setting.key, settingDrafts[setting.key] ?? setting.valueJson)));
     setNotice("Настройки сервиса сохранены и записаны в audit log.");
+    await load();
+  }
+
+  async function saveTrialBalanceSettings() {
+    const updated = await api.updateTrialBalanceSettings({
+      enabled: trialBalanceSettings.enabled,
+      amount: 100,
+      autoGrantNewUsers: trialBalanceSettings.autoGrantNewUsers
+    });
+    setTrialBalanceSettings(updated);
+    setNotice("Настройки пробного периода сохранены.");
+  }
+
+  async function grantTrialBalanceToAll() {
+    const confirmed = window.confirm(
+      "Начисление необратимо. Пользователи, которые уже получали пробный баланс, не получат его повторно."
+    );
+    if (!confirmed) return;
+    const summary = await api.grantTrialBalanceToAll();
+    setNotice(
+      `Проверено: ${summary.checked}. Начислено: ${summary.granted}. ` +
+      `Уже получали: ${summary.skippedAlreadyGranted}. ` +
+      `Пропущено: ${summary.skippedBlocked + summary.skippedAdmin}. Ошибок: ${summary.errors.length}.`
+    );
     await load();
   }
 
@@ -292,6 +380,7 @@ export function AdminDashboard() {
         ...requests.flatMap((request) => (request.responses ?? []).map((response: any) => {
           const pricing = request.pricing ?? parseJsonObject(request.pricingBreakdownJson);
           const chat = chats.find((item) => item.requestId === request.id && item.performerId === response.performerId) ?? request.chat;
+          const agreedTerms = chat?.agreedTerms;
           return [
             request.publicNumber ?? "",
             request.city?.name ?? "",
@@ -302,9 +391,9 @@ export function AdminDashboard() {
             formatDateTimeRu(response.createdAt),
             chat ? "да" : "нет",
             chat ? labelStatus(chat.status) : "",
-            pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0,
-            pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0,
-            pricing?.performerNetAmount ?? Math.max(0, (pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0) - (pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0))
+            agreedTerms?.agreedHelperAmount ?? pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0,
+            agreedTerms?.helperServiceFeeAmount ?? pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0,
+            agreedTerms?.helperNetAmount ?? pricing?.performerNetAmount ?? Math.max(0, (pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0) - (pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0))
           ];
         }))
       ]
@@ -315,7 +404,7 @@ export function AdminDashboard() {
     if (!selectedCity) return;
     const cityRequests = requests.filter((request) => request.cityId === selectedCity.id);
     const cityResponses = cityRequests.flatMap((request) => (request.responses ?? []).map((response: any) => ({ request, response })));
-    const cityUsers = users.filter((user) => user.cityId === selectedCity.id);
+    const cityUsers = users.filter((user) => userHasCity(user, selectedCity.id));
     downloadXlsx(`zabota-city-${safeFileName(selectedCity.name)}-${dateStamp()}.xlsx`, [
       {
         name: "Сводка",
@@ -426,23 +515,33 @@ export function AdminDashboard() {
     const cityResponses = cityRequests.flatMap((request) => request.responses ?? []);
     const cityChats = chats.filter((chat) => chat.request?.cityId === cityId);
     const cityComplaints = complaints.filter((complaint) => complaint.request?.cityId === cityId);
-    const cityUsers = users.filter((user) => user.cityId === cityId);
+    const cityUsers = users.filter((user) => userHasCity(user, cityId));
     const totals = cityRequests.reduce((sum, request) => {
       const pricing = request.pricing ?? parseJsonObject(request.pricingBreakdownJson);
+      const agreedTerms = requestAgreedTerms(request);
       return {
-        helperPayments: sum.helperPayments + Number(pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0),
-        customerFees: sum.customerFees + Number(pricing?.clientServiceFeeAmount ?? 0),
-        helperFees: sum.helperFees + Number(pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0)
+        helperPayments: sum.helperPayments + Number(agreedTerms?.agreedHelperAmount ?? pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0),
+        customerFees: sum.customerFees + Number(agreedTerms?.customerServiceFeeAmount ?? pricing?.clientServiceFeeAmount ?? 0),
+        helperFees: sum.helperFees + Number(agreedTerms?.helperServiceFeeAmount ?? pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0)
       };
     }, { helperPayments: 0, customerFees: 0, helperFees: 0 });
-    const city = bootstrap?.cities.find((city) => city.id === cityId);
+    const city = adminCities.find((city) => city.id === cityId);
     return [
       ["Город", city?.name ?? ""],
       ["Регион", city?.region ?? ""],
       ["Часовой пояс", city?.timezone ?? ""],
       ["Тарифная зона", city?.pricingZone ?? ""],
       ["Пояснение", "Используется для будущих отдельных тарифов и расчётов по городам."],
-      ["Активен", city?.isActive ? "Да" : "Нет"],
+      ["Статус справочника", city?.directoryStatus ?? ""],
+      ["Статус сервиса", city?.serviceStatus === "active" ? "Активен" : "Неактивен"],
+      ["Источник", city?.source ?? ""],
+      ["Тип", city?.type ?? ""],
+      ["Район", city?.district ?? ""],
+      ["Требует проверки", city?.needsReview ? "Да" : "Нет"],
+      ["Дата активации", city?.activatedAt ? formatDateRu(city.activatedAt) : ""],
+      ["Заказчиков по связям", city?.customerCount ?? cityUsers.filter((user) => user.role === "client").length],
+      ["Помощников по связям", city?.helperCount ?? cityUsers.filter((user) => user.role === "performer").length],
+      ["Заявок по данным API", city?.requestCount ?? cityRequests.length],
       ["Порядок сортировки", city?.sortOrder ?? ""],
       ["Количество заявок", cityRequests.length],
       ["Количество активных заявок", cityRequests.filter((request) => !["completed", "cancelled", "archived"].includes(request.status)).length],
@@ -463,31 +562,44 @@ export function AdminDashboard() {
       {notice && <p className="notice">{notice}</p>}
 
       {activeTab === "Главная" && (
-        <section className="panel-grid">
-          {Object.entries(summary).map(([key, value]) => (
-            <div className="metric" key={key}>
-              <ShieldAlert size={20} />
-              <span>{summaryLabels[key] ?? key}</span>
-              <strong>{value}</strong>
+        <div className="list">
+          <section className="plain-section">
+            <h2>Быстрый вход в кабинеты</h2>
+            <p>Этот режим нужен для проверки пользовательских сценариев и ручного сопровождения заявок. Все действия сохраняются в журнале как действия администратора.</p>
+            <div className="trust-row">
+              <button className="primary-button" type="button" onClick={() => openActingCabinet("customer")}>Открыть кабинет Заказчика</button>
+              <button className="secondary-button" type="button" onClick={() => openActingCabinet("helper")}>Открыть кабинет Помощника</button>
             </div>
-          ))}
-          <button className="secondary-button" type="button" onClick={load}>
-            <RefreshCcw size={18} />
-            Обновить
-          </button>
-        </section>
+          </section>
+          <section className="panel-grid">
+            {Object.entries(summary).map(([key, value]) => (
+              <div className="metric" key={key}>
+                <ShieldAlert size={20} />
+                <span>{summaryLabels[key] ?? key}</span>
+                <strong>{value}</strong>
+              </div>
+            ))}
+            <button className="secondary-button" type="button" onClick={load}>
+              <RefreshCcw size={18} />
+              Обновить
+            </button>
+          </section>
+        </div>
       )}
 
       {activeTab === "Города" && (
         <section className="plain-section">
-          <h2>Города</h2>
+          <h2>Города / Населённые пункты</h2>
+          <p className="notice">Города из VK-аналитики используются только как ориентир спроса и не активируют сервис автоматически.</p>
           <div className="form-inline">
             <label>
               Выберите город
               <select value={selectedCityId ?? ""} onChange={(event) => setSelectedCityId(event.target.value || null)}>
                 <option value="">Город не выбран</option>
-                {bootstrap?.cities.map((city) => (
-                  <option key={city.id} value={city.id}>{city.name}</option>
+                {adminCities.map((city) => (
+                  <option key={city.id} value={city.id}>
+                    {city.name} — {city.serviceStatus === "active" ? "активен" : "неактивен"}{city.needsReview ? " · нужна проверка" : ""}
+                  </option>
                 ))}
               </select>
             </label>
@@ -509,6 +621,41 @@ export function AdminDashboard() {
                     Экспорт по городу в Excel
                   </button>
                 </div>
+                <div className="city-connection-control">
+                  <span>Доступность города при регистрации</span>
+                  <div className="boolean-toggle" role="group" aria-label={`Доступность города ${selectedCity.name}`}>
+                    <button
+                      type="button"
+                      className={selectedCity.serviceStatus === "active" ? "choice choice--active" : "choice"}
+                      aria-pressed={selectedCity.serviceStatus === "active"}
+                      onClick={() => updateCityConnection(selectedCity, true)}
+                    >
+                      Активен
+                    </button>
+                    <button
+                      type="button"
+                      className={selectedCity.serviceStatus !== "active" ? "choice choice--active" : "choice"}
+                      aria-pressed={selectedCity.serviceStatus !== "active"}
+                      onClick={() => updateCityConnection(selectedCity, false)}
+                    >
+                      Неактивен
+                    </button>
+                  </div>
+                </div>
+                {selectedCity.directoryStatus === "needs_review" && (
+                  <div className="section-actions">
+                    <button className="primary-button" type="button" onClick={async () => {
+                      const updated = await api.adminUpdateCity(selectedCity.id, { directoryStatus: "verified", source: "admin" });
+                      setAdminCities((current) => current.map((item) => item.id === updated.id ? updated : item));
+                      setNotice("Населённый пункт подтверждён администратором.");
+                    }}>Подтвердить населённый пункт</button>
+                    <button className="secondary-button" type="button" onClick={async () => {
+                      const updated = await api.adminUpdateCity(selectedCity.id, { directoryStatus: "hidden", isActive: false });
+                      setAdminCities((current) => current.map((item) => item.id === updated.id ? updated : item));
+                      setNotice("Населённый пункт скрыт.");
+                    }}>Скрыть ошибочный вариант</button>
+                  </div>
+                )}
                 <div className="detail-grid">
                   {citySummaryRows(selectedCity.id).map(([label, value]) => (
                     <div className="detail-grid__row" key={String(label)}>
@@ -525,6 +672,7 @@ export function AdminDashboard() {
                 </div>
                 {selectedCityRequests.slice(0, 12).map((request) => {
                   const pricing = request.pricing ?? parseJsonObject(request.pricingBreakdownJson);
+                  const agreedTerms = requestAgreedTerms(request);
                   return (
                     <button className="data-row data-row--button" type="button" key={request.id} onClick={() => setSelectedRequest(request)}>
                       <strong>{request.publicNumber} — {request.title}</strong>
@@ -532,7 +680,7 @@ export function AdminDashboard() {
                       <span>{request.category?.name ?? "категория не указана"}</span>
                       <span>{(request as any).client?.displayName ?? "не указан"}</span>
                       <span>{(request as any).selectedPerformer?.displayName ?? "не выбран"}</span>
-                      <span>{pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0} ₽</span>
+                      <span>{agreedTerms?.agreedHelperAmount ?? pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0} ₽</span>
                       <span>{request.date ? formatDateRu(request.date) : "не указана"}</span>
                     </button>
                   );
@@ -584,8 +732,8 @@ export function AdminDashboard() {
         </section>
       )}
 
-      {activeTab === "Пользователи" && <UsersTable users={users} onBlock={block} onUnblock={unblock} onSelect={openUserProfile} onDelete={deleteUser} />}
-      {activeTab === "Заказчики" && <UsersTable users={clients} onBlock={block} onUnblock={unblock} onSelect={openUserProfile} onDelete={deleteUser} />}
+      {activeTab === "Пользователи" && <UsersTable users={users} onBlock={block} onUnblock={unblock} onRequestArchive={requestArchive} onArchive={archiveUser} onSelect={openUserProfile} />}
+      {activeTab === "Заказчики" && <UsersTable users={clients} onBlock={block} onUnblock={unblock} onRequestArchive={requestArchive} onArchive={archiveUser} onSelect={openUserProfile} />}
 
       {activeTab === "Помощники" && (
         <div className="data-table">
@@ -639,7 +787,7 @@ export function AdminDashboard() {
                 <span>{request.city?.name}</span>
                 <span>{request.category?.name}</span>
                 <StatusBadge tone={statusTone(request.status)}>{labelStatus(request.status)}</StatusBadge>
-                <span>Рекомендовано: {request.priceEstimateAmount ?? request.budgetAmount ?? 0} ₽</span>
+                <span>{requestAgreedTerms(request) ? "Согласовано" : "Рекомендовано"}: {requestAgreedTerms(request)?.agreedHelperAmount ?? request.priceEstimateAmount ?? request.budgetAmount ?? 0} ₽</span>
                 <span className="right-note">Заказчик: {(request as any).client?.displayName ?? "не указан"}</span>
               </div>
             ))}
@@ -812,11 +960,12 @@ export function AdminDashboard() {
 
       {activeTab === "Блокировки" && (
         <UsersTable
-          users={users.filter((user) => user.status === "blocked")}
+          users={users.filter((user) => ["blocked", "pending_archive"].includes(user.status))}
           onBlock={block}
           onUnblock={unblock}
+          onRequestArchive={requestArchive}
+          onArchive={archiveUser}
           onSelect={openUserProfile}
-          onDelete={deleteUser}
         />
       )}
 
@@ -858,6 +1007,76 @@ export function AdminDashboard() {
       {activeTab === "Настройки сервиса" && (
         <section className="plain-section">
           <h2>Настройки сервиса</h2>
+          <section className="trial-balance-settings">
+            <h3>Сервисный сбор</h3>
+            <div className="data-table">
+              <div className="data-row"><strong>Заказчик</strong><span>50 ₽</span></div>
+              <div className="data-row"><strong>Помощник</strong><span>50 ₽</span></div>
+            </div>
+            <p>Изменение сервисного сбора временно недоступно.</p>
+          </section>
+          <section className="trial-balance-settings">
+            <h3>Пробный период</h3>
+            <p>
+              Пробный баланс помогает новым пользователям познакомиться с сервисом без первого пополнения. Начисление выполняется один раз на пользователя.
+            </p>
+            <div className="data-table">
+              <div className="data-row">
+                <strong>Пробный период включён</strong>
+                <div className="boolean-toggle" role="group" aria-label="Пробный период включён">
+                  {[true, false].map((value) => (
+                    <button
+                      key={String(value)}
+                      type="button"
+                      className={trialBalanceSettings.enabled === value ? "choice choice--active" : "choice"}
+                      onClick={() => setTrialBalanceSettings((current) => ({ ...current, enabled: value }))}
+                    >
+                      {value ? "Да" : "Нет"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="data-row">
+                <strong>Сумма пробного баланса</strong>
+                <span>100 ₽</span>
+              </div>
+              <div className="data-row">
+                <strong>Начислять новым пользователям</strong>
+                <div className="boolean-toggle" role="group" aria-label="Начислять новым пользователям">
+                  {[true, false].map((value) => (
+                    <button
+                      key={String(value)}
+                      type="button"
+                      className={trialBalanceSettings.autoGrantNewUsers === value ? "choice choice--active" : "choice"}
+                      onClick={() => setTrialBalanceSettings((current) => ({ ...current, autoGrantNewUsers: value }))}
+                    >
+                      {value ? "Да" : "Нет"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <p>
+              Пользователей: {trialBalanceSettings.totals.totalUsers}. Уже получили: {trialBalanceSettings.totals.usersWithTrialBonus}. Подходят для начисления: {trialBalanceSettings.totals.eligibleUsers}.
+            </p>
+            {trialBalanceSettings.lastBulkGrantAt && (
+              <p>Последнее массовое начисление: {formatDateTimeRu(trialBalanceSettings.lastBulkGrantAt)}</p>
+            )}
+            <div className="button-row">
+              <button className="primary-button" type="button" onClick={saveTrialBalanceSettings}>
+                Сохранить настройки
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={!trialBalanceSettings.enabled}
+                onClick={grantTrialBalanceToAll}
+              >
+                <Coins size={18} />
+                Начислить 100 ₽ всем подходящим пользователям
+              </button>
+            </div>
+          </section>
           <div className="data-table">
             {settings.filter((setting: any) => !hiddenLegacySettingKeys.has(setting.key)).map((setting: any) => (
               <div className="data-row" key={setting.key}>
@@ -947,7 +1166,7 @@ export function AdminDashboard() {
 
       {selectedUser && (
         <Modal title={`Профиль пользователя: ${selectedUser.displayName}`} onClose={() => setSelectedUser(null)}>
-          <UserProfile user={selectedUser} legalStatuses={selectedUserLegalStatuses} />
+          <UserProfile user={selectedUser} legalStatuses={selectedUserLegalStatuses} archiveSafety={selectedUserArchiveSafety} />
           <div className="trust-row">
             <button className="secondary-button" type="button" onClick={() => exportUserConsents(selectedUser)}>
               <Download size={18} />
@@ -957,10 +1176,18 @@ export function AdminDashboard() {
               <Archive size={18} />
               Скачать полный legal-архив пользователя ZIP
             </button>
-            <button className="secondary-button" type="button" onClick={() => deleteUser(selectedUser)}>
-              <Trash2 size={18} />
-              Удалить пользователя
-            </button>
+            {selectedUser.status !== "archived" && selectedUser.status !== "pending_archive" && (
+              <button className="secondary-button" type="button" onClick={() => requestArchive(selectedUser)}>
+                <Archive size={18} />
+                Запросить архивирование
+              </button>
+            )}
+            {selectedUser.status === "pending_archive" && (
+              <button className="secondary-button" type="button" disabled={!selectedUserArchiveSafety?.canArchive} onClick={() => archiveUser(selectedUser)}>
+                <Archive size={18} />
+                Архивировать
+              </button>
+            )}
           </div>
         </Modal>
       )}
@@ -1236,14 +1463,16 @@ function UsersTable({
   users,
   onBlock,
   onUnblock,
-  onSelect,
-  onDelete
+  onRequestArchive,
+  onArchive,
+  onSelect
 }: {
   users: User[];
   onBlock: (userId: string) => void;
   onUnblock: (userId: string) => void;
+  onRequestArchive: (user: User) => void;
+  onArchive: (user: User) => void;
   onSelect: (user: User) => void;
-  onDelete: (user: User) => void;
 }) {
   return (
     <ResponsiveDataList>
@@ -1256,20 +1485,27 @@ function UsersTable({
           <span>{user.city?.name ?? "город не выбран"}</span>
           <span>{user.balance + user.bonusBalance} ₽</span>
           <StatusBadge tone={statusTone(user.status)}>{labelStatus(user.status)}</StatusBadge>
-          {user.status === "blocked" ? (
+          {["blocked", "pending_archive"].includes(user.status) ? (
             <button className="secondary-button" type="button" onClick={() => onUnblock(user.id)}>
               Разблокировать
             </button>
-          ) : (
+          ) : user.status !== "archived" ? (
             <button className="secondary-button" type="button" onClick={() => onBlock(user.id)}>
               <Ban size={18} />
-              Блокировать
+              Заблокировать
             </button>
-          )}
-          <button className="secondary-button" type="button" onClick={() => onDelete(user)}>
-            <Trash2 size={18} />
-            Удалить
-          </button>
+          ) : null}
+          {user.status === "pending_archive" ? (
+            <button className="secondary-button" type="button" onClick={() => onArchive(user)}>
+              <Archive size={18} />
+              Проверить архив
+            </button>
+          ) : user.status !== "archived" ? (
+            <button className="secondary-button" type="button" onClick={() => onRequestArchive(user)}>
+              <Archive size={18} />
+              В ожидание архива
+            </button>
+          ) : null}
         </div>
       ))}
     </ResponsiveDataList>
@@ -1290,17 +1526,27 @@ function Modal({ title, children, onClose }: { title: string; children: ReactNod
   );
 }
 
-function UserProfile({ user, legalStatuses }: { user: User; legalStatuses: UserConsentStatus[] }) {
+function UserProfile({ user, legalStatuses, archiveSafety }: { user: User; legalStatuses: UserConsentStatus[]; archiveSafety: UserArchiveSafety | null }) {
   return (
     <div className="list">
       <div className="detail-grid">
         <span>Роль</span><strong>{userRoleLabel(user.role)}</strong>
-        <span>Телефон</span><strong>{user.phone}</strong>
+        <span>Телефон</span><strong>{user.phone ?? "не указан"}</strong>
         <span>Email</span><strong>{user.email ?? "не указан"}</strong>
         <span>Город</span><strong>{user.city?.name ?? "не выбран"}</strong>
         <span>Статус</span><strong>{labelStatus(user.status)}</strong>
         <span>Основной баланс</span><strong>{user.balance} ₽</strong>
         <span>Бонусный баланс</span><strong>{user.bonusBalance} ₽</strong>
+        <span>Заблокирован</span><strong>{user.blockedAt ? formatDateTimeRu(user.blockedAt) : "нет"}</strong>
+        <span>Причина блокировки</span><strong>{user.blockReason ?? "нет"}</strong>
+        <span>Запрос архива</span><strong>{user.archiveRequestedAt ? formatDateTimeRu(user.archiveRequestedAt) : "нет"}</strong>
+        <span>Архивирован</span><strong>{user.archivedAt ? formatDateTimeRu(user.archivedAt) : "нет"}</strong>
+        <span>Способ входа</span><strong>{user.identities?.some((identity) => identity.provider === "vk") ? "VK" : "Телефон или email"}</strong>
+        {user.identities?.filter((identity) => identity.provider === "vk").map((identity) => (
+          <div className="detail-grid__full" key={identity.id}>
+            <span>VK: {identity.displayName ?? "имя не указано"}; привязан {formatDateTimeRu(identity.createdAt)}</span>
+          </div>
+        ))}
         {user.clientProfile && <>
           <span>Рейтинг заказчика</span><strong>{user.clientProfile.rating}</strong>
           <span>Выполненных заявок</span><strong>{user.clientProfile.completedRequestsCount}</strong>
@@ -1314,6 +1560,16 @@ function UserProfile({ user, legalStatuses }: { user: User; legalStatuses: UserC
           <span>Навыки</span><strong>{formatJsonList(user.performerProfile.skills)}</strong>
         </>}
       </div>
+      {archiveSafety && (
+        <section className="plain-section">
+          <h3>Проверка архивирования</h3>
+          <p>{archiveSafety.canArchive ? "Архивирование разрешено." : "Архивирование сейчас запрещено."}</p>
+          <p>Основной баланс: {archiveSafety.balance} ₽. Бонусный: {archiveSafety.bonusBalance} ₽.</p>
+          {archiveSafety.reasons.length > 0 && (
+            <ul>{archiveSafety.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+          )}
+        </section>
+      )}
       <section className="plain-section">
         <h3>Юридические согласия</h3>
         <p className="privacy-note">Возможные статусы: Принято, Требуется, Требуется новая версия.</p>
@@ -1343,6 +1599,7 @@ function UserProfile({ user, legalStatuses }: { user: User; legalStatuses: UserC
 
 function RequestDetails({ request }: { request: ClientRequest }) {
   const pricing = request.pricing ?? parseJsonObject(request.pricingBreakdownJson);
+  const agreedTerms = request.chat?.agreedTerms ?? null;
   const builtPublicAddress = buildPublicAddressFromRequest(request);
   const publicMapAddress = request.yandexPublicMapAddress || builtPublicAddress || request.publicAddress || "";
   const exactMapAddress = request.yandexExactMapAddress || buildYandexExactAddressFromRequest(request);
@@ -1370,7 +1627,9 @@ function RequestDetails({ request }: { request: ClientRequest }) {
         <span>Описание</span><strong>{request.description}</strong>
         <span>Отклики</span><strong>{request.responses?.length ?? 0}</strong>
       </div>
-      <PriceSummary pricing={pricing} fallbackPayment={request.priceEstimateAmount} role="admin" />
+      {agreedTerms
+        ? <AgreedTermsSummary terms={agreedTerms} />
+        : <PriceSummary pricing={pricing} fallbackPayment={request.priceEstimateAmount} role="admin" />}
     </div>
   );
 }
@@ -1409,6 +1668,10 @@ function MatchDetails({ request, response }: { request: ClientRequest; response:
       </table>
     </div>
   );
+}
+
+function userHasCity(user: User, cityId: string) {
+  return user.cityId === cityId || Boolean(user.userCities?.some((row) => row.isActive && row.cityId === cityId));
 }
 
 function parseJsonObject(value?: string | null): any {
@@ -1451,9 +1714,10 @@ function requestExportHeader() {
 
 function requestExportRow(request: ClientRequest) {
   const pricing = request.pricing ?? parseJsonObject(request.pricingBreakdownJson);
-  const payment = pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? request.budgetAmount ?? 0;
-  const customerFee = pricing?.clientServiceFeeAmount ?? 0;
-  const helperFee = pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0;
+  const agreedTerms = request.chat?.agreedTerms;
+  const payment = agreedTerms?.agreedHelperAmount ?? pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? request.budgetAmount ?? 0;
+  const customerFee = agreedTerms?.customerServiceFeeAmount ?? pricing?.clientServiceFeeAmount ?? 0;
+  const helperFee = agreedTerms?.helperServiceFeeAmount ?? pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0;
   return [
     request.publicNumber ?? "",
     labelStatus(request.status),
@@ -1466,11 +1730,15 @@ function requestExportRow(request: ClientRequest) {
     payment,
     customerFee,
     helperFee,
-    pricing?.clientTotalExpense ?? payment + customerFee,
-    pricing?.performerNetAmount ?? Math.max(0, payment - helperFee),
+    agreedTerms?.customerTotalAmount ?? pricing?.clientTotalExpense ?? payment + customerFee,
+    agreedTerms?.helperNetAmount ?? pricing?.performerNetAmount ?? Math.max(0, payment - helperFee),
     formatDateTimeRu((request as any).createdAt),
     formatDateTimeRu((request as any).updatedAt)
   ];
+}
+
+function requestAgreedTerms(request: ClientRequest) {
+  return request.chat?.agreedTerms ?? request.chats?.find((chat) => chat.agreedTerms)?.agreedTerms ?? null;
 }
 
 function dateStamp() {
@@ -1485,6 +1753,7 @@ function userRoleLabel(role: string) {
   if (role === "client") return "Заказчик";
   if (role === "performer") return "Помощник";
   if (role === "superadmin") return "Владелец";
+  if (role === "oauth_pending") return "Профиль не заполнен";
   return "Администратор";
 }
 

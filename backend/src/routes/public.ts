@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../db/prisma";
 import { asyncHandler } from "../utils/http";
 import { env } from "../config/env";
+import { isVkIdConfigured } from "../services/vkIdService";
 
 export const publicRouter = Router();
 
@@ -17,9 +18,11 @@ publicRouter.get(
       cities,
       categories,
       settings: {
+        defaultServiceFeeAmount: env.defaultServiceFeeAmount,
         defaultCommissionAmount: env.defaultCommissionAmount,
         defaultMinTopUpAmount: env.defaultMinTopUpAmount,
         yandexMapsEnabled: Boolean(env.yandexMapsApiKey),
+        vkIdEnabled: isVkIdConfigured(),
         servicePositioning: "Локальный сервис помощи для семьи, дома и близких",
         medicalServicesForbidden: true
       }

@@ -29,6 +29,8 @@ build/
 *.sqlite
 *.sqlite3
 data/
+!frontend/src/data/
+!frontend/src/data/**
 uploads/
 backups/
 backend/prisma/dev.db
@@ -41,7 +43,9 @@ coverage/
 screenshots/
 frontend-check-screenshots/
 visual-audit/
+visual-audit-reports/
 audit-output/
+code-audit-reports/
 
 # Logs
 *.log

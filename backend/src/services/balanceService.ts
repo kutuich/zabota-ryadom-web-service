@@ -7,6 +7,30 @@ import { mockPaymentAdapter } from "./paymentAdapter";
 
 type Tx = Prisma.TransactionClient;
 
+export const FIXED_SERVICE_FEE_AMOUNT = 50;
+export const FIXED_SERVICE_FEE_SETTING_KEYS = new Set([
+  "clientServiceFeeAmount",
+  "performerServiceFeeAmount",
+  "performerCommissionAmount",
+  "serviceCommissionAmount"
+]);
+
+export async function ensureFixedServiceFeeSettings() {
+  const settings = [
+    ["clientServiceFeeAmount", "Сервисный сбор заказчика, ₽"],
+    ["performerServiceFeeAmount", "Сервисный сбор помощника, ₽"],
+    ["performerCommissionAmount", "Устаревший ключ совместимости: сервисный сбор помощника"],
+    ["serviceCommissionAmount", "Устаревший ключ совместимости: сервисный сбор"]
+  ] as const;
+  await prisma.$transaction(
+    settings.map(([key, label]) => prisma.serviceSetting.upsert({
+      where: { key },
+      update: { valueJson: JSON.stringify(FIXED_SERVICE_FEE_AMOUNT), label, group: "payments" },
+      create: { key, valueJson: JSON.stringify(FIXED_SERVICE_FEE_AMOUNT), label, group: "payments" }
+    }))
+  );
+}
+
 export async function getBalanceSummary(userId: string) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -14,6 +38,19 @@ export async function getBalanceSummary(userId: string) {
       id: true,
       balance: true,
       bonusBalance: true,
+      balanceTransactions: {
+        select: {
+          id: true,
+          type: true,
+          source: true,
+          amount: true,
+          balanceKind: true,
+          reason: true,
+          createdAt: true
+        },
+        orderBy: { createdAt: "desc" },
+        take: 50
+      },
       city: {
         select: {
           defaultCommissionAmount: true,
@@ -41,7 +78,8 @@ export async function getBalanceSummary(userId: string) {
     performerCommissionAmount: feeSettings.performerCommissionAmount,
     useBonusForCommission: feeSettings.useBonusForCommission,
     chargeBonusFirst: feeSettings.chargeBonusFirst,
-    minTopUpAmount
+    minTopUpAmount,
+    transactions: user.balanceTransactions
   };
 }
 
@@ -50,10 +88,6 @@ export async function getServiceFeeSettings(tx: Tx | typeof prisma = prisma) {
     where: {
       key: {
         in: [
-          "clientServiceFeeAmount",
-          "performerServiceFeeAmount",
-          "performerCommissionAmount",
-          "serviceCommissionAmount",
           "useBonusForCommission",
           "chargeBonusFirst"
         ]
@@ -62,8 +96,8 @@ export async function getServiceFeeSettings(tx: Tx | typeof prisma = prisma) {
   });
   const values = Object.fromEntries(rows.map((row) => [row.key, parseSetting(row.valueJson)]));
   return {
-    clientServiceFeeAmount: numberSetting(values.clientServiceFeeAmount ?? values.serviceCommissionAmount, 50),
-    performerCommissionAmount: numberSetting(values.performerServiceFeeAmount ?? values.performerCommissionAmount ?? values.serviceCommissionAmount, 50),
+    clientServiceFeeAmount: FIXED_SERVICE_FEE_AMOUNT,
+    performerCommissionAmount: FIXED_SERVICE_FEE_AMOUNT,
     useBonusForCommission: booleanSetting(values.useBonusForCommission, true),
     chargeBonusFirst: booleanSetting(values.chargeBonusFirst, true)
   };
@@ -215,8 +249,15 @@ export async function chargeAvailableBalanceTx(
     );
   }
 
-  const bonusCharge = useBonus && chargeBonusFirst ? Math.min(payer.bonusBalance, amount) : 0;
-  const realCharge = amount - bonusCharge;
+  let bonusCharge = 0;
+  let realCharge = amount;
+  if (useBonus && chargeBonusFirst) {
+    bonusCharge = Math.min(Math.max(payer.bonusBalance, 0), amount);
+    realCharge = amount - bonusCharge;
+  } else if (useBonus) {
+    realCharge = Math.min(Math.max(payer.balance, 0), amount);
+    bonusCharge = amount - realCharge;
+  }
 
   await tx.user.update({
     where: { id: payerUserId },
@@ -287,8 +328,8 @@ export async function chargeAgreementFeesTx(
     "Сервисный сбор «Забота Рядом» за согласованный визит",
     {
       type: "client_service_fee",
-      useBonus: settings.useBonusForCommission,
-      chargeBonusFirst: settings.chargeBonusFirst
+      useBonus: true,
+      chargeBonusFirst: true
     }
   );
   await chargeAvailableBalanceTx(
@@ -300,8 +341,8 @@ export async function chargeAgreementFeesTx(
     "Сервисный сбор помощника за согласованный визит",
     {
       type: "performer_service_fee",
-      useBonus: settings.useBonusForCommission,
-      chargeBonusFirst: settings.chargeBonusFirst
+      useBonus: true,
+      chargeBonusFirst: true
     }
   );
   return settings;

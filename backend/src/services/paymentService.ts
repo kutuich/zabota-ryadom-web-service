@@ -10,6 +10,23 @@ export type PaymentCreditResult = {
   credited: boolean;
 };
 
+export function paymentCreditIdempotencyKey(paymentId: string) {
+  return `payment_credit:${paymentId}`;
+}
+
+export async function creditPaymentToBalance(
+  paymentId: string,
+  options: {
+    reason?: string;
+    comment?: string;
+  } = {}
+) {
+  return prisma.$transaction(
+    (tx) => creditPaymentToBalanceTx(tx, { id: paymentId }, options),
+    { timeout: 15_000 }
+  );
+}
+
 export async function creditPaymentToBalanceTx(
   tx: Tx,
   payment: Pick<PaymentTransaction, "id">,
@@ -35,6 +52,52 @@ export async function creditPaymentToBalanceTx(
     };
   }
 
+  if (!["pending", "succeeded"].includes(current.status)) {
+    return { payment: current, balanceTransaction: null, credited: false };
+  }
+
+  const idempotencyKey = paymentCreditIdempotencyKey(current.id);
+  const existingTransaction = await tx.balanceTransaction.findUnique({
+    where: { idempotencyKey }
+  });
+  if (existingTransaction) {
+    const updated = await tx.paymentTransaction.update({
+      where: { id: current.id },
+      data: {
+        status: "succeeded",
+        paidAt: current.paidAt ?? existingTransaction.createdAt,
+        creditedAt: current.creditedAt ?? existingTransaction.createdAt,
+        balanceTransactionId: existingTransaction.id
+      }
+    });
+    return { payment: updated, balanceTransaction: existingTransaction, credited: false };
+  }
+
+  const now = new Date();
+  const claimed = await tx.paymentTransaction.updateMany({
+    where: {
+      id: current.id,
+      status: { in: ["pending", "succeeded"] },
+      creditedAt: null,
+      balanceTransactionId: null
+    },
+    data: {
+      status: "succeeded",
+      paidAt: current.paidAt ?? now,
+      creditedAt: now
+    }
+  });
+  if (claimed.count === 0) {
+    const paymentAfterClaim = await tx.paymentTransaction.findUnique({ where: { id: current.id } });
+    if (!paymentAfterClaim) {
+      throw new HttpError(404, "Платёж не найден", "payment_not_found");
+    }
+    const balanceTransaction = paymentAfterClaim.balanceTransactionId
+      ? await tx.balanceTransaction.findUnique({ where: { id: paymentAfterClaim.balanceTransactionId } })
+      : await tx.balanceTransaction.findUnique({ where: { idempotencyKey } });
+    return { payment: paymentAfterClaim, balanceTransaction, credited: false };
+  }
+
   const user = await tx.user.findUnique({
     where: { id: current.userId },
     select: { balance: true }
@@ -55,6 +118,8 @@ export async function creditPaymentToBalanceTx(
     data: {
       userId: current.userId,
       type: "top_up",
+      source: current.provider,
+      idempotencyKey,
       amount: current.amount,
       balanceKind: "real",
       reason: options.reason ?? "Пополнение баланса через платёжную форму",
@@ -64,13 +129,10 @@ export async function creditPaymentToBalanceTx(
     }
   });
 
-  const now = new Date();
   const updated = await tx.paymentTransaction.update({
     where: { id: current.id },
     data: {
       status: "succeeded",
-      paidAt: current.paidAt ?? now,
-      creditedAt: now,
       balanceTransactionId: balanceTransaction.id
     }
   });

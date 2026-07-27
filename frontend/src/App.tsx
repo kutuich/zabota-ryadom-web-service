@@ -9,8 +9,11 @@ import { LegalDocumentPage, LegalIndexPage } from "./pages/LegalPages";
 import { MockPaymentPage, PaymentFailPage, PaymentPendingPage, PaymentSuccessPage } from "./pages/PaymentPages";
 import { PerformerDashboard } from "./pages/PerformerDashboard";
 import { PublicHelpPage } from "./pages/PublicHelpPage";
+import { VisualAuditShowcasePage } from "./pages/VisualAuditShowcasePage";
+import { OAuthCompletePage } from "./pages/OAuthCompletePage";
 import { canRoleOpenPath, defaultPathForRole, isKnownPathForRole, legacyAppRedirectPath } from "./routes/navigation";
 import type { UserRole } from "./types";
+import { effectiveRoleForUser } from "./utils/authRole";
 
 const legalDocumentRoutes = [
   "/legal/privacy",
@@ -23,8 +26,26 @@ const legalDocumentRoutes = [
   "/legal/service-rules"
 ];
 
+export const visualAuditRoutesEnabled = import.meta.env.VITE_ENABLE_VISUAL_AUDIT_ROUTES === "true";
+
+export function isVisualAuditPath(pathname: string) {
+  return /^\/app\/audit\/(?:client|performer|admin)\/?$/.test(pathname);
+}
+
+export function VisualAuditRoutes() {
+  return (
+    <Routes>
+      <Route path="/app/audit/client" element={<VisualAuditShowcasePage role="client" />} />
+      <Route path="/app/audit/performer" element={<VisualAuditShowcasePage role="performer" />} />
+      <Route path="/app/audit/admin" element={<VisualAuditShowcasePage role="admin" />} />
+      <Route path="*" element={<Navigate to="/app" replace />} />
+    </Routes>
+  );
+}
+
 export function App() {
   const { user, isLoading } = useAuth();
+  const effectiveRole = effectiveRoleForUser(user);
 
   if (isLoading) {
     return (
@@ -37,8 +58,10 @@ export function App() {
 
   return (
     <Routes>
-      <Route path="/" element={user ? <Navigate to={defaultPathForRole(user.role)} replace /> : <LandingAuthPage />} />
-      <Route path="/app" element={user ? <Navigate to={defaultPathForRole(user.role)} replace /> : <LandingAuthPage />} />
+      <Route path="/" element={user && effectiveRole ? <Navigate to={defaultPathForRole(effectiveRole)} replace /> : <LandingAuthPage />} />
+      <Route path="/app" element={user && effectiveRole ? <Navigate to={defaultPathForRole(effectiveRole)} replace /> : <LandingAuthPage />} />
+      <Route path="/app/login" element={user && effectiveRole ? <Navigate to={defaultPathForRole(effectiveRole)} replace /> : <LandingAuthPage />} />
+      <Route path="/app/oauth/complete" element={<OAuthCompletePage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/help" element={<PublicHelpPage />} />
       <Route path="/legal" element={<LegalIndexPage />} />
@@ -80,11 +103,12 @@ function RoleGate({ allowed, children }: { allowed: UserRole[]; children: React.
   if (!user) {
     return <Navigate to="/app" replace state={{ from: location.pathname }} />;
   }
-  if (!allowed.includes(user.role) || !canRoleOpenPath(user.role, location.pathname)) {
-    return <Navigate to={defaultPathForRole(user.role)} replace />;
+  const effectiveRole = effectiveRoleForUser(user)!;
+  if (!allowed.includes(effectiveRole) || !canRoleOpenPath(effectiveRole, location.pathname)) {
+    return <Navigate to={defaultPathForRole(effectiveRole)} replace />;
   }
-  if (!isKnownPathForRole(user.role, location.pathname)) {
-    return <Navigate to={defaultPathForRole(user.role)} replace />;
+  if (!isKnownPathForRole(effectiveRole, location.pathname)) {
+    return <Navigate to={defaultPathForRole(effectiveRole)} replace />;
   }
   return children;
 }
@@ -97,5 +121,6 @@ function LegacyAppRedirect() {
 
 function SafeFallback() {
   const { user } = useAuth();
-  return <Navigate to={user ? defaultPathForRole(user.role) : "/app"} replace />;
+  const effectiveRole = effectiveRoleForUser(user);
+  return <Navigate to={user && effectiveRole ? defaultPathForRole(effectiveRole) : "/app"} replace />;
 }

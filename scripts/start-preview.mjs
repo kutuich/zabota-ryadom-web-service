@@ -14,6 +14,7 @@ if (databasePath) {
 }
 
 run("npx", ["prisma", "db", "push", "--schema", "backend/prisma/schema.prisma", "--skip-generate"]);
+run("node", ["backend/dist/src/scripts/bootstrapCityDirectory.js"]);
 
 const prisma = new PrismaClient();
 const usersCount = await prisma.user.count();

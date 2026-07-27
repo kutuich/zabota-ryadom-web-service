@@ -105,6 +105,7 @@ export const adminNavigation: NavGroup[] = [
 ];
 
 export function defaultPathForRole(role: UserRole) {
+  if (role === "oauth_pending") return "/app/oauth/complete";
   if (role === "client") return `${APP_CLIENT_PREFIX}/requests`;
   if (role === "performer") return `${APP_PERFORMER_PREFIX}/requests`;
   return APP_ADMIN_PREFIX;
@@ -125,6 +126,7 @@ export function canRoleOpenPath(role: UserRole, pathname: string) {
 }
 
 export function isKnownPathForRole(role: UserRole, pathname: string) {
+  if (role === "oauth_pending") return pathname === "/app/oauth/complete";
   const groups = role === "client"
     ? clientNavigation
     : role === "performer"

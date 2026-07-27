@@ -2,8 +2,13 @@ import { Router } from "express";
 import { z } from "zod";
 import { authenticate, requireAdmin } from "../middleware/auth";
 import { prisma } from "../db/prisma";
-import { grantAdminBonus } from "../services/balanceService";
-import { archiveCompletedRequestsOlderThanNdays, archiveInactiveUsersOlderThan90Days } from "../services/archiveService";
+import { FIXED_SERVICE_FEE_SETTING_KEYS, grantAdminBonus } from "../services/balanceService";
+import {
+  getTrialBalanceAdminView,
+  grantTrialBalanceToEligibleUsers,
+  updateTrialBalanceSettings
+} from "../services/trialBalanceService";
+import { archiveCompletedRequestsOlderThanNdays, archiveSafePendingUsers } from "../services/archiveService";
 import { writeAudit } from "../services/auditService";
 import {
   buildAllConsentsExport,
@@ -16,10 +21,65 @@ import {
 } from "../services/legalService";
 import type { UserRole } from "../types/domain";
 import { asyncHandler, HttpError } from "../utils/http";
+import { normalizeSettlementName } from "../services/settlementService";
+import { serializeAgreedTerms } from "../services/agreementTermsService";
+import { getUserArchiveSafety } from "../services/userLifecycleService";
+import { signUserToken, type ActingRole } from "../services/authTokenService";
 
 export const adminRouter = Router();
 
 adminRouter.use(authenticate, requireAdmin);
+
+adminRouter.post(
+  "/acting/start",
+  asyncHandler(async (req, res) => {
+    const input = z.object({ role: z.enum(["customer", "helper"]) }).parse(req.body);
+    const actingRole: ActingRole = input.role === "customer" ? "client" : "performer";
+    const realRole = req.user!.realRole;
+    const token = signUserToken(req.user!.id, realRole, actingRole);
+    const metadata = {
+      realUserId: req.user!.id,
+      effectiveUserId: req.user!.id,
+      realRole,
+      effectiveRole: actingRole,
+      actingRole,
+      actionSource: "admin_acting_mode"
+    };
+    await writeAudit(req.user!.id, "admin.acting.start", "user", req.user!.id, metadata);
+    res.json({
+      token,
+      role: realRole,
+      effectiveRole: actingRole,
+      actingRole,
+      isActingAsRole: true,
+      nextPath: actingRole === "client" ? "/app/client/requests" : "/app/performer/requests"
+    });
+  })
+);
+
+adminRouter.post(
+  "/acting/stop",
+  asyncHandler(async (req, res) => {
+    const realRole = req.user!.realRole;
+    const metadata = {
+      realUserId: req.user!.id,
+      effectiveUserId: req.user!.id,
+      realRole,
+      effectiveRole: req.user!.effectiveRole,
+      actingRole: req.user!.actingRole,
+      actionSource: "admin_acting_mode"
+    };
+    await writeAudit(req.user!.id, "admin.acting.stop", "user", req.user!.id, metadata);
+    res.json({
+      token: signUserToken(req.user!.id, realRole),
+      role: realRole,
+      effectiveRole: realRole,
+      actingRole: null,
+      isActingAsRole: false,
+      nextPath: "/app/admin"
+    });
+  })
+);
 
 adminRouter.get(
   "/summary",
@@ -64,9 +124,13 @@ adminRouter.get(
     const users = await prisma.user.findMany({
       include: {
         city: true,
+        userCities: { where: { isActive: true }, include: { city: true } },
         clientProfile: true,
         performerProfile: true,
         performerDocuments: { orderBy: { uploadedAt: "desc" } },
+        identities: {
+          select: { id: true, provider: true, providerUserId: true, displayName: true, avatarUrl: true, createdAt: true }
+        },
         riskFlags: { where: { resolvedAt: null }, orderBy: { createdAt: "desc" } }
       },
       orderBy: { createdAt: "desc" },
@@ -77,15 +141,24 @@ adminRouter.get(
   })
 );
 
-adminRouter.patch(
+adminRouter.post(
   "/users/:id/block",
   asyncHandler(async (req, res) => {
     const input = z.object({ reason: z.string().min(3).max(500) }).parse(req.body);
+    if (req.user!.id === req.params.id) {
+      throw new HttpError(400, "Нельзя заблокировать текущую учётную запись", "cannot_block_self");
+    }
+    const current = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!current) throw new HttpError(404, "Пользователь не найден", "user_not_found");
+    if (current.status === "archived") {
+      throw new HttpError(409, "Архивный профиль нельзя заблокировать", "user_already_archived");
+    }
     const user = await prisma.user.update({
       where: { id: req.params.id },
       data: {
         status: "blocked",
         blockedAt: new Date(),
+        blockedByAdminId: req.user!.id,
         blockReason: input.reason
       }
     });
@@ -96,15 +169,25 @@ adminRouter.patch(
   })
 );
 
-adminRouter.patch(
+adminRouter.post(
   "/users/:id/unblock",
   asyncHandler(async (req, res) => {
+    const current = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!current) throw new HttpError(404, "Пользователь не найден", "user_not_found");
+    if (!["blocked", "pending_archive"].includes(current.status)) {
+      throw new HttpError(409, "Разблокирование для этого статуса недоступно", "user_status_invalid");
+    }
     const user = await prisma.user.update({
       where: { id: req.params.id },
       data: {
         status: "active",
         blockedAt: null,
-        blockReason: null
+        blockedByAdminId: null,
+        blockReason: null,
+        archiveRequestedAt: null,
+        archiveRequestedByAdminId: null,
+        archiveReason: null,
+        archiveBlockedReason: null
       }
     });
 
@@ -116,102 +199,100 @@ adminRouter.patch(
 
 adminRouter.delete(
   "/users/:id",
+  asyncHandler(async (_req, _res) => {
+    throw new HttpError(
+      405,
+      "Физическое удаление пользователей запрещено. Используйте блокировку или архивирование.",
+      "physical_user_deletion_forbidden"
+    );
+  })
+);
+
+adminRouter.get(
+  "/users/:id/archive-safety",
   asyncHandler(async (req, res) => {
-    if (req.user!.role !== "superadmin") {
-      throw new HttpError(403, "Удаление доступно только superadmin", "superadmin_required");
-    }
-    if (req.user!.id === req.params.id) {
-      throw new HttpError(400, "Нельзя удалить текущую учётную запись", "cannot_delete_self");
-    }
-    const userId = req.params.id;
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
-    if (!user) {
-      throw new HttpError(404, "Пользователь не найден", "user_not_found");
-    }
+    const user = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    if (!user) throw new HttpError(404, "Пользователь не найден", "user_not_found");
+    res.json(await getUserArchiveSafety(user.id));
+  })
+);
 
+adminRouter.post(
+  "/users/:id/request-archive",
+  asyncHandler(async (req, res) => {
+    const input = z.object({ reason: z.string().min(3).max(500) }).parse(req.body);
     const result = await prisma.$transaction(async (tx) => {
-      const clientRequests = await tx.clientRequest.findMany({ where: { clientId: userId }, select: { id: true } });
-      const requestIds = clientRequests.map((request) => request.id);
-      const requestChats = requestIds.length > 0
-        ? await tx.chat.findMany({ where: { requestId: { in: requestIds } }, select: { id: true } })
-        : [];
-      const participantChats = await tx.chat.findMany({
-        where: { OR: [{ clientId: userId }, { performerId: userId }] },
-        select: { id: true }
-      });
-      const chatIds = Array.from(new Set([...requestChats, ...participantChats].map((chat) => chat.id)));
-
-      await tx.complaint.deleteMany({
-        where: {
-          OR: [
-            { fromUserId: userId },
-            { againstUserId: userId },
-            ...(requestIds.length ? [{ requestId: { in: requestIds } }] : []),
-            ...(chatIds.length ? [{ chatId: { in: chatIds } }] : [])
-          ]
-        }
-      });
-      await tx.balanceTransaction.deleteMany({
-        where: {
-          OR: [
-            { userId },
-            { createdByAdminId: userId },
-            ...(requestIds.length ? [{ relatedRequestId: { in: requestIds } }] : [])
-          ]
-        }
-      });
-      await tx.review.deleteMany({
-        where: {
-          OR: [
-            { fromUserId: userId },
-            { toUserId: userId },
-            ...(requestIds.length ? [{ requestId: { in: requestIds } }] : [])
-          ]
-        }
-      });
-      await tx.chatMessage.deleteMany({
-        where: {
-          OR: [
-            { senderId: userId },
-            ...(chatIds.length ? [{ chatId: { in: chatIds } }] : [])
-          ]
-        }
-      });
-      if (chatIds.length) {
-        await tx.chat.deleteMany({ where: { id: { in: chatIds } } });
+      const current = await tx.user.findUnique({ where: { id: req.params.id } });
+      if (!current) throw new HttpError(404, "Пользователь не найден", "user_not_found");
+      if (current.status === "archived") {
+        return { user: current, safety: await getUserArchiveSafety(current.id, tx) };
       }
-      await tx.requestResponse.deleteMany({
-        where: {
-          OR: [
-            { performerId: userId },
-            ...(requestIds.length ? [{ requestId: { in: requestIds } }] : [])
-          ]
-        }
-      });
-      await tx.clientRequest.updateMany({
-        where: { selectedPerformerId: userId },
-        data: { selectedPerformerId: null, status: "published" }
-      });
-      if (requestIds.length) {
-        await tx.clientRequest.deleteMany({ where: { id: { in: requestIds } } });
+      if (req.user!.id === current.id) {
+        throw new HttpError(400, "Нельзя архивировать текущую учётную запись", "cannot_archive_self");
       }
-      await tx.auditLog.deleteMany({
-        where: {
-          OR: [
-            { actorUserId: userId },
-            { entityType: "user", entityId: userId }
-          ]
+      const requestedAt = current.archiveRequestedAt ?? new Date();
+      const user = await tx.user.update({
+        where: { id: current.id },
+        data: {
+          status: "pending_archive",
+          archiveRequestedAt: requestedAt,
+          archiveRequestedByAdminId: req.user!.id,
+          archiveReason: input.reason
         }
       });
-      await tx.user.delete({ where: { id: userId } });
-      await writeAudit(req.user!.id, "user.delete_physical", "user", userId, {
-        removedRequests: requestIds.length,
-        removedChats: chatIds.length
-      }, tx);
-      return { removedRequests: requestIds.length, removedChats: chatIds.length };
+      const safety = await getUserArchiveSafety(user.id, tx);
+      const updated = await tx.user.update({
+        where: { id: user.id },
+        data: { archiveBlockedReason: safety.reasons.length ? safety.reasons.join(" ") : null }
+      });
+      await writeAudit(req.user!.id, "user.archive_requested", "user", user.id, { ...input, safety }, tx);
+      return { user: updated, safety };
     });
+    const { passwordHash: _passwordHash, ...safeUser } = result.user;
+    res.json({ user: safeUser, safety: result.safety });
+  })
+);
 
-    return res.json({ mode: "deleted", ...result });
+adminRouter.post(
+  "/users/:id/archive",
+  asyncHandler(async (req, res) => {
+    const input = z.object({ reason: z.string().min(3).max(500) }).parse(req.body);
+    const result = await prisma.$transaction(async (tx) => {
+      const current = await tx.user.findUnique({ where: { id: req.params.id } });
+      if (!current) throw new HttpError(404, "Пользователь не найден", "user_not_found");
+      if (current.status === "archived") {
+        return { user: current, safety: await getUserArchiveSafety(current.id, tx), blocked: false };
+      }
+      if (req.user!.id === current.id) {
+        throw new HttpError(400, "Нельзя архивировать текущую учётную запись", "cannot_archive_self");
+      }
+      const safety = await getUserArchiveSafety(current.id, tx);
+      if (!safety.canArchive) {
+        const user = await tx.user.update({
+          where: { id: current.id },
+          data: { archiveBlockedReason: safety.reasons.join(" ") }
+        });
+        await writeAudit(req.user!.id, "user.archive_blocked", "user", current.id, { ...input, safety }, tx);
+        return { user, safety, blocked: true };
+      }
+      const user = await tx.user.update({
+        where: { id: current.id },
+        data: {
+          status: "archived",
+          archivedAt: new Date(),
+          archivedByAdminId: req.user!.id,
+          archiveReason: input.reason,
+          archiveBlockedReason: null
+        }
+      });
+      await writeAudit(req.user!.id, "user.archived", "user", user.id, { ...input, safety }, tx);
+      return { user, safety, blocked: false };
+    });
+    if (result.blocked) {
+      throw new HttpError(409, "Пользователя пока нельзя архивировать", "user_archive_blocked", result.safety);
+    }
+    const { passwordHash: _passwordHash, ...safeUser } = result.user;
+    res.json({ user: safeUser, safety: result.safety });
   })
 );
 
@@ -289,12 +370,41 @@ adminRouter.get(
           },
           orderBy: { createdAt: "desc" }
         },
-        chats: { select: { id: true, status: true, performerId: true, archivedAt: true }, orderBy: { createdAt: "desc" } }
+        chats: {
+          select: {
+            id: true,
+            status: true,
+            performerId: true,
+            agreedHelperAmount: true,
+            customerServiceFeeAmount: true,
+            helperServiceFeeAmount: true,
+            customerTotalAmount: true,
+            helperNetAmount: true,
+            agreedPackageId: true,
+            agreedPackageTitle: true,
+            agreedAddonsJson: true,
+            agreedDurationMinutes: true,
+            agreedScheduledAt: true,
+            agreedTermsComment: true,
+            agreedByCustomerAt: true,
+            agreedByHelperAt: true,
+            termsUpdatedAt: true,
+            termsUpdatedByUserId: true,
+            archivedAt: true
+          },
+          orderBy: { createdAt: "desc" }
+        }
       },
       orderBy: { createdAt: "desc" },
       take: 200
     });
-    res.json(requests.map((request) => ({ ...request, chat: request.chats[0] ?? null })));
+    res.json(requests.map((request) => {
+      const chat = request.chats[0] ?? null;
+      return {
+        ...request,
+        chat: chat ? { ...chat, agreedTerms: serializeAgreedTerms(chat) } : null
+      };
+    }));
   })
 );
 
@@ -332,7 +442,7 @@ adminRouter.get(
       orderBy: { createdAt: "desc" },
       take: 100
     });
-    res.json(chats);
+    res.json(chats.map((chat) => ({ ...chat, agreedTerms: serializeAgreedTerms(chat) })));
   })
 );
 
@@ -356,7 +466,21 @@ adminRouter.get(
 adminRouter.get(
   "/cities",
   asyncHandler(async (_req, res) => {
-    res.json(await prisma.city.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }));
+    const cities = await prisma.city.findMany({
+      include: {
+        userCities: { where: { isActive: true }, include: { user: { select: { role: true } } } },
+        _count: { select: { requests: true } },
+        activatedByUser: { select: { id: true, displayName: true } }
+      },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }]
+    });
+    res.json(cities.map((city) => ({
+      ...city,
+      customerCount: city.userCities.filter((row) => row.user.role === "client").length,
+      helperCount: city.userCities.filter((row) => row.user.role === "performer").length,
+      requestCount: city._count.requests,
+      needsReview: city.directoryStatus === "needs_review"
+    })));
   })
 );
 
@@ -364,7 +488,7 @@ adminRouter.post(
   "/cities",
   asyncHandler(async (req, res) => {
     const input = citySchema.parse(req.body);
-    const city = await prisma.city.create({ data: input });
+    const city = await prisma.city.create({ data: { ...input, normalizedName: normalizeSettlementName(input.name) } });
     await writeAudit(req.user!.id, "city.create", "city", city.id, input);
     res.status(201).json(city);
   })
@@ -374,7 +498,15 @@ adminRouter.patch(
   "/cities/:id",
   asyncHandler(async (req, res) => {
     const input = citySchema.partial().parse(req.body);
-    const city = await prisma.city.update({ where: { id: req.params.id }, data: input });
+    const city = await prisma.city.update({
+      where: { id: req.params.id },
+      data: {
+        ...input,
+        normalizedName: input.name ? normalizeSettlementName(input.name) : undefined,
+        activatedAt: input.serviceStatus === "active" ? new Date() : undefined,
+        activatedByUserId: input.serviceStatus === "active" ? req.user!.id : undefined
+      }
+    });
     await writeAudit(req.user!.id, "city.update", "city", city.id, input);
     res.json(city);
   })
@@ -404,9 +536,42 @@ adminRouter.get(
   })
 );
 
+adminRouter.get(
+  "/trial-balance/settings",
+  asyncHandler(async (_req, res) => {
+    res.json(await getTrialBalanceAdminView());
+  })
+);
+
+adminRouter.put(
+  "/trial-balance/settings",
+  asyncHandler(async (req, res) => {
+    const input = z.object({
+      enabled: z.boolean(),
+      amount: z.number().int().positive(),
+      autoGrantNewUsers: z.boolean()
+    }).parse(req.body);
+    const settings = await updateTrialBalanceSettings(input);
+    await writeAudit(req.user!.id, "trial_balance.settings_update", "service_setting", "trialBalanceSettings", input);
+    res.json(await getTrialBalanceAdminView());
+  })
+);
+
+adminRouter.post(
+  "/trial-balance/grant-all",
+  asyncHandler(async (req, res) => {
+    const summary = await grantTrialBalanceToEligibleUsers(req.user!.id);
+    await writeAudit(req.user!.id, "trial_balance.bulk_grant", "service_setting", "trialBalanceSettings", summary);
+    res.json(summary);
+  })
+);
+
 adminRouter.patch(
   "/settings/:key",
   asyncHandler(async (req, res) => {
+    if (FIXED_SERVICE_FEE_SETTING_KEYS.has(req.params.key)) {
+      throw new HttpError(403, "Изменение сервисного сбора временно недоступно", "service_fee_setting_locked");
+    }
     const input = z.object({ valueJson: z.string().min(1) }).parse(req.body);
     const before = await prisma.serviceSetting.findUnique({ where: { key: req.params.key } });
     const setting = await prisma.serviceSetting.update({
@@ -472,7 +637,7 @@ adminRouter.post(
   "/archive/run",
   asyncHandler(async (req, res) => {
     const input = z.object({ completedRequestDays: z.number().int().positive().default(30) }).parse(req.body ?? {});
-    const archivedUsers = await archiveInactiveUsersOlderThan90Days(req.user!.id);
+    const archivedUsers = await archiveSafePendingUsers(req.user!.id);
     const archivedRequests = await archiveCompletedRequestsOlderThanNdays(req.user!.id, input.completedRequestDays);
     res.json({ archivedUsers, archivedRequests });
   })
@@ -703,6 +868,15 @@ const citySchema = z.object({
   name: z.string().min(2),
   slug: z.string().min(2).regex(/^[a-z0-9_-]+$/),
   region: z.string().min(2),
+  type: z.enum(["city", "town", "settlement", "village", "rural_locality", "urban_type_settlement", "other"]).default("city"),
+  district: z.string().optional().nullable(),
+  municipalDistrict: z.string().optional().nullable(),
+  fiasId: z.string().optional().nullable(),
+  garId: z.string().optional().nullable(),
+  source: z.enum(["seed", "user_suggested", "admin", "import"]).default("admin"),
+  directoryStatus: z.enum(["directory", "user_suggested", "needs_review", "verified", "hidden", "duplicate"]).default("verified"),
+  serviceStatus: z.enum(["inactive", "active"]).default("inactive"),
+  status: z.enum(["active", "inactive"]).default("active"),
   isActive: z.boolean().default(true),
   defaultCommissionAmount: z.number().int().positive().default(50),
   minTopUpAmount: z.number().int().positive().default(150),

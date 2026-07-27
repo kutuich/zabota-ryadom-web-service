@@ -8,7 +8,8 @@ type RegisterInput = {
   email?: string;
   password: string;
   displayName: string;
-  cityId: string;
+  cityId?: string;
+  citySuggestion?: { name: string; region?: string };
   acceptedConsentTypes: string[];
   acceptedLegalDocumentTypes?: string[];
   marketingNotificationsAccepted?: boolean;
@@ -25,6 +26,10 @@ type AuthContextValue = {
   refreshMe: () => Promise<void>;
   login: (phoneOrEmail: string, password: string) => Promise<void>;
   register: (input: RegisterInput) => Promise<void>;
+  claimOAuthSession: () => Promise<{ profileComplete: boolean; nextPath: string }>;
+  completeOAuthProfile: (input: Parameters<typeof api.completeOAuthProfile>[0]) => Promise<{ nextPath: string }>;
+  startActing: (role: "customer" | "helper") => Promise<{ nextPath: string }>;
+  stopActing: () => Promise<{ nextPath: string }>;
   logout: () => void;
 };
 
@@ -88,6 +93,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setStoredToken(payload.token);
         setToken(payload.token);
         setUser(payload.user);
+      },
+      async claimOAuthSession() {
+        const payload = await api.claimOAuthSession();
+        setStoredToken(payload.token);
+        setToken(payload.token);
+        setUser(payload.user);
+        return { profileComplete: payload.profileComplete, nextPath: payload.nextPath };
+      },
+      async completeOAuthProfile(input) {
+        const payload = await api.completeOAuthProfile(input);
+        setUser(payload.user);
+        return { nextPath: payload.nextPath };
+      },
+      async startActing(role) {
+        const payload = await api.startAdminActing(role);
+        setStoredToken(payload.token);
+        const mePayload = await api.me();
+        setToken(payload.token);
+        setUser(mePayload.user);
+        return { nextPath: payload.nextPath };
+      },
+      async stopActing() {
+        const payload = await api.stopAdminActing();
+        setStoredToken(payload.token);
+        const mePayload = await api.me();
+        setToken(payload.token);
+        setUser(mePayload.user);
+        return { nextPath: payload.nextPath };
       },
       logout() {
         setStoredToken(null);

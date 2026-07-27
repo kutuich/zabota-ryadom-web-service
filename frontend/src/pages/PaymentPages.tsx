@@ -6,6 +6,7 @@ import { api } from "../api/client";
 import { paymentProviderLabel, paymentStatusLabel } from "../components/BalancePanel";
 import { useAuth } from "../context/AuthContext";
 import type { PaymentTransaction } from "../types";
+import { effectiveRoleForUser } from "../utils/authRole";
 
 export function MockPaymentPage() {
   const [searchParams] = useSearchParams();
@@ -83,7 +84,7 @@ export function MockPaymentPage() {
           </div>
         </>
       )}
-      <Link className="secondary-button" to={balancePathForRole(user?.role)}>
+      <Link className="secondary-button" to={balancePathForRole(effectiveRoleForUser(user))}>
         Вернуться к балансу
       </Link>
     </PaymentShell>
@@ -98,8 +99,8 @@ export function PaymentSuccessPage() {
         Если платёж подтверждён, баланс будет обновлён автоматически. Обновите страницу баланса через несколько секунд.
       </p>
       <div className="trust-row">
-        <Link className="primary-button" to={balancePathForRole(user?.role)}>Перейти к балансу</Link>
-        <Link className="secondary-button" to={homePathForRole(user?.role)}>На главную</Link>
+        <Link className="primary-button" to={balancePathForRole(effectiveRoleForUser(user))}>Перейти к балансу</Link>
+        <Link className="secondary-button" to={homePathForRole(effectiveRoleForUser(user))}>На главную</Link>
       </div>
     </PaymentShell>
   );
@@ -111,8 +112,8 @@ export function PaymentFailPage() {
     <PaymentShell title="Платёж не завершён" icon={<AlertCircle size={28} />}>
       <p>Попробуйте ещё раз или обратитесь к администратору через раздел связи с администратором.</p>
       <div className="trust-row">
-        <Link className="primary-button" to={balancePathForRole(user?.role)}>Вернуться к балансу</Link>
-        <Link className="secondary-button" to={supportPathForRole(user?.role)}>Связь с администратором</Link>
+        <Link className="primary-button" to={balancePathForRole(effectiveRoleForUser(user))}>Вернуться к балансу</Link>
+        <Link className="secondary-button" to={supportPathForRole(effectiveRoleForUser(user))}>Связь с администратором</Link>
       </div>
     </PaymentShell>
   );
@@ -123,7 +124,7 @@ export function PaymentPendingPage() {
   return (
     <PaymentShell title="Платёж проверяется" icon={<Clock size={28} />}>
       <p>Мы ожидаем подтверждение платежа от платёжного провайдера.</p>
-      <Link className="primary-button" to={balancePathForRole(user?.role)}>Перейти к балансу</Link>
+      <Link className="primary-button" to={balancePathForRole(effectiveRoleForUser(user))}>Перейти к балансу</Link>
     </PaymentShell>
   );
 }

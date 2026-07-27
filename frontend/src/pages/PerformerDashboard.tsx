@@ -19,6 +19,8 @@ import { labelChildcare, labelCriminalRecord, labelSelfEmployed, labelStatus, la
 import { chatPathForRole, performerNavigation, sectionTitleForPath } from "../routes/navigation";
 import { buildPublicAddressFromRequest, buildYandexExactAddressFromRequest, buildYandexMapsSearchUrl } from "../utils/address";
 import { formatDateRu, formatTimeRu } from "../utils/dateTime";
+import { CityCombobox } from "../components/CityCombobox";
+import { UserCitiesPanel } from "../components/UserCitiesPanel";
 
 export function PerformerDashboard() {
   const { bootstrap, user, refreshMe } = useAuth();
@@ -380,6 +382,7 @@ export function PerformerDashboard() {
             <strong>{user?.performerProfile?.completedJobsCount ?? 0}</strong>
           </div>
           <ContactDetails user={user} />
+          <UserCitiesPanel />
           <form className="form-grid span-2" onSubmit={(event) => { event.preventDefault(); saveProfile(); }}>
             <h2 className="span-2">Анкета помощника</h2>
             <label>
@@ -390,12 +393,7 @@ export function PerformerDashboard() {
               Телефон
               <input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value })} />
             </label>
-            <label>
-              Город
-              <select value={profileForm.cityId} onChange={(event) => setProfileForm({ ...profileForm, cityId: event.target.value })}>
-                {bootstrap?.cities.map((city) => <option key={city.id} value={city.id}>{city.name}</option>)}
-              </select>
-            </label>
+            <CityCombobox cities={bootstrap?.cities ?? []} value={profileForm.cityId} onChange={(cityId) => setProfileForm({ ...profileForm, cityId })} />
             <label>
               Возраст
               <input type="number" value={profileForm.age} onChange={(event) => setProfileForm({ ...profileForm, age: event.target.value })} />

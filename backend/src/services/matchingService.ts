@@ -8,6 +8,7 @@ type MatchRequest = ClientRequest & {
 
 type PerformerUser = Pick<User, "id" | "cityId"> & {
   performerProfile?: PerformerProfile | null;
+  userCities?: Array<{ cityId: string; roleScope: string; isActive: boolean }>;
 };
 
 export type RequestMatchResult = {
@@ -22,7 +23,11 @@ export function evaluateRequestMatch(request: MatchRequest, performer: Performer
   const blockers: string[] = [];
   const partial: string[] = [];
 
-  if (request.cityId !== performer.cityId && !profile?.canTravelOutsideCity) {
+  const selectedCityIds = new Set([
+    ...(performer.cityId ? [performer.cityId] : []),
+    ...(performer.userCities ?? []).filter((row) => row.isActive && ["helper", "both"].includes(row.roleScope)).map((row) => row.cityId)
+  ]);
+  if (!selectedCityIds.has(request.cityId) && !profile?.canTravelOutsideCity) {
     blockers.push(`Заявка в другом городе, а вы указали работу только в своём городе.`);
   }
 

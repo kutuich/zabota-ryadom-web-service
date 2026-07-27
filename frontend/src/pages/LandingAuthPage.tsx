@@ -1,12 +1,13 @@
 import { LogIn, UserRound, UsersRound } from "lucide-react";
 import { FormEvent, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
+import { CityCombobox } from "../components/CityCombobox";
 import { useAuth } from "../context/AuthContext";
 import appAuthLogo from "../assets/app-auth-logo.png";
 
 const requiredConsents = [
   "terms",
-  "privacy_policy",
+  "privacy",
   "personal_data_processing",
   "chat_rules",
   "payment_rules",
@@ -15,6 +16,7 @@ const requiredConsents = [
 
 const customerLegalConsents = [
   { type: "customer_agreement", label: "Принимаю пользовательское соглашение заказчика", slug: "customer-agreement" },
+  { type: "privacy", label: "Принимаю политику обработки персональных данных", slug: "privacy" },
   { type: "personal_data_consent", label: "Даю согласие на обработку персональных данных", slug: "personal-data-consent" },
   { type: "service_rules", label: "Принимаю правила сервиса и безопасности", slug: "service-rules" },
   { type: "service_notifications_consent", label: "Соглашаюсь получать сервисные уведомления", slug: "service-notifications-consent" }
@@ -22,9 +24,11 @@ const customerLegalConsents = [
 
 const helperLegalConsents = [
   { type: "helper_terms", label: "Принимаю условия использования сервиса помощником", slug: "helper-terms" },
+  { type: "privacy", label: "Принимаю политику обработки персональных данных", slug: "privacy" },
   { type: "personal_data_consent", label: "Даю согласие на обработку персональных данных", slug: "personal-data-consent" },
   { type: "service_rules", label: "Принимаю правила сервиса и безопасности", slug: "service-rules" },
-  { type: "service_notifications_consent", label: "Соглашаюсь получать сервисные уведомления", slug: "service-notifications-consent" }
+  { type: "service_notifications_consent", label: "Соглашаюсь получать сервисные уведомления", slug: "service-notifications-consent" },
+  { type: "helper_documents_consent", label: "Соглашаюсь на загрузку, хранение и проверку документов помощника", slug: "helper-documents-consent" }
 ];
 
 const defaultAcceptedLegal = Object.fromEntries(
@@ -33,6 +37,7 @@ const defaultAcceptedLegal = Object.fromEntries(
 
 export function LandingAuthPage() {
   const { bootstrap, login, register } = useAuth();
+  const location = useLocation();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [role, setRole] = useState<"client" | "performer">("client");
   const [phoneOrEmail, setPhoneOrEmail] = useState("");
@@ -42,6 +47,7 @@ export function LandingAuthPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [cityId, setCityId] = useState("");
+  const [citySuggestion, setCitySuggestion] = useState("");
   const [acceptedLegal, setAcceptedLegal] = useState<Record<string, boolean>>(defaultAcceptedLegal);
   const [marketingAccepted, setMarketingAccepted] = useState(false);
   const [dependentDataConfirmed, setDependentDataConfirmed] = useState(true);
@@ -73,6 +79,22 @@ export function LandingAuthPage() {
           setError("Укажите корректный email.");
           return;
         }
+        if (!cityId && !citySuggestion) {
+          setError("Выберите город.");
+          return;
+        }
+        if (role === "client" && !dependentDataConfirmed) {
+          setError("Подтвердите основание для передачи данных человека, которому нужна помощь.");
+          return;
+        }
+        if (role === "performer" && !helperNotEmployerConfirmed) {
+          setError("Подтвердите, что сервис не является работодателем и не гарантирует заявки.");
+          return;
+        }
+        if (role === "performer" && !helperNoMedicalConfirmed) {
+          setError("Подтвердите, что не будете выполнять медицинские процедуры через сервис.");
+          return;
+        }
         const roleConsents = role === "client" ? customerLegalConsents : helperLegalConsents;
         const acceptedLegalDocumentTypes = roleConsents
           .filter((item) => acceptedLegal[item.type])
@@ -84,7 +106,8 @@ export function LandingAuthPage() {
           email: trimmedEmail || undefined,
           displayName,
           password,
-          cityId: cityId || bootstrap?.cities[0]?.id || "",
+          cityId,
+          citySuggestion: citySuggestion ? { name: citySuggestion } : undefined,
           acceptedConsentTypes: requiredConsents,
           acceptedLegalDocumentTypes,
           marketingNotificationsAccepted: marketingAccepted,
@@ -98,89 +121,80 @@ export function LandingAuthPage() {
     }
   }
 
-  return (
-    <main className="landing auth-page">
-      <section className="landing__hero auth-brand-panel" aria-label="Забота Рядом">
-        <img className="auth-brand-panel__image" src={appAuthLogo} alt="Забота Рядом" />
-      </section>
+  function openLogin() {
+    setError("");
+    setMode("login");
+  }
 
-      <section className="auth-stack" aria-label="Вход и регистрация">
-        <div className="role-choice-grid">
-          <button
-            type="button"
-            className={role === "client" ? "choice-card choice-card--active" : "choice-card"}
-            onClick={() => {
-              setRole("client");
-              setMode("register");
-            }}
-          >
-            <UserRound size={22} />
-            <strong>Я заказчик</strong>
-            <span>Хочу оставить заявку и найти помощника.</span>
-          </button>
-          <button
-            type="button"
-            className={role === "performer" ? "choice-card choice-card--active" : "choice-card"}
-            onClick={() => {
-              setRole("performer");
-              setMode("register");
-            }}
-          >
-            <UsersRound size={22} />
-            <strong>Я помощник</strong>
-            <span>Хочу откликаться на заявки и помогать людям.</span>
-          </button>
-        </div>
+  function openRegister(nextRole: "client" | "performer") {
+    setError("");
+    setRole(nextRole);
+    setMode("register");
+  }
 
-      <form className="auth-panel" onSubmit={submit}>
-        <div className="auth-panel__header">
-          <h2>{mode === "login" ? "Добро пожаловать!" : role === "client" ? "Регистрация заказчика" : "Регистрация помощника"}</h2>
-          <p>
-            {mode === "login"
-              ? "Войдите в свой аккаунт для продолжения."
-              : "Заполните данные профиля и подтвердите необходимые документы."}
-          </p>
-        </div>
-        <div className="segmented">
-          <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
-            <LogIn size={16} />
-            Войти
-          </button>
-          <button type="button" className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>
-            Зарегистрироваться
-          </button>
-        </div>
+  const roleTitle = role === "client" ? "Регистрация заказчика" : "Регистрация помощника";
+  const oauthFailed = new URLSearchParams(location.search).get("oauthError") === "vk";
 
-        {mode === "login" ? (
-          <>
-            <label>
-              Телефон или email
-              <input
-                value={phoneOrEmail}
-                onChange={(event) => setPhoneOrEmail(event.target.value)}
-                autoComplete="username"
-              />
-              <span className="field-help">Можно войти по номеру телефона или email.</span>
-            </label>
-            <label>
-              Пароль
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                autoComplete="current-password"
-              />
-            </label>
-            <p className="privacy-note">
-              <Link to="/forgot-password">Забыли пароль?</Link>
-            </p>
-          </>
-        ) : (
-          <>
+  if (mode === "register") {
+    return (
+      <main className="auth-register-page">
+        <form className="auth-register-shell" onSubmit={submit}>
+          <header className="auth-register-header">
+            <button className="link-button auth-back-button" type="button" onClick={openLogin}>
+              ← Назад ко входу
+            </button>
+            <p className="auth-register-brand">Забота Рядом</p>
+            <h1>{roleTitle}</h1>
+            <p>Заполните данные профиля и подтвердите необходимые документы.</p>
+          </header>
+
+          <section className="auth-register-section" aria-labelledby="register-role-title">
+            <div className="auth-section-heading">
+              <span>1</span>
+              <div>
+                <h2 id="register-role-title">Роль в сервисе</h2>
+                <p>Выберите, как хотите пользоваться приложением.</p>
+              </div>
+            </div>
+            <div className="role-choice-grid auth-register-role-grid">
+              <button
+                type="button"
+                className={role === "client" ? "choice-card choice-card--active" : "choice-card"}
+                onClick={() => setRole("client")}
+              >
+                <UserRound size={22} />
+                <strong>Я заказчик</strong>
+                <span>Хочу оставить заявку и найти помощника.</span>
+              </button>
+              <button
+                type="button"
+                className={role === "performer" ? "choice-card choice-card--active" : "choice-card"}
+                onClick={() => setRole("performer")}
+              >
+                <UsersRound size={22} />
+                <strong>Я помощник</strong>
+                <span>Хочу откликаться на заявки и помогать людям.</span>
+              </button>
+            </div>
+          </section>
+
+          <section className="auth-register-section" aria-labelledby="personal-data-title">
+            <div className="auth-section-heading">
+              <span>2</span>
+              <div>
+                <h2 id="personal-data-title">Личные данные</h2>
+                <p>Эти данные нужны для профиля и связи внутри сервиса.</p>
+              </div>
+            </div>
             <div className="auth-form-grid">
               <label>
-                Имя
-                <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} autoComplete="name" />
+                Имя / Логин
+                <input
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  autoComplete="name"
+                  placeholder="Введите имя или логин"
+                />
               </label>
               <label>
                 Телефон
@@ -201,6 +215,7 @@ export function LandingAuthPage() {
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   autoComplete="email"
+                  placeholder="Введите email"
                 />
                 <span className="field-help">
                   {role === "client"
@@ -208,17 +223,24 @@ export function LandingAuthPage() {
                     : "Желательно указать для связи и восстановления доступа. Можно добавить позже."}
                 </span>
               </label>
-              <label>
-                Город
-                <select value={cityId} onChange={(event) => setCityId(event.target.value)}>
-                  <option value="">Выберите город</option>
-                  {bootstrap?.cities.map((city) => (
-                    <option key={city.id} value={city.id}>
-                      {city.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <CityCombobox
+                cities={bootstrap?.cities ?? []}
+                value={cityId}
+                onChange={(nextCityId) => { setCityId(nextCityId); if (nextCityId) setCitySuggestion(""); }}
+                onSuggest={(name) => { setCityId(""); setCitySuggestion(name); }}
+              />
+            </div>
+          </section>
+
+          <section className="auth-register-section" aria-labelledby="login-data-title">
+            <div className="auth-section-heading">
+              <span>3</span>
+              <div>
+                <h2 id="login-data-title">Данные для входа</h2>
+                <p>Пароль должен быть не короче 8 символов.</p>
+              </div>
+            </div>
+            <div className="auth-form-grid auth-form-grid--passwords">
               <label>
                 Пароль
                 <input
@@ -227,6 +249,7 @@ export function LandingAuthPage() {
                   onChange={(event) => setPassword(event.target.value)}
                   autoComplete="new-password"
                   minLength={8}
+                  placeholder="Введите пароль"
                 />
               </label>
               <label>
@@ -237,11 +260,18 @@ export function LandingAuthPage() {
                   onChange={(event) => setConfirmPassword(event.target.value)}
                   autoComplete="new-password"
                   minLength={8}
+                  placeholder="Повторите пароль"
                 />
               </label>
             </div>
-            <fieldset className="checkbox-grid consent-checkboxes">
-              <legend>Обязательные документы и согласия</legend>
+          </section>
+
+          <fieldset className="auth-register-section auth-register-consents">
+            <legend>
+              <span>4</span>
+              <strong>Документы и согласия</strong>
+            </legend>
+            <div className="auth-consent-list">
               {(role === "client" ? customerLegalConsents : helperLegalConsents).map((item) => (
                 <label className="checkbox-row" key={item.type}>
                   <input
@@ -295,34 +325,86 @@ export function LandingAuthPage() {
                   <Link to="/legal/marketing-notifications-consent" target="_blank">открыть</Link>
                 </span>
               </label>
-            </fieldset>
-          </>
+            </div>
+          </fieldset>
+
+          {error && <p className="error-text">{error}</p>}
+          <button className="primary-button primary-button--wide auth-submit auth-submit--register" type="submit">
+            Создать аккаунт
+          </button>
+          <p className="privacy-note">
+            Уже есть аккаунт?{" "}
+            <button className="link-button" type="button" onClick={openLogin}>Войти</button>
+          </p>
+        </form>
+      </main>
+    );
+  }
+
+  return (
+    <main className="landing auth-page auth-login-page">
+      <section className="landing__hero auth-brand-panel" aria-label="Забота Рядом">
+        <img className="auth-brand-panel__image" src={appAuthLogo} alt="Забота Рядом" />
+      </section>
+
+      <section className="auth-stack" aria-label="Вход и регистрация">
+      <form className="auth-panel auth-login-card" onSubmit={submit}>
+        <div className="auth-panel__header">
+          <h2>Добро пожаловать!</h2>
+          <p>Войдите в свой аккаунт для продолжения.</p>
+        </div>
+
+        {bootstrap?.settings.vkIdEnabled && (
+          <div className="vk-auth-block">
+            <a className="vk-auth-button" href="/api/auth/oauth/vk/start">Войти через VK</a>
+            <span>Быстрый вход для пользователей ВК</span>
+            <div className="auth-divider"><span>Войти по телефону или email</span></div>
+          </div>
         )}
 
-        {error && <p className="error-text">{error}</p>}
-        <button
-          className={`primary-button primary-button--wide auth-submit ${mode === "login" ? "auth-submit--login" : "auth-submit--register"}`}
-          type="submit"
-        >
-          {mode === "login" ? "Войти" : `Зарегистрироваться как ${role === "client" ? "заказчик" : "помощник"}`}
-        </button>
-        {mode === "login" ? (
-          <p className="privacy-note">
-            Нет аккаунта?{" "}
-            <button className="link-button" type="button" onClick={() => { setRole("client"); setMode("register"); }}>
-              Зарегистрироваться как заказчик
-            </button>{" "}
-            или{" "}
-            <button className="link-button" type="button" onClick={() => { setRole("performer"); setMode("register"); }}>
-              как помощник
-            </button>
-          </p>
-        ) : (
-          <p className="privacy-note">
-            Уже зарегистрированы?{" "}
-            <button className="link-button" type="button" onClick={() => setMode("login")}>Войти</button>
-          </p>
+        {oauthFailed && !error && (
+          <p className="error-text">Не получилось войти через VK. Попробуйте ещё раз или войдите по телефону/email.</p>
         )}
+
+        <label>
+          Телефон или email
+          <input
+            value={phoneOrEmail}
+            onChange={(event) => setPhoneOrEmail(event.target.value)}
+            autoComplete="username"
+            placeholder="Введите телефон или email"
+          />
+          <span className="field-help">Можно войти по номеру телефона или email.</span>
+        </label>
+        <label>
+          Пароль
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            autoComplete="current-password"
+            placeholder="Введите пароль"
+          />
+        </label>
+        <p className="privacy-note">
+          <Link to="/forgot-password">Забыли пароль?</Link>
+        </p>
+
+        {error && <p className="error-text">{error}</p>}
+        <button className="primary-button primary-button--wide auth-submit auth-submit--login" type="submit">
+          <LogIn size={18} />
+          Войти
+        </button>
+        <p className="privacy-note auth-register-links">
+          Нет аккаунта?{" "}
+          <button className="link-button" type="button" onClick={() => openRegister("client")}>
+            Зарегистрироваться как заказчик
+          </button>{" "}
+          или{" "}
+          <button className="link-button" type="button" onClick={() => openRegister("performer")}>
+            как помощник
+          </button>
+        </p>
       </form>
       </section>
     </main>

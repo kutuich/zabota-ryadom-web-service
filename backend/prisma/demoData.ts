@@ -6,6 +6,8 @@ import type { City, ServiceCategory, User } from "@prisma/client";
 import { buildFullAddress, buildPublicAddress, buildYandexExactMapAddress, buildYandexPublicMapAddress, normalizeAddressParts } from "../src/services/addressService";
 import { acceptLatestLegalDocuments, requiredDocumentTypesForRegistration, seedLegalDocuments } from "../src/services/legalService";
 import { normalizeRussianPhone } from "../src/services/phoneService";
+import { CITY_DIRECTORY } from "../src/services/cityDirectory";
+import { ensureSettlementDirectory } from "../src/services/settlementService";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 dotenv.config({ path: path.resolve(process.cwd(), ".env.preview") });
@@ -36,6 +38,7 @@ export async function seedDemoDatabase({ reset }: { reset: boolean }) {
   await seedPerformerDocuments(users.performer.id);
   await seedScenarios(users, yugorsk, sovetsky, categories);
   await backfillNormalizedPhones();
+  await ensureSettlementDirectory();
 
   const counts = await collectCounts(reset);
   console.log(reset ? "Demo database reset completed" : "Demo seed completed");
@@ -115,6 +118,13 @@ async function cleanupDemoData(reset: boolean) {
 }
 
 async function seedCities() {
+  for (const city of CITY_DIRECTORY) {
+    await prisma.city.upsert({
+      where: { slug: city.slug },
+      update: { ...city, status: "inactive" },
+      create: { ...city, status: "inactive", defaultCommissionAmount: 50, minTopUpAmount: 150 }
+    });
+  }
   const yugorsk = await prisma.city.upsert({
     where: { slug: "yugorsk" },
     update: {
@@ -349,6 +359,10 @@ async function backfillNormalizedPhones() {
     select: { id: true, phone: true }
   });
   for (const user of users) {
+    if (!user.phone) {
+      console.warn(`Cannot normalize phone for user ${user.id}: phone is empty`);
+      continue;
+    }
     try {
       const normalizedPhone = normalizeRussianPhone(user.phone);
       await prisma.user.update({
@@ -554,7 +568,7 @@ async function seedScenarios(users: DemoUsers, yugorsk: City, sovetsky: City, ca
       timeFrom: "10:00",
       timeTo: "12:00",
       payment: 950,
-      packageName: "Стандартный бытовой визит",
+      packageName: "Бытовая помощь 2 часа",
       hasElderlyPerson: true,
       needsCooking: true,
       needsCleaning: true
@@ -579,7 +593,7 @@ async function seedScenarios(users: DemoUsers, yugorsk: City, sovetsky: City, ca
       timeFrom: "14:00",
       timeTo: "16:00",
       payment: 600,
-      packageName: "Длительный присмотр",
+      packageName: "Присмотр 2 часа",
       hasElderlyPerson: true
     }),
     createRequest(users.client, yugorsk, categories["home-help"], {
@@ -591,7 +605,7 @@ async function seedScenarios(users: DemoUsers, yugorsk: City, sovetsky: City, ca
       timeFrom: "13:00",
       timeTo: "15:00",
       payment: 950,
-      packageName: "Стандартный бытовой визит",
+      packageName: "Бытовая помощь 2 часа",
       needsCleaning: true
     }),
     createRequest(users.client, yugorsk, categories.cooking, {
@@ -603,7 +617,7 @@ async function seedScenarios(users: DemoUsers, yugorsk: City, sovetsky: City, ca
       timeFrom: "11:00",
       timeTo: "13:00",
       payment: 850,
-      packageName: "Простая готовка",
+      packageName: "Бытовая помощь 2 часа",
       needsCooking: true
     }),
     createRequest(users.client, yugorsk, categories["home-help"], {
@@ -615,7 +629,7 @@ async function seedScenarios(users: DemoUsers, yugorsk: City, sovetsky: City, ca
       timeFrom: "12:00",
       timeTo: "14:00",
       payment: 950,
-      packageName: "Стандартный бытовой визит",
+      packageName: "Бытовая помощь 2 часа",
       selectedPerformerId: users.performer.id,
       needsCleaning: true
     }),
@@ -641,7 +655,7 @@ async function seedScenarios(users: DemoUsers, yugorsk: City, sovetsky: City, ca
       timeFrom: "16:00",
       timeTo: "18:00",
       payment: 600,
-      packageName: "Длительный присмотр",
+      packageName: "Присмотр 2 часа",
       hasElderlyPerson: true
     }),
     createRequest(users.client, yugorsk, categories["limited-mobility-care"], {
@@ -679,7 +693,7 @@ async function seedScenarios(users: DemoUsers, yugorsk: City, sovetsky: City, ca
       timeFrom: "12:00",
       timeTo: "13:00",
       payment: 500,
-      packageName: "Короткий визит"
+      packageName: "Короткая помощь"
     })
   ]);
 
@@ -903,14 +917,20 @@ async function seedTransactions(users: DemoUsers, requestId: string) {
 function pricingQuote(performerPaymentAmount: number, packageName: string) {
   const clientServiceFeeAmount = 50;
   const performerServiceFeeAmount = 50;
+  const packageMeta = demoPackageMeta(packageName);
   return {
     basePrice: performerPaymentAmount,
     durationHours: 2,
     billableHours: 2,
     calculationUnit: "visit",
+    packageId: packageMeta.id,
+    packageTitle: packageName,
+    packageLabel: packageName,
     packageName,
-    packageDescription: "Демо-пакет подобран для проверки карточек заявки.",
-    included: ["согласованный объём помощи", "общение в чате", "без медицинских услуг"],
+    packagePriceMin: packageMeta.min,
+    packagePriceMax: packageMeta.max,
+    packageDescription: "Пакет подобран для проверки карточек заявки.",
+    included: ["согласованный объём помощи", "общение в чате", "без медицинских процедур"],
     excluded: ["медицинские процедуры", "передача контактов до согласования"],
     additions: [],
     performerPaymentAmount,
@@ -929,6 +949,15 @@ function pricingQuote(performerPaymentAmount: number, packageName: string) {
   };
 }
 
+function demoPackageMeta(packageName: string) {
+  if (packageName === "Короткая помощь") return { id: "short_help", min: 400, max: 700 };
+  if (packageName === "Присмотр 2 часа") return { id: "supervision_2h", min: 700, max: 1200 };
+  if (packageName === "Сопровождение стандарт") return { id: "accompaniment_standard", min: 800, max: 1500 };
+  if (packageName === "Помощь 3–4 часа") return { id: "help_3_4h", min: 1200, max: 2000 };
+  if (packageName === "Регулярная помощь") return { id: "regular_help", min: 700, max: null };
+  return { id: "home_help_2h", min: 700, max: 1100 };
+}
+
 function upsertCity(
   slug: string,
   name: string,
@@ -945,8 +974,8 @@ function upsertCity(
     update: {
       name,
       region,
-      status: "active",
-      isActive: true,
+      status: "inactive",
+      isActive: false,
       defaultCommissionAmount: 50,
       minTopUpAmount: 150,
       timezone,
@@ -961,8 +990,8 @@ function upsertCity(
       slug,
       name,
       region,
-      status: "active",
-      isActive: true,
+      status: "inactive",
+      isActive: false,
       defaultCommissionAmount: 50,
       minTopUpAmount: 150,
       timezone,

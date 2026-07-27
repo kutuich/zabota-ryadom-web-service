@@ -31,7 +31,7 @@
 - `CORS_ORIGIN="https://zabota-ugorsk.ru"` - production origin сайта.
 - `YANDEX_MAPS_API_KEY` - пока пусто, встроенные Яндекс.Карты не подключены.
 - `VITE_YANDEX_MAPS_API_KEY` - пока пусто.
-- `DEFAULT_COMMISSION_AMOUNT=50` - текущий сервисный сбор.
+- `DEFAULT_SERVICE_FEE_AMOUNT=50` - текущий сервисный сбор.
 - `DEFAULT_MIN_TOP_UP_AMOUNT=150` - минимальное пополнение.
 - `PAYMENT_PROVIDER=mock` - для первого запуска оставить mock.
 - `PAYMENT_RECEIPT_ENABLED=false` - онлайн-касса пока не включена.
@@ -49,7 +49,7 @@
 
 `PAYMENT_PROVIDER=tbank` включать только после проверки домена, HTTPS, webhook и тестового терминала. До этого production preview должен работать с `PAYMENT_PROVIDER=mock`.
 
-Важно: на текущем этапе код загрузок документов использует `backend/uploads`, а не `UPLOADS_DIR`. Перед использованием загрузок в production нужно доработать `backend/src/services/uploadStorage.ts`, чтобы он читал `UPLOADS_DIR` и писал файлы в `/data/uploads`.
+Backend использует `UPLOADS_DIR` как единый корень загрузок, создаёт его при старте и хранит в БД только URL/storage key без абсолютного пути контейнера.
 
 ## 3. Persistent volume
 
@@ -58,7 +58,9 @@
 - `/data/zabota.db` - SQLite база;
 - `/data/uploads` - файлы загрузок.
 
-Для базы уже используется `DATABASE_URL="file:/data/zabota.db"`. Для uploads путь `/data/uploads` заложен в env-шаблон, но текущая реализация ещё требует follow-up правки, потому что фактически пишет в `/app/backend/uploads`.
+Для базы используется `DATABASE_URL="file:/data/zabota.db"`, для файлов — `UPLOADS_DIR=/data/uploads`. Оба пути попадают в один persistent volume.
+
+На Timeweb рекомендуется монтировать `-v /opt/zabota/data:/data`. Тогда файлы будут храниться в `/opt/zabota/data/uploads` на хосте.
 
 ## 4. Первый запуск
 

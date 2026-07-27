@@ -11,6 +11,8 @@ import {
 } from "../src/services/addressService";
 import { acceptLatestLegalDocuments, requiredDocumentTypesForRegistration, seedLegalDocuments } from "../src/services/legalService";
 import { normalizeRussianPhone } from "../src/services/phoneService";
+import { CITY_DIRECTORY } from "../src/services/cityDirectory";
+import { ensureSettlementDirectory } from "../src/services/settlementService";
 
 const prisma = new PrismaClient();
 
@@ -91,26 +93,33 @@ async function main() {
     upsertCity("volgograd", "Волгоград", "Волгоградская область", "Europe/Volgograd", "future_large_city", 70, 48.708, 44.5133, ["Центр", "Краснооктябрьский", "Советский"]),
     upsertCity("nizhny_novgorod", "Нижний Новгород", "Нижегородская область", "Europe/Moscow", "future_large_city", 80, 56.3269, 44.0059, ["Центр", "Автозаводский", "Сормовский"])
   ]);
+  for (const city of CITY_DIRECTORY) {
+    await prisma.city.upsert({
+      where: { slug: city.slug },
+      update: { ...city, status: "inactive" },
+      create: { ...city, status: "inactive", defaultCommissionAmount: 50, minTopUpAmount: 150 }
+    });
+  }
 
   const categories = [
     {
       slug: "companionship",
       name: "Присмотр и общение",
-      basePrice: 500,
+      basePrice: 700,
       calculationUnit: "visit",
       minDurationHours: 1,
       sortOrder: 10,
-      description: "Быть рядом, наблюдать, поддерживать и общаться без медицинских услуг.",
+      description: "Быть рядом, наблюдать, поддерживать и общаться без медицинских процедур.",
       included: ["побыть рядом", "общение", "бытовой контроль безопасности", "подать воду или плед"],
       excluded: ["гигиена тела", "помощь в туалете", "перемещение с кровати", "медицинские процедуры"],
       clientInstructions: "Подходит для простого присмотра и общения. Если нужна гигиена или помощь с туалетом, выберите сиделку или уход за маломобильным.",
       performerInstructions: "Не соглашайтесь на тяжёлый уход в рамках присмотра. Если на месте объём сложнее, сообщите администратору.",
-      pricingRules: { packages: ["Короткий визит", "Длительный присмотр"], basePerformerPayment: 500 }
+      pricingRules: { packages: ["short_help", "supervision_2h"], basePerformerPayment: 700 }
     },
     {
       slug: "escort",
       name: "Сопровождение",
-      basePrice: 600,
+      basePrice: 800,
       calculationUnit: "visit",
       minDurationHours: 2,
       sortOrder: 20,
@@ -119,12 +128,12 @@ async function main() {
       excluded: ["медицинские консультации", "подписание документов вместо заказчика", "финансовые операции вместо заказчика", "перенос человека"],
       clientInstructions: "Укажите маршрут, длительность ожидания и мобильность человека.",
       performerInstructions: "Согласуйте маршрут, ожидание, транспорт и безопасность до принятия заявки.",
-      pricingRules: { packages: ["Обычное сопровождение", "Сопровождение с ограниченной мобильностью", "Сопровождение на коляске при доступной среде"], basePerformerPayment: 600 }
+      pricingRules: { packages: ["accompaniment_standard"], basePerformerPayment: 800 }
     },
     {
       slug: "home-help",
       name: "Помощь по дому",
-      basePrice: 950,
+      basePrice: 700,
       calculationUnit: "visit",
       minDurationHours: 2,
       sortOrder: 30,
@@ -133,12 +142,12 @@ async function main() {
       excluded: ["уход за телом человека", "помощь в туалете", "перемещение человека", "генеральная уборка после ремонта"],
       clientInstructions: "Опишите объём бытовых задач. Уход за телом относится к другим категориям.",
       performerInstructions: "Если работа тяжёлая, длительная или условия плохие, нужна ручная проверка.",
-      pricingRules: { packages: ["Стандартный бытовой визит"], basePerformerPayment: 950 }
+      pricingRules: { packages: ["home_help_2h", "help_3_4h", "regular_help"], basePerformerPayment: 700 }
     },
     {
       slug: "cooking",
       name: "Приготовление еды",
-      basePrice: 850,
+      basePrice: 700,
       calculationUnit: "visit",
       minDurationHours: 1,
       sortOrder: 40,
@@ -147,12 +156,12 @@ async function main() {
       excluded: ["назначение диеты", "лечебное питание по диагнозу", "сложное праздничное меню", "кормление тяжёлого лежачего человека"],
       clientInstructions: "Помощник учитывает бытовые пожелания, но не назначает лечебное питание.",
       performerInstructions: "Не берите медицинские назначения по питанию. Согласуйте продукты и объём заранее.",
-      pricingRules: { packages: ["Простая готовка", "Полноценная готовка"], basePerformerPayment: 850 }
+      pricingRules: { packages: ["home_help_2h", "help_3_4h"], basePerformerPayment: 700 }
     },
     {
       slug: "elderly-care",
       name: "Сиделка для пожилого человека",
-      basePrice: 1200,
+      basePrice: 700,
       calculationUnit: "visit",
       minDurationHours: 3,
       sortOrder: 50,
@@ -161,12 +170,12 @@ async function main() {
       excluded: ["полное подмывание лежачего", "смена подгузника лежачему", "перевязки", "обработка пролежней", "тяжёлое перемещение"],
       clientInstructions: "Если человек маломобильный или лежачий, выберите уход за маломобильным.",
       performerInstructions: "Обычная сиделка не выполняет медицинские процедуры и тяжёлый лежачий уход.",
-      pricingRules: { packages: ["Уходовый визит", "Уходовый повышенный", "Сиделка"], basePerformerPayment: 1200 }
+      pricingRules: { packages: ["supervision_2h", "help_3_4h", "regular_help"], basePerformerPayment: 700 }
     },
     {
       slug: "limited-mobility-care",
       name: "Уход за маломобильным человеком",
-      basePrice: 1450,
+      basePrice: 1200,
       calculationUnit: "visit",
       minDurationHours: 3,
       sortOrder: 60,
@@ -175,12 +184,12 @@ async function main() {
       excluded: ["инъекции", "капельницы", "перевязки", "обработка ран", "лечение пролежней", "катетеры и стомы"],
       clientInstructions: "Подробно опишите мобильность, вес, риски падения и гигиену. Медицинские процедуры запрещены.",
       performerInstructions: "Согласуйте безопасное перемещение. Если требуется два человека или подъём на руках, нужна ручная проверка.",
-      pricingRules: { packages: ["Уход маломобильного", "Сложный уходовый", "Тяжёлый уходовый"], basePerformerPayment: 1450 }
+      pricingRules: { packages: ["help_3_4h", "regular_help"], basePerformerPayment: 1200 }
     },
     {
       slug: "delivery-errands",
       name: "Доставка / закупки / поручения",
-      basePrice: 500,
+      basePrice: 400,
       calculationUnit: "task",
       minDurationHours: 1,
       sortOrder: 70,
@@ -189,12 +198,12 @@ async function main() {
       excluded: ["крупные финансовые операции", "получение кредитов", "медицинские консультации"],
       clientInstructions: "Укажите список, адрес и ограничения по сумме покупки.",
       performerInstructions: "Не берите рискованные финансовые поручения и не консультируйте по лекарствам.",
-      pricingRules: { packages: ["Короткий визит"], basePerformerPayment: 500 }
+      pricingRules: { packages: ["short_help"], basePerformerPayment: 400 }
     },
     {
       slug: "walks",
       name: "Прогулки",
-      basePrice: 650,
+      basePrice: 800,
       calculationUnit: "visit",
       minDurationHours: 1,
       sortOrder: 80,
@@ -203,12 +212,12 @@ async function main() {
       excluded: ["реабилитационные упражнения", "медицинский контроль", "перенос человека"],
       clientInstructions: "Укажите мобильность человека и маршрут.",
       performerInstructions: "Если требуется физическая поддержка или коляска, согласуйте условия заранее.",
-      pricingRules: { packages: ["Обычное сопровождение"], basePerformerPayment: 600 }
+      pricingRules: { packages: ["accompaniment_standard"], basePerformerPayment: 800 }
     },
     {
       slug: "small-household-tasks",
       name: "Мелкие бытовые задачи",
-      basePrice: 650,
+      basePrice: 400,
       calculationUnit: "task",
       minDurationHours: 1,
       sortOrder: 90,
@@ -217,12 +226,12 @@ async function main() {
       excluded: ["ремонтные работы повышенного риска", "тяжёлый физический труд", "медицинские процедуры"],
       clientInstructions: "Опишите одну понятную бытовую задачу и примерную длительность.",
       performerInstructions: "Не выполняйте опасные или тяжёлые работы без ручного согласования.",
-      pricingRules: { packages: ["Короткий визит"], basePerformerPayment: 500 }
+      pricingRules: { packages: ["short_help"], basePerformerPayment: 400 }
     },
     {
       slug: "childcare",
       name: "Няня для ребёнка / няня для малышей",
-      basePrice: 650,
+      basePrice: 700,
       calculationUnit: "hour",
       minDurationHours: 2,
       sortOrder: 100,
@@ -232,7 +241,7 @@ async function main() {
       excluded: ["медицинский уход", "назначение лекарств", "перевозка без отдельного согласования"],
       clientInstructions: "Проверьте статус справки об отсутствии судимости и допуск к категории.",
       performerInstructions: "Для категории нужен отдельный допуск. Медицинские действия и лекарства не выполняются.",
-      pricingRules: { packages: ["Няня для ребёнка / Няня для малышей"], basePerformerPaymentPerHour: 650 }
+      pricingRules: { packages: ["supervision_2h", "help_3_4h"], basePerformerPayment: 700 }
     }
   ];
   const activeCategorySlugs = categories.map((category) => category.slug);
@@ -486,7 +495,7 @@ async function main() {
         performerPaymentAmount: 1400,
         clientServiceFeeAmount: 50,
         clientTotalExpense: 1450,
-        packageName: "Уходовый повышенный",
+        packageName: "Помощь 3–4 часа",
         explanation: "Рекомендуемая оплата помощнику 1400 ₽, сервисный сбор заказчика 50 ₽, ориентировочные общие расходы 1450 ₽."
       })
     },
@@ -520,7 +529,7 @@ async function main() {
         performerPaymentAmount: 1400,
         clientServiceFeeAmount: 50,
         clientTotalExpense: 1450,
-        packageName: "Уходовый повышенный",
+        packageName: "Помощь 3–4 часа",
         explanation: "Рекомендуемая оплата помощнику 1400 ₽, сервисный сбор заказчика 50 ₽, ориентировочные общие расходы 1450 ₽."
       }),
       comment: "Проверить, что помощник готов к спокойному общению.",
@@ -722,6 +731,7 @@ async function main() {
     sovetsky,
     categories: categoryRecords
   });
+  await ensureSettlementDirectory();
 
   console.log("Seed completed");
   if (process.env.SEED_DEMO_DATA === "true" && (process.env.NODE_ENV !== "production" || process.env.DEMO_MODE === "true")) {
@@ -911,7 +921,7 @@ async function seedVisualAuditData(input: {
       timeTo: "14:00",
       hours: 2,
       amount: 950,
-      packageName: "Стандартный бытовой визит",
+      packageName: "Бытовая помощь 2 часа",
       flags: { needsCleaning: true },
       actions: ["light_cleaning", "laundry"]
     },
@@ -927,7 +937,7 @@ async function seedVisualAuditData(input: {
       timeTo: "17:00",
       hours: 2,
       amount: 800,
-      packageName: "Длительный присмотр",
+      packageName: "Присмотр 2 часа",
       flags: { hasElderlyPerson: true },
       actions: ["companionship"]
     },
@@ -943,7 +953,7 @@ async function seedVisualAuditData(input: {
       timeTo: "12:00",
       hours: 3,
       amount: 1200,
-      packageName: "Уходовый визит",
+      packageName: "Помощь 3–4 часа",
       flags: { hasElderlyPerson: true, needsCooking: true },
       actions: ["help_with_food", "simple_cooking"]
     },
@@ -959,7 +969,7 @@ async function seedVisualAuditData(input: {
       timeTo: "13:00",
       hours: 2,
       amount: 950,
-      packageName: "Стандартный бытовой визит",
+      packageName: "Бытовая помощь 2 часа",
       flags: { needsCleaning: true, hasPets: true },
       actions: ["light_cleaning", "bed_linen"]
     },
@@ -992,7 +1002,7 @@ async function seedVisualAuditData(input: {
       timeTo: "15:00",
       hours: 2,
       amount: 950,
-      packageName: "Стандартный бытовой визит",
+      packageName: "Бытовая помощь 2 часа",
       flags: { needsCleaning: true, needsCooking: true },
       actions: ["light_cleaning", "simple_cooking"],
       completed: true
@@ -1009,7 +1019,7 @@ async function seedVisualAuditData(input: {
       timeTo: "19:00",
       hours: 2,
       amount: 800,
-      packageName: "Длительный присмотр",
+      packageName: "Присмотр 2 часа",
       flags: { hasElderlyPerson: true },
       actions: ["companionship"]
     },
@@ -1025,7 +1035,7 @@ async function seedVisualAuditData(input: {
       timeTo: "18:00",
       hours: 2,
       amount: 850,
-      packageName: "Простая готовка",
+      packageName: "Бытовая помощь 2 часа",
       flags: { needsCooking: true },
       actions: ["simple_cooking"]
     },
@@ -1421,7 +1431,7 @@ async function seedVisualAuditData(input: {
       expectedDurationHours: 1,
       budgetAmount: 500,
       priceEstimateAmount: 500,
-      pricingBreakdownJson: JSON.stringify(pricingQuote(500, "Короткий визит", 1)),
+      pricingBreakdownJson: JSON.stringify(pricingQuote(500, "Короткая помощь", 1)),
       status: "waiting_for_responses",
       visibilityStatus: "city_visible"
     }
@@ -1429,6 +1439,7 @@ async function seedVisualAuditData(input: {
 }
 
 function pricingQuote(performerPaymentAmount: number, packageName: string, billableHours: number) {
+  const packageMeta = seededPackageMeta(packageName);
   return {
     performerPaymentAmount,
     clientServiceFeeAmount: 50,
@@ -1437,16 +1448,30 @@ function pricingQuote(performerPaymentAmount: number, packageName: string, billa
     performerCommissionAmount: 50,
     performerNetAmount: performerPaymentAmount - 50,
     serviceMarginAmount: 100,
+    packageId: packageMeta.id,
+    packageTitle: packageName,
+    packageLabel: packageName,
     packageName,
-    packageDescription: "Visual audit seed: пакет подобран для проверки отображения.",
+    packagePriceMin: packageMeta.min,
+    packagePriceMax: packageMeta.max,
+    packageDescription: "Пакет подобран для проверки отображения.",
     billableHours,
-    included: ["согласованный объём помощи", "общение в чате", "без медицинских услуг"],
+    included: ["согласованный объём помощи", "общение в чате", "без медицинских процедур"],
     excluded: ["медицинские процедуры", "передача контактов до согласования"],
     increaseFactors: ["изменение длительности", "увеличение объёма помощи"],
     additions: [],
     clientExplanation: `Рекомендуемая оплата помощнику ${performerPaymentAmount} ₽. Сервисный сбор заказчика 50 ₽. Ориентировочные общие расходы ${performerPaymentAmount + 50} ₽.`,
     performerExplanation: `Рекомендуемая оплата за визит ${performerPaymentAmount} ₽. Сервисный сбор помощника 50 ₽. Ориентировочный доход после сервисного сбора ${performerPaymentAmount - 50} ₽.`
   };
+}
+
+function seededPackageMeta(packageName: string) {
+  if (packageName === "Короткая помощь") return { id: "short_help", min: 400, max: 700 };
+  if (packageName === "Присмотр 2 часа") return { id: "supervision_2h", min: 700, max: 1200 };
+  if (packageName === "Сопровождение стандарт") return { id: "accompaniment_standard", min: 800, max: 1500 };
+  if (packageName === "Помощь 3–4 часа") return { id: "help_3_4h", min: 1200, max: 2000 };
+  if (packageName === "Регулярная помощь") return { id: "regular_help", min: 700, max: null };
+  return { id: "home_help_2h", min: 700, max: 1100 };
 }
 
 function seedAddress(city: City) {
@@ -1492,8 +1517,8 @@ function upsertCity(
     update: {
       name,
       region,
-      status: "active",
-      isActive: true,
+      status: "inactive",
+      isActive: false,
       defaultCommissionAmount: 50,
       minTopUpAmount: 150,
       timezone,
@@ -1508,8 +1533,8 @@ function upsertCity(
       slug,
       name,
       region,
-      status: "active",
-      isActive: true,
+      status: "inactive",
+      isActive: false,
       defaultCommissionAmount: 50,
       minTopUpAmount: 150,
       timezone,
@@ -1577,6 +1602,10 @@ async function backfillNormalizedPhones() {
     select: { id: true, phone: true }
   });
   for (const user of users) {
+    if (!user.phone) {
+      console.warn(`Cannot normalize phone for user ${user.id}: phone is empty`);
+      continue;
+    }
     try {
       const normalizedPhone = normalizeRussianPhone(user.phone);
       await prisma.user.update({

@@ -16,13 +16,18 @@ export function AppLayout({
   variant: "admin" | "user";
   children: React.ReactNode;
 }) {
-  const { user, logout } = useAuth();
+  const { user, logout, stopActing } = useAuth();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
 
   function handleLogout() {
     logout();
     navigate("/app", { replace: true });
+  }
+
+  async function handleStopActing() {
+    const result = await stopActing();
+    navigate(result.nextPath, { replace: true });
   }
 
   return (
@@ -43,7 +48,22 @@ export function AppLayout({
         </>
       )}
       {menuOpen && <button className="nav-scrim" type="button" aria-label="Закрыть меню" onClick={() => setMenuOpen(false)} />}
-      <main className="workspace">{children}</main>
+      <main className="workspace">
+        {user?.isActingAsRole && (
+          <div className="admin-acting-banner" role="status">
+            <div>
+              <strong>
+                {user.actingRole === "client"
+                  ? "Вы работаете как Заказчик в режиме администратора."
+                  : "Вы работаете как Помощник в режиме администратора."}
+              </strong>
+              <span>Все действия сохраняются в журнале.</span>
+            </div>
+            <button className="secondary-button" type="button" onClick={handleStopActing}>Вернуться в админку</button>
+          </div>
+        )}
+        {children}
+      </main>
     </div>
   );
 }
