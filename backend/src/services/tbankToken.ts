@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 type TbankTokenParams = Record<string, unknown>;
 
@@ -24,5 +24,7 @@ export function buildTbankToken(params: TbankTokenParams, password: string) {
 export function verifyTbankToken(payload: TbankTokenParams, password: string) {
   const token = payload.Token;
   if (!token || typeof token !== "string") return false;
-  return buildTbankToken(payload, password) === token.toLowerCase();
+  const expected = Buffer.from(buildTbankToken(payload, password), "utf8");
+  const actual = Buffer.from(token.toLowerCase(), "utf8");
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }

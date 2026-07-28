@@ -1,4 +1,4 @@
-import { Search } from "lucide-react";
+import { RefreshCcw, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { EmptyState } from "../components/EmptyState";
@@ -22,6 +22,7 @@ export function AdminPaymentsPage() {
   const [isDetailsLoading, setIsDetailsLoading] = useState(false);
   const [error, setError] = useState("");
   const [detailsError, setDetailsError] = useState("");
+  const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
 
   async function loadPayments(nextFilters = filters) {
     setIsLoading(true);
@@ -45,6 +46,20 @@ export function AdminPaymentsPage() {
       setDetailsError("Не удалось загрузить платёж.");
     } finally {
       setIsDetailsLoading(false);
+    }
+  }
+
+  async function refreshPaymentStatus(id: string) {
+    setIsRefreshingStatus(true);
+    setDetailsError("");
+    try {
+      const result = await api.refreshPaymentStatus(id);
+      await Promise.all([openPayment(id), loadPayments()]);
+      setDetailsError(result.message);
+    } catch {
+      setDetailsError("Не удалось проверить статус платежа.");
+    } finally {
+      setIsRefreshingStatus(false);
     }
   }
 
@@ -168,14 +183,28 @@ export function AdminPaymentsPage() {
           </div>
           {detailsError && <p className="notice">{detailsError}</p>}
           {isDetailsLoading && <p className="empty-text">Платёж загружается...</p>}
-          {selectedPayment && <PaymentDetails details={selectedPayment} />}
+          {selectedPayment && (
+            <PaymentDetails
+              details={selectedPayment}
+              isRefreshing={isRefreshingStatus}
+              onRefresh={() => void refreshPaymentStatus(selectedPayment.payment.id)}
+            />
+          )}
         </section>
       )}
     </div>
   );
 }
 
-function PaymentDetails({ details }: { details: AdminPaymentDetails }) {
+function PaymentDetails({
+  details,
+  isRefreshing,
+  onRefresh
+}: {
+  details: AdminPaymentDetails;
+  isRefreshing: boolean;
+  onRefresh: () => void;
+}) {
   const payment = details.payment;
   const user = details.user ?? payment.user;
   return (
@@ -200,11 +229,19 @@ function PaymentDetails({ details }: { details: AdminPaymentDetails }) {
             ? `${details.balanceTransaction.amount} ₽ · ${balanceKindLabel(details.balanceTransaction.balanceKind)} · ${details.balanceTransaction.reason}`
             : "нет"}
         </strong>
+        <span>ID операции баланса</span><strong>{payment.balanceTransactionId ?? "нет"}</strong>
       </div>
+      {payment.provider === "tbank" && ["pending", "manual_review"].includes(payment.status) && (
+        <button className="secondary-button" type="button" onClick={onRefresh} disabled={isRefreshing}>
+          <RefreshCcw size={18} />
+          {isRefreshing ? "Проверяем" : "Обновить статус"}
+        </button>
+      )}
       <details className="details-box">
         <summary>Технические данные платежа</summary>
         <div className="list">
           <RawJsonBlock title="Raw init response" value={details.rawInitResponseJson} />
+          <RawJsonBlock title="Raw GetState response" value={details.rawStateResponseJson} />
           <RawJsonBlock title="Raw webhook" value={details.rawWebhookJson} />
         </div>
       </details>
@@ -259,6 +296,7 @@ function paymentProviderLabel(provider: string) {
 function userRoleLabel(role: string) {
   if (role === "client") return "Заказчик";
   if (role === "performer") return "Помощник";
+  if (role === "manager") return "Менеджер";
   if (role === "superadmin") return "Владелец";
   if (role === "admin") return "Администратор";
   return "не указана";

@@ -238,6 +238,7 @@ export async function resolveVkUser(input: {
 
 export async function isUserProfileComplete(userId: string) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (user?.role === "manager") return true;
   if (!user || (user.role !== "client" && user.role !== "performer")) return false;
   if (!user.normalizedPhone || !user.cityId) return false;
   const statuses = await getConsentStatuses(user.id, user.role);

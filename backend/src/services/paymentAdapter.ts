@@ -42,6 +42,21 @@ export type CreateTopUpPaymentResult = {
   rawResponseJson: string | null;
 };
 
+export type GetPaymentStateInput = {
+  providerPaymentId: string | null;
+  orderId: string;
+  amount: number;
+};
+
+export type GetPaymentStateResult = {
+  providerPaymentId: string;
+  orderId: string | null;
+  amountKopecks: number | null;
+  providerStatus: string;
+  success: true;
+  rawResponseJson: string;
+};
+
 export class PaymentInitError extends Error {
   provider: PaymentProvider;
   providerPaymentId: string | null;
@@ -65,9 +80,27 @@ export class PaymentInitError extends Error {
   }
 }
 
+export class PaymentStateError extends Error {
+  rawResponseJson: string | null;
+  requiresManualReview: boolean;
+  reasonCode: string;
+
+  constructor(message: string, options: {
+    rawResponseJson?: string | null;
+    requiresManualReview?: boolean;
+    reasonCode: string;
+  }) {
+    super(message);
+    this.rawResponseJson = options.rawResponseJson ?? null;
+    this.requiresManualReview = options.requiresManualReview ?? false;
+    this.reasonCode = options.reasonCode;
+  }
+}
+
 export interface PaymentAdapter {
   createTopUpPayment(input: CreateTopUpPaymentInput): Promise<CreateTopUpPaymentResult>;
   createTopUp(amount: number, userId: string): Promise<PaymentResult>;
+  getState?(payment: GetPaymentStateInput): Promise<GetPaymentStateResult>;
 }
 
 export const mockPaymentAdapter: PaymentAdapter = {
@@ -111,6 +144,7 @@ export const tbankPaymentAdapter: PaymentAdapter = {
       Amount: input.amount * 100,
       OrderId: input.orderId,
       Description: "Пополнение баланса Забота Рядом",
+      PayType: "O",
       SuccessURL: input.successUrl || env.tbankSuccessUrl,
       FailURL: input.failUrl || env.tbankFailUrl,
       NotificationURL: input.notificationUrl || env.tbankNotificationUrl,
@@ -125,15 +159,25 @@ export const tbankPaymentAdapter: PaymentAdapter = {
       // TODO: add Receipt when fiscalization is enabled.
     };
     const rawRequestJson = JSON.stringify(initRequestWithToken);
-    const response = await fetch(`${env.tbankApiUrl.replace(/\/$/, "")}/Init`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: rawRequestJson
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${env.tbankApiUrl.replace(/\/$/, "")}/Init`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: rawRequestJson,
+        signal: AbortSignal.timeout(15_000)
+      });
+    } catch {
+      throw new PaymentInitError("Платёжный провайдер временно недоступен", {
+        provider: "tbank",
+        rawRequestJson,
+        status: "failed"
+      });
+    }
     const responsePayload = await response.json().catch(async () => ({ Message: await response.text().catch(() => "") })) as Record<string, unknown>;
     const rawResponseJson = JSON.stringify(responsePayload);
 
-    if (!response.ok || responsePayload.Success === false) {
+    if (!response.ok || !isProviderSuccess(responsePayload.Success)) {
       throw new PaymentInitError(tbankErrorMessage(responsePayload, response.status), {
         provider: "tbank",
         providerPaymentId: responsePayload.PaymentId === undefined || responsePayload.PaymentId === null ? null : String(responsePayload.PaymentId),
@@ -143,17 +187,100 @@ export const tbankPaymentAdapter: PaymentAdapter = {
       });
     }
 
+    const providerPaymentId = valueAsString(responsePayload.PaymentId);
+    const responseOrderId = valueAsString(responsePayload.OrderId);
+    const responseAmount = responsePayload.Amount === undefined ? input.amount * 100 : Number(responsePayload.Amount);
     const paymentUrl = valueAsString(responsePayload.PaymentURL ?? responsePayload.PaymentUrl);
-    if (!paymentUrl) {
-      throw new Error("Платёжный провайдер не вернул ссылку на платёжную форму");
+    if (!providerPaymentId || (responseOrderId && responseOrderId !== input.orderId) || responseAmount !== input.amount * 100 || !isSafePaymentUrl(paymentUrl)) {
+      throw new PaymentInitError("Платёжный провайдер вернул некорректный ответ", {
+        provider: "tbank",
+        providerPaymentId: providerPaymentId || null,
+        rawRequestJson,
+        rawResponseJson,
+        status: "manual_review"
+      });
     }
 
     return {
       provider: "tbank",
-      providerPaymentId: responsePayload.PaymentId === undefined || responsePayload.PaymentId === null ? null : String(responsePayload.PaymentId),
+      providerPaymentId,
       paymentUrl,
       status: "pending",
       rawRequestJson,
+      rawResponseJson
+    };
+  },
+  async getState(payment) {
+    if (!env.tbankTerminalKey || !env.tbankPassword || !env.tbankApiUrl) {
+      throw new PaymentStateError("Платёжный провайдер не настроен", {
+        reasonCode: "provider_not_configured"
+      });
+    }
+    if (!payment.providerPaymentId) {
+      throw new PaymentStateError("У платежа нет идентификатора провайдера", {
+        requiresManualReview: true,
+        reasonCode: "provider_payment_id_missing"
+      });
+    }
+
+    const stateRequest = {
+      TerminalKey: env.tbankTerminalKey,
+      PaymentId: payment.providerPaymentId
+    };
+    const requestBody = JSON.stringify({
+      ...stateRequest,
+      Token: buildTbankToken(stateRequest, env.tbankPassword)
+    });
+    let response: Response;
+    try {
+      response = await fetch(`${env.tbankApiUrl.replace(/\/$/, "")}/GetState`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: requestBody,
+        signal: AbortSignal.timeout(15_000)
+      });
+    } catch {
+      throw new PaymentStateError("Платёжный провайдер временно недоступен", {
+        reasonCode: "provider_unavailable"
+      });
+    }
+
+    const responsePayload = await response.json().catch(() => ({})) as Record<string, unknown>;
+    const rawResponseJson = JSON.stringify(responsePayload);
+    if (!response.ok || !isProviderSuccess(responsePayload.Success)) {
+      throw new PaymentStateError("Не удалось получить статус платежа", {
+        rawResponseJson,
+        reasonCode: "provider_rejected"
+      });
+    }
+
+    const responseTerminalKey = valueAsString(responsePayload.TerminalKey);
+    const responsePaymentId = valueAsString(responsePayload.PaymentId ?? responsePayload.PaymentID);
+    const responseOrderId = valueAsString(responsePayload.OrderId ?? responsePayload.OrderID);
+    const responseStatus = valueAsString(responsePayload.Status);
+    const responseAmount = responsePayload.Amount === undefined || responsePayload.Amount === null
+      ? null
+      : Number(responsePayload.Amount);
+    const identifiersMatch = responsePaymentId === payment.providerPaymentId
+      && responseTerminalKey === env.tbankTerminalKey
+      && (!responseOrderId || responseOrderId === payment.orderId);
+    const amountMatches = responseAmount === null
+      || (Number.isSafeInteger(responseAmount) && responseAmount === payment.amount * 100);
+
+    if (!identifiersMatch || !amountMatches || !responseStatus) {
+      throw new PaymentStateError("Платёжный провайдер вернул несовпадающие данные", {
+        rawResponseJson,
+        requiresManualReview: true,
+        reasonCode: !identifiersMatch ? "identifier_mismatch" : !amountMatches ? "amount_mismatch" : "status_missing"
+      });
+    }
+
+    return {
+      providerPaymentId: responsePaymentId,
+      orderId: responseOrderId || null,
+      amountKopecks: responseAmount,
+      providerStatus: responseStatus,
+      success: true,
       rawResponseJson
     };
   },
@@ -183,4 +310,17 @@ function tbankErrorMessage(payload: Record<string, unknown>, httpStatus: number)
   const errorCode = valueAsString(payload.ErrorCode);
   const parts = [message || "Платёжный провайдер отклонил Init-запрос", details, errorCode ? `код ${errorCode}` : ""].filter(Boolean);
   return httpStatus >= 400 ? `${parts.join(". ")}. HTTP ${httpStatus}` : parts.join(". ");
+}
+
+function isProviderSuccess(value: unknown) {
+  return value === true || (typeof value === "string" && value.toLowerCase() === "true");
+}
+
+function isSafePaymentUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || (env.nodeEnv !== "production" && url.protocol === "http:");
+  } catch {
+    return false;
+  }
 }

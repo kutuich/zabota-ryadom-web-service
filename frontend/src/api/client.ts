@@ -11,6 +11,7 @@ import type {
   LegalDocument,
   LegalExportPayload,
   PaymentActionResult,
+  PaymentRefreshResult,
   PaymentTransaction,
   MyCities,
   SettlementSearchResult,
@@ -189,6 +190,8 @@ export const api = {
     apiFetch<TopUpPaymentInit>("/payments/top-up/init", { method: "POST", body: JSON.stringify({ amount }) }),
   getMyPayments: () => apiFetch<PaymentTransaction[]>("/payments/my"),
   getPayment: (id: string) => apiFetch<PaymentTransaction>(`/payments/${id}`),
+  refreshPaymentStatus: (id: string) =>
+    apiFetch<PaymentRefreshResult>(`/payments/${id}/refresh-status`, { method: "POST" }),
   mockPaymentSucceed: (id: string) =>
     apiFetch<PaymentActionResult>(`/payments/mock/${id}/succeed`, { method: "POST" }),
   mockPaymentFail: (id: string) =>
@@ -281,6 +284,13 @@ export const api = {
     apiFetch<User>(`/admin/users/${userId}/block`, { method: "POST", body: JSON.stringify({ reason }) }),
   adminUnblockUser: (userId: string) =>
     apiFetch<User>(`/admin/users/${userId}/unblock`, { method: "POST" }),
+  adminAssignManager: (userId: string, reason?: string) =>
+    apiFetch<User>(`/admin/users/${userId}/manager/assign`, { method: "POST", body: JSON.stringify({ reason }) }),
+  adminRevokeManager: (userId: string, restoreRole?: "client" | "performer", reason?: string) =>
+    apiFetch<User>(`/admin/users/${userId}/manager/revoke`, {
+      method: "POST",
+      body: JSON.stringify({ restoreRole, reason })
+    }),
   adminUserArchiveSafety: (userId: string) =>
     apiFetch<UserArchiveSafety>(`/admin/users/${userId}/archive-safety`),
   adminRequestUserArchive: (userId: string, reason: string) =>
@@ -301,5 +311,20 @@ export const api = {
       body: JSON.stringify({ status, adminComment })
     }),
   adminUpdateCategory: (categoryId: string, body: Partial<ServiceCategory>) =>
-    apiFetch<ServiceCategory>(`/admin/categories/${categoryId}`, { method: "PATCH", body: JSON.stringify(body) })
+    apiFetch<ServiceCategory>(`/admin/categories/${categoryId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  managerSummary: () => apiFetch<Record<string, number>>("/manager/summary"),
+  managerUsers: () => apiFetch<User[]>("/manager/users"),
+  managerUser: (userId: string) => apiFetch<User>(`/manager/users/${userId}`),
+  managerBlockUser: (userId: string, reason: string) =>
+    apiFetch<User>(`/manager/users/${userId}/block`, { method: "POST", body: JSON.stringify({ reason }) }),
+  managerUnblockUser: (userId: string) =>
+    apiFetch<User>(`/manager/users/${userId}/unblock`, { method: "POST" }),
+  managerRequests: () => apiFetch<ClientRequest[]>("/manager/requests"),
+  managerRequest: (requestId: string) => apiFetch<ClientRequest>(`/manager/requests/${requestId}`),
+  managerChats: () => apiFetch<Chat[]>("/manager/chats"),
+  managerChat: (chatId: string) => apiFetch<Chat>(`/manager/chats/${chatId}`),
+  managerComplaints: () => apiFetch<unknown[]>("/manager/complaints"),
+  managerComplaint: (complaintId: string) => apiFetch<unknown>(`/manager/complaints/${complaintId}`),
+  managerPayments: () => apiFetch<AdminPaymentListItem[]>("/manager/payments"),
+  managerTransactions: () => apiFetch<unknown[]>("/manager/balance-transactions")
 };

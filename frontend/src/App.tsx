@@ -11,6 +11,7 @@ import { PerformerDashboard } from "./pages/PerformerDashboard";
 import { PublicHelpPage } from "./pages/PublicHelpPage";
 import { VisualAuditShowcasePage } from "./pages/VisualAuditShowcasePage";
 import { OAuthCompletePage } from "./pages/OAuthCompletePage";
+import { ManagerDashboard } from "./pages/ManagerDashboard";
 import { canRoleOpenPath, defaultPathForRole, isKnownPathForRole, legacyAppRedirectPath } from "./routes/navigation";
 import type { UserRole } from "./types";
 import { effectiveRoleForUser } from "./utils/authRole";
@@ -75,6 +76,7 @@ export function App() {
       <Route path="/app/client/*" element={<RoleGate allowed={["client"]}><ClientDashboard /></RoleGate>} />
       <Route path="/app/performer/*" element={<RoleGate allowed={["performer"]}><PerformerDashboard /></RoleGate>} />
       <Route path="/app/admin/*" element={<RoleGate allowed={["admin", "superadmin"]}><AdminDashboard /></RoleGate>} />
+      <Route path="/app/manager/*" element={<RoleGate allowed={["manager"]}><ManagerDashboard /></RoleGate>} />
       <Route path="/client" element={<LegacyAppRedirect />} />
       <Route path="/client/*" element={<LegacyAppRedirect />} />
       <Route path="/performer" element={<LegacyAppRedirect />} />

@@ -71,7 +71,13 @@ model User {
   updatedAt                DateTime             @updatedAt
   blockedAt                DateTime?
   blockedByAdminId         String?
+  blockedByRole            String?
   blockReason              String?
+  roleBeforeManager        String?
+  managerAssignedAt        DateTime?
+  managerAssignedByAdminId String?
+  managerRevokedAt         DateTime?
+  managerRevokedByAdminId  String?
   archiveRequestedAt       DateTime?
   archiveRequestedByAdminId String?
   archiveReason            String?
@@ -113,6 +119,7 @@ model User {
   @@index([cityId])
   @@index([status])
   @@index([blockedByAdminId])
+  @@index([managerAssignedByAdminId])
   @@index([archiveRequestedAt])
   @@index([archivedAt])
 }
@@ -424,6 +431,7 @@ model PaymentTransaction {
   balanceTransactionId String?  @unique
   rawInitRequestJson   String?
   rawInitResponseJson  String?
+  rawStateResponseJson String?
   rawWebhookJson       String?
   metadataJson         String?
   createdAt            DateTime @default(now())

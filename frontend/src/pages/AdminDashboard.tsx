@@ -227,6 +227,41 @@ export function AdminDashboard() {
     }
   }
 
+  async function assignManager(user: User) {
+    if (!window.confirm(`Назначить ${user.displayName} менеджером?`)) return;
+    const reason = window.prompt("Комментарий к назначению (необязательно):") ?? undefined;
+    try {
+      const updated = await api.adminAssignManager(user.id, reason?.trim() || undefined);
+      setSelectedUser(updated);
+      setNotice("Пользователь назначен менеджером. Предыдущая роль сохранена.");
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Не удалось назначить менеджера.");
+    }
+  }
+
+  async function revokeManager(user: User) {
+    if (!window.confirm(`Снять роль менеджера у ${user.displayName}?`)) return;
+    let restoreRole = user.roleBeforeManager ?? undefined;
+    if (!restoreRole) {
+      const answer = window.prompt("Укажите роль для восстановления: client или performer");
+      if (answer !== "client" && answer !== "performer") {
+        setNotice("Нужно выбрать роль Заказчика или Помощника.");
+        return;
+      }
+      restoreRole = answer;
+    }
+    const reason = window.prompt("Комментарий к снятию роли (необязательно):") ?? undefined;
+    try {
+      const updated = await api.adminRevokeManager(user.id, restoreRole, reason?.trim() || undefined);
+      setSelectedUser(updated);
+      setNotice("Роль менеджера снята. Предыдущая роль восстановлена.");
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Не удалось снять роль менеджера.");
+    }
+  }
+
   async function grantBonus() {
     await api.adminGrantBonus(
       bonusForm.userId,
@@ -1168,6 +1203,16 @@ export function AdminDashboard() {
         <Modal title={`Профиль пользователя: ${selectedUser.displayName}`} onClose={() => setSelectedUser(null)}>
           <UserProfile user={selectedUser} legalStatuses={selectedUserLegalStatuses} archiveSafety={selectedUserArchiveSafety} />
           <div className="trust-row">
+            {selectedUser.status === "active" && ["client", "performer"].includes(selectedUser.role) && (
+              <button className="primary-button" type="button" onClick={() => assignManager(selectedUser)}>
+                Назначить менеджером
+              </button>
+            )}
+            {selectedUser.role === "manager" && (
+              <button className="secondary-button" type="button" onClick={() => revokeManager(selectedUser)}>
+                Снять роль менеджера
+              </button>
+            )}
             <button className="secondary-button" type="button" onClick={() => exportUserConsents(selectedUser)}>
               <Download size={18} />
               Скачать согласия пользователя Excel
@@ -1530,7 +1575,11 @@ function UserProfile({ user, legalStatuses, archiveSafety }: { user: User; legal
   return (
     <div className="list">
       <div className="detail-grid">
+        <div className="detail-grid__full"><h3>Роль и доступ</h3></div>
         <span>Роль</span><strong>{userRoleLabel(user.role)}</strong>
+        <span>Предыдущая роль</span><strong>{user.roleBeforeManager ? userRoleLabel(user.roleBeforeManager) : "не указана"}</strong>
+        <span>Назначен менеджером</span><strong>{user.managerAssignedAt ? formatDateTimeRu(user.managerAssignedAt) : "нет"}</strong>
+        <span>Кем назначен</span><strong>{user.managerAssignedByAdminId ?? "не указано"}</strong>
         <span>Телефон</span><strong>{user.phone ?? "не указан"}</strong>
         <span>Email</span><strong>{user.email ?? "не указан"}</strong>
         <span>Город</span><strong>{user.city?.name ?? "не выбран"}</strong>
@@ -1538,6 +1587,7 @@ function UserProfile({ user, legalStatuses, archiveSafety }: { user: User; legal
         <span>Основной баланс</span><strong>{user.balance} ₽</strong>
         <span>Бонусный баланс</span><strong>{user.bonusBalance} ₽</strong>
         <span>Заблокирован</span><strong>{user.blockedAt ? formatDateTimeRu(user.blockedAt) : "нет"}</strong>
+        <span>Кем заблокирован</span><strong>{user.blockedByRole ? userRoleLabel(user.blockedByRole) : "не указано"}</strong>
         <span>Причина блокировки</span><strong>{user.blockReason ?? "нет"}</strong>
         <span>Запрос архива</span><strong>{user.archiveRequestedAt ? formatDateTimeRu(user.archiveRequestedAt) : "нет"}</strong>
         <span>Архивирован</span><strong>{user.archivedAt ? formatDateTimeRu(user.archivedAt) : "нет"}</strong>
@@ -1752,6 +1802,7 @@ function safeFileName(value: string) {
 function userRoleLabel(role: string) {
   if (role === "client") return "Заказчик";
   if (role === "performer") return "Помощник";
+  if (role === "manager") return "Менеджер";
   if (role === "superadmin") return "Владелец";
   if (role === "oauth_pending") return "Профиль не заполнен";
   return "Администратор";

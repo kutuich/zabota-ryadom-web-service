@@ -121,7 +121,16 @@ authRouter.get("/oauth/vk/callback", async (req, res) => {
       throw new HttpError(502, "VK ID не вернул идентификатор пользователя", "vk_profile_invalid");
     }
     const { user } = await resolveVkUser({ providerUserId, profile, linkUserId: transaction.linkUserId });
-    await writeAudit(user.id, transaction.linkUserId ? "auth.vk.link" : "auth.vk.login", "user_identity", providerUserId);
+    const vkAction = transaction.linkUserId
+      ? "auth.vk.link"
+      : user.role === "manager"
+        ? "manager.vk_login"
+        : "auth.vk.login";
+    await writeAudit(user.id, vkAction, "user_identity", providerUserId, {
+      actorUserId: user.id,
+      actorRole: user.role,
+      source: user.role === "manager" ? "manager_login" : "oauth"
+    });
     setOAuthCookie(res, VK_OAUTH_SESSION_COOKIE, createVkOAuthSessionCookie(user.id), 2 * 60);
     return res.redirect(302, safeOAuthRedirectPath(env.vkIdSuccessRedirectPath, "/app/oauth/complete"));
   } catch (error) {
@@ -159,8 +168,8 @@ authRouter.post(
     const userId = req.user!.id;
     const identity = await prisma.userIdentity.findFirst({ where: { userId, provider: "vk" } });
     if (!identity) throw new HttpError(403, "Профиль не связан с VK ID", "vk_identity_required");
-    if (req.user!.role === "admin" || req.user!.role === "superadmin") {
-      throw new HttpError(403, "Роль администратора нельзя выбрать через VK ID", "vk_admin_role_forbidden");
+    if (["admin", "superadmin", "manager"].includes(req.user!.role)) {
+      throw new HttpError(403, "Роль нельзя изменить через завершение регистрации VK ID", "vk_role_selection_forbidden");
     }
 
     const acceptedLegalDocumentTypes = Array.from(new Set([
@@ -408,7 +417,11 @@ authRouter.post(
       });
     }
 
-    await writeAudit(user.id, "auth.login", "user", user.id);
+    await writeAudit(user.id, user.role === "manager" ? "manager.login" : "auth.login", "user", user.id, {
+      actorUserId: user.id,
+      actorRole: user.role,
+      source: user.role === "manager" ? "manager_login" : "login"
+    });
 
     res.json({
       token: signUserToken(user.id, toUserRole(user.role)),
@@ -502,6 +515,7 @@ function validateRoleConfirmations(input: z.infer<typeof completeOAuthProfileSch
 function oauthNextPath(role: string) {
   if (role === "client") return "/app/client/requests";
   if (role === "performer") return "/app/performer/profile";
+  if (role === "manager") return "/app/manager";
   return "/app/oauth/complete";
 }
 

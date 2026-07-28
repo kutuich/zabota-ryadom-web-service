@@ -76,8 +76,22 @@ export function requireRole(...roles: UserRole[]) {
 
 export function requireAdmin(req: Request, _res: Response, next: NextFunction) {
   if (!req.user || !["admin", "superadmin"].includes(req.user.realRole)) {
-    return next(new HttpError(403, "Недостаточно прав администратора", "admin_required"));
+    const code = req.user?.realRole === "manager" ? "manager_permission_denied" : "admin_required";
+    return next(new HttpError(403, "Недостаточно прав администратора", code));
   }
 
   return next();
 }
+
+export const requireAdminOrSuperadmin = requireAdmin;
+export const requireSystemAdminOnly = requireAdmin;
+export const requireRoleManagementAccess = requireAdmin;
+
+export function requireAdminManagerOrSuperadmin(req: Request, _res: Response, next: NextFunction) {
+  if (!req.user || !["manager", "admin", "superadmin"].includes(req.user.realRole)) {
+    return next(new HttpError(403, "Недостаточно прав", "admin_or_manager_required"));
+  }
+  return next();
+}
+
+export const requireUserBlockingAccess = requireAdminManagerOrSuperadmin;

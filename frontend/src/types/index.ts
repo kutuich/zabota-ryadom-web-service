@@ -1,4 +1,4 @@
-export type UserRole = "client" | "performer" | "admin" | "superadmin" | "oauth_pending";
+export type UserRole = "client" | "performer" | "manager" | "admin" | "superadmin" | "oauth_pending";
 
 export type UserIdentity = {
   id: string;
@@ -110,7 +110,13 @@ export type User = {
   emailVerifiedAt?: string | null;
   blockedAt?: string | null;
   blockedByAdminId?: string | null;
+  blockedByRole?: UserRole | null;
   blockReason?: string | null;
+  roleBeforeManager?: "client" | "performer" | null;
+  managerAssignedAt?: string | null;
+  managerAssignedByAdminId?: string | null;
+  managerRevokedAt?: string | null;
+  managerRevokedByAdminId?: string | null;
   archiveRequestedAt?: string | null;
   archiveRequestedByAdminId?: string | null;
   archiveReason?: string | null;
@@ -545,6 +551,7 @@ export type PaymentTransaction = {
   balanceTransactionId?: string | null;
   rawInitRequestJson?: string | null;
   rawInitResponseJson?: string | null;
+  rawStateResponseJson?: string | null;
   metadataJson?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -563,6 +570,17 @@ export type PaymentActionResult = {
     bonusBalance: number;
     totalAvailableBalance: number;
   };
+};
+
+export type PaymentRefreshResult = {
+  paymentId: string;
+  orderId: string;
+  provider: string;
+  amount: number;
+  status: string;
+  creditedAt?: string | null;
+  balanceTransactionId?: string | null;
+  message: string;
 };
 
 export type AdminPaymentFilters = {
@@ -601,6 +619,7 @@ export type AdminPaymentDetails = {
   user?: AdminPaymentUser | null;
   balanceTransaction?: BalanceTransaction | null;
   rawInitResponseJson?: string | null;
+  rawStateResponseJson?: string | null;
   rawWebhookJson?: string | null;
 };
 

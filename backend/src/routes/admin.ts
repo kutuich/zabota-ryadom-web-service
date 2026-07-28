@@ -25,6 +25,7 @@ import { normalizeSettlementName } from "../services/settlementService";
 import { serializeAgreedTerms } from "../services/agreementTermsService";
 import { getUserArchiveSafety } from "../services/userLifecycleService";
 import { signUserToken, type ActingRole } from "../services/authTokenService";
+import { assignManagerRole, blockUser, revokeManagerRole, unblockUser } from "../services/userAccessService";
 
 export const adminRouter = Router();
 
@@ -145,25 +146,7 @@ adminRouter.post(
   "/users/:id/block",
   asyncHandler(async (req, res) => {
     const input = z.object({ reason: z.string().min(3).max(500) }).parse(req.body);
-    if (req.user!.id === req.params.id) {
-      throw new HttpError(400, "Нельзя заблокировать текущую учётную запись", "cannot_block_self");
-    }
-    const current = await prisma.user.findUnique({ where: { id: req.params.id } });
-    if (!current) throw new HttpError(404, "Пользователь не найден", "user_not_found");
-    if (current.status === "archived") {
-      throw new HttpError(409, "Архивный профиль нельзя заблокировать", "user_already_archived");
-    }
-    const user = await prisma.user.update({
-      where: { id: req.params.id },
-      data: {
-        status: "blocked",
-        blockedAt: new Date(),
-        blockedByAdminId: req.user!.id,
-        blockReason: input.reason
-      }
-    });
-
-    await writeAudit(req.user!.id, "user.block", "user", user.id, input);
+    const user = await blockUser({ id: req.user!.id, role: req.user!.realRole }, req.params.id, input.reason);
     const { passwordHash: _passwordHash, ...safeUser } = user;
     res.json(safeUser);
   })
@@ -172,26 +155,35 @@ adminRouter.post(
 adminRouter.post(
   "/users/:id/unblock",
   asyncHandler(async (req, res) => {
-    const current = await prisma.user.findUnique({ where: { id: req.params.id } });
-    if (!current) throw new HttpError(404, "Пользователь не найден", "user_not_found");
-    if (!["blocked", "pending_archive"].includes(current.status)) {
-      throw new HttpError(409, "Разблокирование для этого статуса недоступно", "user_status_invalid");
-    }
-    const user = await prisma.user.update({
-      where: { id: req.params.id },
-      data: {
-        status: "active",
-        blockedAt: null,
-        blockedByAdminId: null,
-        blockReason: null,
-        archiveRequestedAt: null,
-        archiveRequestedByAdminId: null,
-        archiveReason: null,
-        archiveBlockedReason: null
-      }
-    });
+    const user = await unblockUser({ id: req.user!.id, role: req.user!.realRole }, req.params.id);
+    const { passwordHash: _passwordHash, ...safeUser } = user;
+    res.json(safeUser);
+  })
+);
 
-    await writeAudit(req.user!.id, "user.unblock", "user", user.id);
+adminRouter.post(
+  "/users/:id/manager/assign",
+  asyncHandler(async (req, res) => {
+    const input = z.object({ reason: z.string().max(500).optional() }).parse(req.body);
+    const user = await assignManagerRole({ id: req.user!.id, role: req.user!.realRole }, req.params.id, input.reason);
+    const { passwordHash: _passwordHash, ...safeUser } = user;
+    res.json(safeUser);
+  })
+);
+
+adminRouter.post(
+  "/users/:id/manager/revoke",
+  asyncHandler(async (req, res) => {
+    const input = z.object({
+      restoreRole: z.enum(["client", "performer"]).optional(),
+      reason: z.string().max(500).optional()
+    }).parse(req.body);
+    const user = await revokeManagerRole(
+      { id: req.user!.id, role: req.user!.realRole },
+      req.params.id,
+      input.restoreRole,
+      input.reason
+    );
     const { passwordHash: _passwordHash, ...safeUser } = user;
     res.json(safeUser);
   })

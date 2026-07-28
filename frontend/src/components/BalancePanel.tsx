@@ -1,4 +1,4 @@
-import { CreditCard, ExternalLink } from "lucide-react";
+import { CreditCard, ExternalLink, RefreshCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { BalanceSummary, PaymentTransaction } from "../types";
@@ -12,6 +12,7 @@ export function BalancePanel() {
   const [amount, setAmount] = useState(150);
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [refreshingPaymentId, setRefreshingPaymentId] = useState<string | null>(null);
 
   async function load() {
     const [balancePayload, paymentsPayload] = await Promise.all([
@@ -28,7 +29,7 @@ export function BalancePanel() {
 
   async function startTopUp() {
     const minAmount = balance?.minTopUpAmount ?? 150;
-    if (!Number.isFinite(amount) || amount < minAmount) {
+    if (!Number.isSafeInteger(amount) || amount < minAmount) {
       setMessage(`Минимальная сумма пополнения ${minAmount} ₽.`);
       return;
     }
@@ -49,6 +50,23 @@ export function BalancePanel() {
       setIsSubmitting(false);
     }
   }
+
+  async function refreshPayment(paymentId: string) {
+    setRefreshingPaymentId(paymentId);
+    setMessage("");
+    try {
+      const result = await api.refreshPaymentStatus(paymentId);
+      setMessage(result.message);
+      await load();
+    } catch {
+      setMessage("Не удалось проверить статус платежа. Попробуйте позже или обратитесь к администратору.");
+    } finally {
+      setRefreshingPaymentId(null);
+    }
+  }
+
+  const minAmount = balance?.minTopUpAmount ?? 150;
+  const canSubmitTopUp = Number.isSafeInteger(amount) && amount >= minAmount && amount <= 1_000_000;
 
   return (
     <section className="panel-grid">
@@ -90,17 +108,19 @@ export function BalancePanel() {
             Своя сумма
             <input
               type="number"
-              min={balance?.minTopUpAmount ?? 150}
+              min={minAmount}
+              max={1_000_000}
+              step={1}
               value={amount}
               onChange={(event) => setAmount(Number(event.target.value))}
             />
           </label>
-          <button className="primary-button" type="button" onClick={startTopUp} disabled={isSubmitting}>
+          <button className="primary-button" type="button" onClick={startTopUp} disabled={isSubmitting || !canSubmitTopUp}>
             <ExternalLink size={18} />
             {isSubmitting ? "Создаём платёж" : "Перейти к оплате"}
           </button>
         </div>
-        <small>Минимальная сумма: {balance?.minTopUpAmount ?? 150} ₽.</small>
+        <small>Минимальная сумма: {minAmount} ₽.</small>
       </section>
       {message && <p className="notice span-2">{message}</p>}
       <section className="plain-section span-2">
@@ -116,6 +136,18 @@ export function BalancePanel() {
                 <span>{paymentStatusLabel(payment.status)}</span>
                 <span>{paymentProviderLabel(payment.provider)}</span>
                 <small>{payment.orderId}</small>
+                <small>{payment.description ?? "Пополнение баланса"}</small>
+                {payment.status === "pending" && (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void refreshPayment(payment.id)}
+                    disabled={refreshingPaymentId === payment.id}
+                  >
+                    <RefreshCcw size={16} />
+                    {refreshingPaymentId === payment.id ? "Проверяем" : "Проверить статус"}
+                  </button>
+                )}
               </div>
             ))}
           </div>

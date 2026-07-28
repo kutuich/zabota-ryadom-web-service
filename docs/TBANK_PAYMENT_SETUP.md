@@ -10,7 +10,11 @@
 
 Backend только инициирует платёж через метод `Init` API Т-Банка и получает `PaymentURL`. Frontend перенаправляет пользователя на `PaymentURL`.
 
-Баланс пользователя пополняется только после успешного webhook/notification от платёжного провайдера. Сам `Init` не начисляет баланс.
+Для пополнения используется одностадийная оплата `PayType=O`. Баланс зачисляется только после подписанного уведомления со статусом `CONFIRMED`, `Success=true` и суммой, совпадающей с локальной `PaymentTransaction`. Уведомления `AUTHORIZED` считаются промежуточными и не пополняют баланс.
+
+Баланс пользователя пополняется только после подтверждённого успешного статуса. Webhook/notification остаётся основным источником, а `GetState` используется как резервная одноразовая или ручная проверка. Сам `Init` не начисляет баланс.
+
+`GetState` вызывается только backend-ом с `TerminalKey`, `PaymentId` и подписанным `Token`. Ответ сверяется с локальными `PaymentId`, `OrderId`, `TerminalKey` и суммой. Несовпадение переводит незачисленный платёж в `manual_review`.
 
 `PAYMENT_PROVIDER=mock` используется для разработки и локального тестирования.
 
@@ -50,7 +54,10 @@ TBANK_NOTIFICATION_URL=https://zabota-ugorsk.ru/api/payments/tbank/webhook
 - `TBANK_TERMINAL_KEY` и `TBANK_PASSWORD` заполнены.
 - Test payment создаёт `PaymentTransaction`.
 - После оплаты приходит webhook/notification.
+- Backend отвечает на успешно обработанное notification телом `OK`.
+- `OrderId`, `PaymentId`, `TerminalKey`, подпись и сумма notification совпадают с локальным платежом.
 - Баланс пополняется только один раз.
+- Если webhook задержался, `GetState` возвращает тот же результат без повторного зачисления.
 - В админке "Платежи" виден платёж.
 - В истории пополнений пользователя виден статус платежа.
 
@@ -69,3 +76,5 @@ TBANK_NOTIFICATION_URL=https://zabota-ugorsk.ru/api/payments/tbank/webhook
 Не запускайте реальные платежи без тестового терминала и проверки webhook на публичном HTTPS-адресе.
 
 `PAYMENT_RECEIPT_ENABLED=false` оставлен явно: фискализация будет подключаться отдельной итерацией после согласования реквизитов, налогового режима и требований онлайн-кассы.
+
+Официальные материалы: [платёжная форма банка](https://developer.tbank.ru/eacq/scenarios/payments/nonPCI), [метод Init](https://developer.tbank.ru/eacq/api/init), [метод GetState](https://developer.tbank.ru/eacq/api/get-state), [уведомления и проверка Token](https://developer.tbank.ru/eacq/intro/developer/notification).

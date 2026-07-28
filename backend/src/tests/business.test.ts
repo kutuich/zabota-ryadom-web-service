@@ -31,7 +31,12 @@ import { mockPaymentAdapter, PAYMENT_STATUSES, tbankPaymentAdapter } from "../se
 import { generateTopUpOrderId } from "../services/paymentOrderId";
 import { buildTbankToken, verifyTbankToken } from "../services/tbankToken";
 import { normalizeRussianPhone } from "../services/phoneService";
-import { isUserProfileComplete, resolveVkUser } from "../services/vkIdService";
+import {
+  VK_OAUTH_SESSION_COOKIE,
+  createVkOAuthSessionCookie,
+  isUserProfileComplete,
+  resolveVkUser
+} from "../services/vkIdService";
 import {
   TRIAL_BALANCE_DESCRIPTION,
   TRIAL_BALANCE_SETTING_KEY,
@@ -173,6 +178,7 @@ async function run() {
     });
     assert.equal(capturedInitRequest.TerminalKey, "TEST_TERMINAL");
     assert.equal(capturedInitRequest.Amount, 15000);
+    assert.equal(capturedInitRequest.PayType, "O");
     assert.equal(capturedInitRequest.Description, "Пополнение баланса Забота Рядом");
     assert.deepEqual(capturedInitRequest.DATA, { userId: "user42", purpose: "balance_top_up" });
     assert.equal(capturedInitRequest.Token, buildTbankToken(capturedInitRequest, "TEST_PASSWORD"));
@@ -182,6 +188,28 @@ async function run() {
     assert.equal(tbankInit.status, "pending");
     assert.match(tbankInit.rawRequestJson ?? "", /TEST_TERMINAL/);
     assert.match(tbankInit.rawResponseJson ?? "", /PaymentURL/);
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const requestBody = JSON.parse(String(init?.body ?? "{}"));
+      assert.equal(String(url), "https://securepay.test/v2/GetState");
+      assert.equal(requestBody.TerminalKey, "TEST_TERMINAL");
+      assert.equal(requestBody.PaymentId, "123456");
+      assert.equal(requestBody.Token, buildTbankToken(requestBody, "TEST_PASSWORD"));
+      return new Response(JSON.stringify({
+        Success: true,
+        TerminalKey: "TEST_TERMINAL",
+        PaymentId: "123456",
+        OrderId: orderId,
+        Amount: 15000,
+        Status: "CONFIRMED"
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    const tbankState = await tbankPaymentAdapter.getState!({
+      providerPaymentId: "123456",
+      orderId,
+      amount: 150
+    });
+    assert.equal(tbankState.providerStatus, "CONFIRMED");
+    assert.equal(tbankState.amountKopecks, 15000);
   } finally {
     env.tbankTerminalKey = originalTbankEnv.terminalKey;
     env.tbankPassword = originalTbankEnv.password;
@@ -491,10 +519,200 @@ async function run() {
   await runPaymentCreditIdempotencyTests();
   await runPaymentRouteTests();
   await runAdminActingModeTests();
+  await runManagerRoleTests();
   await runUserLifecycleTests();
   await runUploadStorageTests();
 
   console.log("Business tests passed");
+}
+
+async function runManagerRoleTests() {
+  const app = createApp();
+  const startedAt = new Date();
+  const [admin, candidate, target] = await Promise.all([
+    prisma.user.findFirstOrThrow({ where: { role: { in: ["admin", "superadmin"] }, status: "active" } }),
+    prisma.user.findFirstOrThrow({ where: { role: "client", status: "active", passwordHash: { not: null } } }),
+    prisma.user.findFirstOrThrow({ where: { role: "performer", status: "active" } })
+  ]);
+  const originalCandidate = {
+    role: candidate.role,
+    rolesJson: candidate.rolesJson,
+    roleBeforeManager: candidate.roleBeforeManager,
+    managerAssignedAt: candidate.managerAssignedAt,
+    managerAssignedByAdminId: candidate.managerAssignedByAdminId,
+    managerRevokedAt: candidate.managerRevokedAt,
+    managerRevokedByAdminId: candidate.managerRevokedByAdminId
+  };
+  const originalTarget = {
+    status: target.status,
+    blockedAt: target.blockedAt,
+    blockedByAdminId: target.blockedByAdminId,
+    blockedByRole: target.blockedByRole,
+    blockReason: target.blockReason
+  };
+  const adminToken = tokenFor(admin.id, admin.role);
+  let createdIdentityId: string | null = null;
+
+  try {
+    let response = await apiRequest(app, `/api/admin/users/${candidate.id}/manager/assign`, {
+      method: "POST",
+      token: adminToken,
+      body: { reason: "Операционная проверка" }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.role, "manager");
+    assert.equal(response.payload.roleBeforeManager, "client");
+
+    const manager = await prisma.user.findUniqueOrThrow({ where: { id: candidate.id } });
+    const managerToken = tokenFor(manager.id, "manager");
+    const linkedIdentity = await prisma.userIdentity.findFirst({ where: { userId: manager.id, provider: "vk" } });
+    if (!linkedIdentity) {
+      const identity = await prisma.userIdentity.create({
+        data: {
+          userId: manager.id,
+          provider: "vk",
+          providerUserId: `manager-test-${Date.now()}`,
+          displayName: "Manager VK Test"
+        }
+      });
+      createdIdentityId = identity.id;
+    }
+
+    response = await apiRequest(app, "/api/auth/login", {
+      method: "POST",
+      body: { phoneOrEmail: manager.email, password: "password123" }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.role, "manager");
+
+    response = await apiRequest(app, "/api/auth/login", {
+      method: "POST",
+      body: { phoneOrEmail: manager.phone, password: "password123" }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.role, "manager");
+
+    const vkSession = createVkOAuthSessionCookie(manager.id);
+    response = await apiRequest(app, "/api/auth/oauth/session", {
+      method: "POST",
+      headers: { cookie: `${VK_OAUTH_SESSION_COOKIE}=${encodeURIComponent(vkSession)}` }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.role, "manager");
+    assert.equal(response.payload.nextPath, "/app/manager");
+
+    for (const path of [
+      "/api/manager/users",
+      "/api/manager/requests",
+      "/api/manager/chats",
+      "/api/manager/complaints",
+      "/api/manager/payments",
+      "/api/manager/balance-transactions"
+    ]) {
+      response = await apiRequest(app, path, { method: "GET", token: managerToken });
+      assert.equal(response.status, 200, `Manager read failed for ${path}`);
+    }
+
+    response = await apiRequest(app, `/api/manager/users/${target.id}`, { method: "GET", token: managerToken });
+    assert.equal(response.status, 200);
+    for (const [entityType, action] of [
+      ["request", "manager.request.view"],
+      ["chat", "manager.chat.view"],
+      ["complaint", "manager.complaint.view"]
+    ] as const) {
+      const entity = entityType === "request"
+        ? await prisma.clientRequest.findFirst()
+        : entityType === "chat"
+          ? await prisma.chat.findFirst()
+          : await prisma.complaint.findFirst();
+      if (!entity) continue;
+      response = await apiRequest(app, `/api/manager/${entityType === "request" ? "requests" : entityType === "chat" ? "chats" : "complaints"}/${entity.id}`, {
+        method: "GET",
+        token: managerToken
+      });
+      assert.equal(response.status, 200);
+      assert.ok(await prisma.auditLog.findFirst({ where: { actorUserId: manager.id, action, entityId: entity.id } }));
+    }
+
+    response = await apiRequest(app, `/api/manager/users/${target.id}/block`, {
+      method: "POST",
+      token: managerToken,
+      body: { reason: "Проверка ограниченной блокировки" }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "blocked");
+    assert.equal(response.payload.blockedByRole, "manager");
+
+    response = await apiRequest(app, `/api/manager/users/${admin.id}/block`, {
+      method: "POST",
+      token: managerToken,
+      body: { reason: "Запрещённая блокировка" }
+    });
+    assert.equal(response.status, 403);
+    assert.equal(response.payload.code, "manager_permission_denied");
+
+    response = await apiRequest(app, `/api/manager/users/${target.id}/unblock`, {
+      method: "POST",
+      token: managerToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "active");
+
+    const forbiddenRequests: Array<{ path: string; method: "GET" | "POST" | "DELETE"; body?: unknown }> = [
+      { path: "/api/admin/settings", method: "GET" },
+      { path: "/api/admin/legal/documents", method: "GET" },
+      { path: "/api/admin/payments", method: "GET" },
+      { path: "/api/admin/archive/run", method: "POST", body: {} },
+      { path: `/api/admin/users/${target.id}`, method: "DELETE" },
+      { path: "/api/admin/acting/start", method: "POST", body: { role: "customer" } },
+      { path: `/api/admin/users/${target.id}/manager/assign`, method: "POST", body: {} }
+    ];
+    for (const request of forbiddenRequests) {
+      response = await apiRequest(app, request.path, {
+        method: request.method,
+        token: managerToken,
+        body: request.body
+      });
+      assert.equal(response.status, 403, `Manager mutation was not denied for ${request.path}`);
+      assert.equal(response.payload.code, "manager_permission_denied");
+    }
+
+    response = await apiRequest(app, "/api/auth/oauth/complete-profile", {
+      method: "POST",
+      token: managerToken,
+      body: { role: "manager" }
+    });
+    assert.equal(response.status, 400);
+
+    const managerBlockAudit = await prisma.auditLog.findFirst({
+      where: { actorUserId: manager.id, action: "manager.user.block", createdAt: { gte: startedAt } }
+    });
+    assert.ok(managerBlockAudit);
+    assert.match(managerBlockAudit!.payloadJson ?? "", /manager_panel/);
+
+    response = await apiRequest(app, `/api/admin/users/${candidate.id}/manager/revoke`, {
+      method: "POST",
+      token: adminToken,
+      body: { reason: "Завершение проверки" }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.role, "client");
+    assert.equal(response.payload.roleBeforeManager, null);
+
+    const roleAuditRows = await prisma.auditLog.findMany({
+      where: { actorUserId: admin.id, entityId: candidate.id, createdAt: { gte: startedAt } }
+    });
+    assert.ok(roleAuditRows.some((row) => row.action === "admin.manager.assign"));
+    assert.ok(roleAuditRows.some((row) => row.action === "admin.manager.revoke"));
+    assert.ok(await prisma.auditLog.findFirst({ where: { actorUserId: candidate.id, action: "manager.login", createdAt: { gte: startedAt } } }));
+  } finally {
+    if (createdIdentityId) await prisma.userIdentity.delete({ where: { id: createdIdentityId } }).catch(() => undefined);
+    await prisma.user.update({ where: { id: candidate.id }, data: originalCandidate });
+    await prisma.user.update({ where: { id: target.id }, data: originalTarget });
+    await prisma.auditLog.deleteMany({
+      where: { createdAt: { gte: startedAt }, actorUserId: { in: [admin.id, candidate.id] } }
+    });
+  }
 }
 
 async function runAdminActingModeTests() {
@@ -1020,7 +1238,7 @@ async function runSettlementDirectoryTests() {
     }
   });
   const app = createApp();
-  const search = await apiRequest(app, `/api/settlements/search?q=${encodeURIComponent("Югорск Тест")}`, { method: "GET" });
+  const search = await apiRequest(app, `/api/settlements/search?q=${encodeURIComponent(searchable.name)}`, { method: "GET" });
   assert.equal(search.status, 200);
   assert.ok(search.payload.some((item: any) => item.id === searchable.id && item.region === "ХМАО — Югра"));
 
@@ -1868,7 +2086,7 @@ async function runPaymentCreditIdempotencyTests() {
         providerPaymentId: `MOCK-IDEMPOTENCY-${Date.now()}`,
         orderId: `TOPUP-IDEMPOTENCY-${Date.now()}`,
         amount: 150,
-        status: "pending"
+        status: "succeeded"
       }
     });
     paymentIds.push(payment.id);
@@ -1893,7 +2111,7 @@ async function runPaymentCreditIdempotencyTests() {
     assert.equal(await prisma.balanceTransaction.count({ where: { idempotencyKey } }), 1);
     assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, originalBalance + 150);
 
-    for (const status of ["failed", "cancelled"] as const) {
+    for (const status of ["pending", "failed", "cancelled", "expired", "manual_review"] as const) {
       const terminalPayment = await prisma.paymentTransaction.create({
         data: {
           userId: client.id,
@@ -1958,14 +2176,32 @@ async function runPaymentRouteTests() {
       status: "active"
     }
   });
+  const managerUser = await prisma.user.create({
+    data: {
+      role: "manager",
+      rolesJson: JSON.stringify(["manager"]),
+      phone: `+7888${Date.now().toString().slice(-7)}`,
+      email: `payment-manager-${Date.now()}@zabota.local`,
+      passwordHash: "test",
+      displayName: "Payment manager test",
+      cityId: client.cityId,
+      status: "active"
+    }
+  });
 
   const clientToken = tokenFor(client.id, "client");
   const performerToken = tokenFor(performer.id, "performer");
   const adminToken = tokenFor(admin.id, admin.role);
   const noConsentToken = tokenFor(noConsentUser.id, "client");
+  const managerToken = tokenFor(managerUser.id, "manager");
+  const originalPaymentProvider = env.paymentProvider;
+  const originalTbankTerminalKey = env.tbankTerminalKey;
   const originalTbankPassword = env.tbankPassword;
+  const originalFetch = globalThis.fetch;
 
   try {
+    env.paymentProvider = "mock";
+    env.tbankTerminalKey = "WEBHOOK_TEST_TERMINAL";
     env.tbankPassword = "WEBHOOK_TEST_PASSWORD";
     let response = await apiRequest(app, "/api/payments/top-up/init", {
       method: "POST",
@@ -1989,6 +2225,15 @@ async function runPaymentRouteTests() {
     assert.equal(response.status, 400);
     assert.equal(response.payload.code, "min_top_up");
 
+    for (const invalidAmount of [0, -150, 150.5, "150"]) {
+      response = await apiRequest(app, "/api/payments/top-up/init", {
+        method: "POST",
+        token: clientToken,
+        body: { amount: invalidAmount }
+      });
+      assert.equal(response.status, 400);
+    }
+
     const clientBeforeInit = await prisma.user.findUniqueOrThrow({ where: { id: client.id }, select: { balance: true } });
     response = await apiRequest(app, "/api/payments/top-up/init", {
       method: "POST",
@@ -2009,6 +2254,45 @@ async function runPaymentRouteTests() {
     assert.equal(createdPayment.balanceTransactionId, null);
     const clientAfterInit = await prisma.user.findUniqueOrThrow({ where: { id: client.id }, select: { balance: true } });
     assert.equal(clientAfterInit.balance, clientBeforeInit.balance);
+
+    env.paymentProvider = "tbank";
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const requestBody = JSON.parse(String(init?.body ?? "{}"));
+      assert.equal(requestBody.Amount, 15000);
+      assert.equal(requestBody.PayType, "O");
+      const successUrl = new URL(requestBody.SuccessURL);
+      const failUrl = new URL(requestBody.FailURL);
+      assert.ok(successUrl.searchParams.get("paymentId"));
+      assert.equal(successUrl.searchParams.get("orderId"), requestBody.OrderId);
+      assert.ok(failUrl.searchParams.get("paymentId"));
+      assert.equal(failUrl.searchParams.get("orderId"), requestBody.OrderId);
+      return new Response(JSON.stringify({
+        Success: true,
+        ErrorCode: "0",
+        PaymentId: `TBANK-INIT-${Date.now()}`,
+        PaymentURL: "https://securepay.tbank.test/payment/test",
+        Status: "NEW",
+        OrderId: requestBody.OrderId,
+        Amount: requestBody.Amount
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    response = await apiRequest(app, "/api/payments/top-up/init", {
+      method: "POST",
+      token: clientToken,
+      body: { amount: 150 }
+    });
+    assert.equal(response.status, 201);
+    assert.equal(response.payload.provider, "tbank");
+    assert.equal(response.payload.status, "pending");
+    assert.equal(response.payload.paymentUrl, "https://securepay.tbank.test/payment/test");
+    paymentIds.push(response.payload.id);
+    orderIds.push(response.payload.orderId);
+    const tbankInitPayment = await prisma.paymentTransaction.findUniqueOrThrow({ where: { id: response.payload.id } });
+    assert.ok(tbankInitPayment.providerPaymentId);
+    assert.equal(tbankInitPayment.status, "pending");
+    assert.equal(tbankInitPayment.creditedAt, null);
+    env.paymentProvider = "mock";
+    globalThis.fetch = originalFetch;
 
     response = await apiRequest(app, `/api/payments/mock/${createdPayment.id}/succeed`, {
       method: "POST",
@@ -2084,6 +2368,8 @@ async function runPaymentRouteTests() {
     assert.equal(response.status, 200);
     assert.equal(response.payload.some((payment: any) => payment.id === performerPaymentId), false);
     assert.equal(response.payload.some((payment: any) => Object.prototype.hasOwnProperty.call(payment, "rawWebhookJson")), false);
+    assert.equal(response.payload.some((payment: any) => Object.prototype.hasOwnProperty.call(payment, "rawInitRequestJson")), false);
+    assert.equal(response.payload.some((payment: any) => Object.prototype.hasOwnProperty.call(payment, "metadataJson")), false);
 
     response = await apiRequest(app, `/api/payments/${performerPaymentId}`, {
       method: "GET",
@@ -2098,6 +2384,7 @@ async function runPaymentRouteTests() {
     assert.equal(response.status, 200);
     assert.ok(Array.isArray(response.payload));
     assert.ok(response.payload.length >= 1);
+    assert.equal(response.payload.some((payment: any) => Object.prototype.hasOwnProperty.call(payment, "rawInitRequestJson")), false);
 
     const webhookOrderId = `TOPUP-WEBHOOK-${Date.now()}`;
     orderIds.push(webhookOrderId);
@@ -2119,6 +2406,8 @@ async function runPaymentRouteTests() {
       body: {
         PaymentId: "TBANK-WEBHOOK-TEST",
         OrderId: webhookOrderId,
+        TerminalKey: env.tbankTerminalKey,
+        Success: true,
         Status: "CONFIRMED",
         Amount: 15000,
         Token: "invalid-token"
@@ -2129,35 +2418,283 @@ async function runPaymentRouteTests() {
     const balanceAfterInvalidWebhook = await prisma.user.findUniqueOrThrow({ where: { id: client.id }, select: { balance: true } });
     assert.equal(balanceAfterInvalidWebhook.balance, balanceBeforeWebhook.balance);
 
+    const webhookCases = [
+      { suffix: "MISMATCH", status: "CONFIRMED", success: true, amount: 14900, expectedStatus: "manual_review" },
+      { suffix: "FAILED", status: "REJECTED", success: false, amount: 15000, expectedStatus: "failed" },
+      { suffix: "CANCELLED", status: "CANCELED", success: false, amount: 15000, expectedStatus: "cancelled" },
+      { suffix: "AUTHORIZED", status: "AUTHORIZED", success: true, amount: 15000, expectedStatus: "pending" }
+    ] as const;
+    for (const webhookCase of webhookCases) {
+      const caseOrderId = `TOPUP-WEBHOOK-${webhookCase.suffix}-${Date.now()}`;
+      const caseProviderPaymentId = `TBANK-WEBHOOK-${webhookCase.suffix}-${Date.now()}`;
+      orderIds.push(caseOrderId);
+      const casePayment: { id: string } = await prisma.paymentTransaction.create({
+        data: {
+          userId: client.id,
+          provider: "tbank",
+          providerPaymentId: caseProviderPaymentId,
+          orderId: caseOrderId,
+          amount: 150,
+          status: "pending",
+          description: `Webhook ${webhookCase.suffix} test`
+        }
+      });
+      paymentIds.push(casePayment.id);
+      const casePayload = {
+        PaymentId: caseProviderPaymentId,
+        OrderId: caseOrderId,
+        TerminalKey: env.tbankTerminalKey,
+        Success: webhookCase.success,
+        Status: webhookCase.status,
+        Amount: webhookCase.amount
+      };
+      const caseResponse = await rawAppRequest(app, "/api/payments/tbank/webhook", {
+        method: "POST",
+        body: { ...casePayload, Token: buildTbankToken(casePayload, env.tbankPassword) }
+      });
+      assert.equal(caseResponse.status, 200);
+      assert.equal(caseResponse.text, "OK");
+      assert.equal((await prisma.paymentTransaction.findUniqueOrThrow({ where: { id: casePayment.id } })).status, webhookCase.expectedStatus);
+      assert.equal(await prisma.balanceTransaction.count({ where: { idempotencyKey: paymentCreditIdempotencyKey(casePayment.id) } }), 0);
+      assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, balanceBeforeWebhook.balance);
+    }
+
     for (let index = 0; index < 2; index += 1) {
       const webhookPayload = {
         PaymentId: "TBANK-WEBHOOK-TEST",
         OrderId: webhookOrderId,
+        TerminalKey: env.tbankTerminalKey,
+        Success: true,
         Status: "CONFIRMED",
         Amount: 15000
       };
-      response = await apiRequest(app, "/api/payments/tbank/webhook", {
+      const webhookResponse = await rawAppRequest(app, "/api/payments/tbank/webhook", {
         method: "POST",
         body: {
           ...webhookPayload,
           Token: buildTbankToken(webhookPayload, env.tbankPassword)
         }
       });
-      assert.equal(response.status, 200);
-      assert.equal(response.payload.ok, true);
-      assert.equal(response.payload.status, "succeeded");
+      assert.equal(webhookResponse.status, 200);
+      assert.equal(webhookResponse.text, "OK");
     }
     const balanceAfterWebhook = await prisma.user.findUniqueOrThrow({ where: { id: client.id }, select: { balance: true } });
     assert.equal(balanceAfterWebhook.balance, balanceBeforeWebhook.balance + 150);
     const webhookTransactionsCount = await prisma.balanceTransaction.count({ where: { comment: webhookOrderId } });
     assert.equal(webhookTransactionsCount, 1);
     const webhookPaymentAfter = await prisma.paymentTransaction.findUniqueOrThrow({ where: { id: webhookPayment.id } });
+    assert.equal(webhookPaymentAfter.status, "succeeded");
     assert.match(webhookPaymentAfter.rawWebhookJson ?? "", /CONFIRMED/);
+
+    const stateResponses = new Map<string, Record<string, unknown>>();
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      assert.match(String(url), /\/GetState$/);
+      const requestBody = JSON.parse(String(init?.body ?? "{}"));
+      assert.equal(requestBody.TerminalKey, env.tbankTerminalKey);
+      assert.equal(requestBody.Token, buildTbankToken(requestBody, env.tbankPassword));
+      const payload = stateResponses.get(String(requestBody.PaymentId));
+      assert.ok(payload, `Missing GetState fixture for ${requestBody.PaymentId}`);
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as typeof fetch;
+
+    async function createStatePayment(label: string) {
+      const suffix = `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const stateOrderId = `TOPUP-STATE-${suffix}`;
+      const providerPaymentId = `TBANK-STATE-${suffix}`;
+      orderIds.push(stateOrderId);
+      const row = await prisma.paymentTransaction.create({
+        data: {
+          userId: client!.id,
+          provider: "tbank",
+          providerPaymentId,
+          orderId: stateOrderId,
+          amount: 150,
+          status: "pending",
+          description: `GetState ${label} test`
+        }
+      });
+      paymentIds.push(row.id);
+      return row;
+    }
+
+    const stateConfirmedPayment = await createStatePayment("CONFIRMED");
+    stateResponses.set(stateConfirmedPayment.providerPaymentId!, {
+      Success: true,
+      TerminalKey: env.tbankTerminalKey,
+      PaymentId: stateConfirmedPayment.providerPaymentId,
+      OrderId: stateConfirmedPayment.orderId,
+      Amount: 15000,
+      Status: "CONFIRMED",
+      Token: "provider-token-must-not-leak"
+    });
+    response = await apiRequest(app, `/api/payments/${stateConfirmedPayment.id}/refresh-status`, {
+      method: "POST",
+      token: performerToken
+    });
+    assert.equal(response.status, 403);
+    response = await apiRequest(app, `/api/payments/${stateConfirmedPayment.id}/refresh-status`, {
+      method: "POST",
+      token: managerToken
+    });
+    assert.equal(response.status, 403);
+    assert.equal(response.payload.code, "manager_permission_denied");
+
+    const balanceBeforeStateCredit = (await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance;
+    response = await apiRequest(app, `/api/payments/${stateConfirmedPayment.id}/refresh-status`, {
+      method: "POST",
+      token: clientToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "succeeded");
+    assert.ok(response.payload.creditedAt);
+    assert.ok(response.payload.balanceTransactionId);
+    assert.equal(JSON.stringify(response.payload).includes(env.tbankPassword), false);
+    assert.equal(JSON.stringify(response.payload).includes("provider-token-must-not-leak"), false);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, balanceBeforeStateCredit + 150);
+
+    response = await apiRequest(app, `/api/payments/${stateConfirmedPayment.id}/refresh-status`, {
+      method: "POST",
+      token: clientToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, balanceBeforeStateCredit + 150);
+    assert.equal(await prisma.balanceTransaction.count({
+      where: { idempotencyKey: paymentCreditIdempotencyKey(stateConfirmedPayment.id) }
+    }), 1);
+
+    const stateWebhookPayload = {
+      PaymentId: stateConfirmedPayment.providerPaymentId,
+      OrderId: stateConfirmedPayment.orderId,
+      TerminalKey: env.tbankTerminalKey,
+      Success: true,
+      Status: "CONFIRMED",
+      Amount: 15000
+    };
+    const webhookAfterState = await rawAppRequest(app, "/api/payments/tbank/webhook", {
+      method: "POST",
+      body: { ...stateWebhookPayload, Token: buildTbankToken(stateWebhookPayload, env.tbankPassword) }
+    });
+    assert.equal(webhookAfterState.status, 200);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, balanceBeforeStateCredit + 150);
+
+    stateResponses.set(webhookPayment.providerPaymentId!, {
+      Success: true,
+      TerminalKey: env.tbankTerminalKey,
+      PaymentId: webhookPayment.providerPaymentId,
+      OrderId: webhookPayment.orderId,
+      Amount: 15000,
+      Status: "CONFIRMED"
+    });
+    const balanceBeforeRefreshAfterWebhook = (await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance;
+    response = await apiRequest(app, `/api/payments/${webhookPayment.id}/refresh-status`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "succeeded");
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, balanceBeforeRefreshAfterWebhook);
+
+    const stateAuthorizedPayment = await createStatePayment("AUTHORIZED");
+    stateResponses.set(stateAuthorizedPayment.providerPaymentId!, {
+      Success: true,
+      TerminalKey: env.tbankTerminalKey,
+      PaymentId: stateAuthorizedPayment.providerPaymentId,
+      OrderId: stateAuthorizedPayment.orderId,
+      Amount: 15000,
+      Status: "AUTHORIZED"
+    });
+    response = await apiRequest(app, `/api/payments/${stateAuthorizedPayment.id}/refresh-status`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "pending");
+    assert.equal(await prisma.balanceTransaction.count({ where: { idempotencyKey: paymentCreditIdempotencyKey(stateAuthorizedPayment.id) } }), 0);
+
+    for (const providerStatus of ["REJECTED", "CANCELED"] as const) {
+      const terminalPayment = await createStatePayment(providerStatus);
+      stateResponses.set(terminalPayment.providerPaymentId!, {
+        Success: true,
+        TerminalKey: env.tbankTerminalKey,
+        PaymentId: terminalPayment.providerPaymentId,
+        OrderId: terminalPayment.orderId,
+        Amount: 15000,
+        Status: providerStatus
+      });
+      response = await apiRequest(app, `/api/payments/${terminalPayment.id}/refresh-status`, {
+        method: "POST",
+        token: clientToken
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.payload.status, providerStatus === "REJECTED" ? "failed" : "cancelled");
+      assert.equal(await prisma.balanceTransaction.count({ where: { idempotencyKey: paymentCreditIdempotencyKey(terminalPayment.id) } }), 0);
+    }
+
+    const amountMismatchPayment = await createStatePayment("AMOUNT-MISMATCH");
+    stateResponses.set(amountMismatchPayment.providerPaymentId!, {
+      Success: true,
+      TerminalKey: env.tbankTerminalKey,
+      PaymentId: amountMismatchPayment.providerPaymentId,
+      OrderId: amountMismatchPayment.orderId,
+      Amount: 14900,
+      Status: "CONFIRMED"
+    });
+    response = await apiRequest(app, `/api/payments/${amountMismatchPayment.id}/refresh-status`, {
+      method: "POST",
+      token: clientToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "manual_review");
+    assert.equal(await prisma.balanceTransaction.count({ where: { idempotencyKey: paymentCreditIdempotencyKey(amountMismatchPayment.id) } }), 0);
+
+    const idMismatchPayment = await createStatePayment("ID-MISMATCH");
+    stateResponses.set(idMismatchPayment.providerPaymentId!, {
+      Success: true,
+      TerminalKey: env.tbankTerminalKey,
+      PaymentId: "ANOTHER-PAYMENT-ID",
+      OrderId: idMismatchPayment.orderId,
+      Amount: 15000,
+      Status: "CONFIRMED"
+    });
+    response = await apiRequest(app, `/api/payments/${idMismatchPayment.id}/refresh-status`, {
+      method: "POST",
+      token: clientToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "manual_review");
+    assert.equal(await prisma.balanceTransaction.count({ where: { idempotencyKey: paymentCreditIdempotencyKey(idMismatchPayment.id) } }), 0);
+
+    globalThis.fetch = (async () => {
+      throw new Error("Mock refresh must not call provider");
+    }) as typeof fetch;
+    response = await apiRequest(app, `/api/payments/${createdPayment.id}/refresh-status`, {
+      method: "POST",
+      token: clientToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.provider, "mock");
+    assert.equal(response.payload.status, "succeeded");
+
+    response = await apiRequest(app, `/api/admin/payments/${webhookPayment.id}`, {
+      method: "GET",
+      token: adminToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(Object.prototype.hasOwnProperty.call(response.payload.payment, "rawInitRequestJson"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(response.payload, "rawStateResponseJson"), true);
+    assert.equal(response.payload.rawWebhookJson.includes("Token"), false);
+    assert.equal(JSON.stringify(response.payload).includes(env.tbankPassword), false);
   } finally {
+    env.paymentProvider = originalPaymentProvider;
+    env.tbankTerminalKey = originalTbankTerminalKey;
     env.tbankPassword = originalTbankPassword;
+    globalThis.fetch = originalFetch;
     await prisma.paymentTransaction.deleteMany({ where: { id: { in: paymentIds } } });
     await prisma.balanceTransaction.deleteMany({ where: { comment: { in: orderIds } } });
-    await prisma.user.deleteMany({ where: { id: noConsentUser.id } });
+    await prisma.user.deleteMany({ where: { id: { in: [noConsentUser.id, managerUser.id] } } });
     await Promise.all(Array.from(originalBalances.entries()).map(([userId, balance]) =>
       prisma.user.update({
         where: { id: userId },

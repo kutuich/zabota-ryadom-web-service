@@ -15,6 +15,7 @@ import {
   defaultPathForRole,
   isKnownPathForRole,
   legacyAppRedirectPath,
+  managerNavigation,
   performerNavigation,
   sectionTitleForPath
 } from "../routes/navigation";
@@ -59,6 +60,30 @@ const performerPaths = [
   "/app/performer/support",
   "/app/performer/help"
 ];
+
+const managerPaths = [
+  "/app/manager",
+  "/app/manager/users",
+  "/app/manager/requests",
+  "/app/manager/chats",
+  "/app/manager/support",
+  "/app/manager/payments",
+  "/app/manager/balances",
+  "/app/manager/profile"
+];
+
+assert.equal(defaultPathForRole("manager"), "/app/manager");
+for (const path of managerPaths) {
+  assert.equal(canRoleOpenPath("manager", path), true, `Менеджеру недоступен маршрут ${path}`);
+  assert.equal(isKnownPathForRole("manager", path), true, `Маршрут менеджера не зарегистрирован: ${path}`);
+}
+assert.equal(canRoleOpenPath("manager", "/app/admin"), false);
+assert.equal(canRoleOpenPath("admin", "/app/manager"), false);
+const managerLabels = managerNavigation.flatMap((group) => group.items.map((item) => item.label));
+assert.equal(managerLabels.includes("Настройки сервиса"), false);
+assert.equal(managerLabels.includes("Юридические документы"), false);
+assert.equal(managerLabels.includes("Архив"), false);
+assert.equal(managerLabels.includes("Начисления"), false);
 
 const adminPaths = [
   "/app/admin",
@@ -374,6 +399,13 @@ assert.match(balancePanel, /платёжная форма банка или те
 assert.match(balancePanel, /Сервис не хранит данные банковских карт/);
 assert.match(balancePanel, /createTopUpPayment/);
 assert.match(balancePanel, /getMyPayments/);
+assert.match(balancePanel, /refreshPaymentStatus/);
+assert.match(balancePanel, /Проверить статус/);
+assert.match(balancePanel, /payment\.status === "pending"/);
+assert.match(balancePanel, /Number\.isSafeInteger\(amount\)/);
+assert.match(balancePanel, /disabled=\{isSubmitting \|\| !canSubmitTopUp\}/);
+assert.match(balancePanel, /payment\.description/);
+assert.match(balancePanel, /window\.location\.href = payment\.paymentUrl/);
 assert.doesNotMatch(balancePanel, /mockTopUp/);
 assert.doesNotMatch(balancePanel, /Пополнить тестово/);
 assert.doesNotMatch(balancePanel, /Тестовое пополнение/);
@@ -404,6 +436,12 @@ assert.match(paymentPages, /Отменить платёж/);
 assert.match(paymentPages, /Платёж принят/);
 assert.match(paymentPages, /Платёж не завершён/);
 assert.match(paymentPages, /Платёж проверяется/);
+assert.match(paymentPages, /Если платёж подтверждён, баланс будет обновлён автоматически/);
+assert.match(paymentPages, /Деньги не зачислены на баланс/);
+assert.match(paymentPages, /Мы ожидаем подтверждение от платёжного провайдера/);
+assert.match(paymentPages, /Проверить статус платежа/);
+assert.match(paymentPages, /api\.refreshPaymentStatus/);
+assert.match(paymentPages, /PaymentStatusRefresh/);
 assert.match(paymentPages, /mockPaymentSucceed/);
 assert.match(paymentPages, /mockPaymentFail/);
 
@@ -435,6 +473,8 @@ assert.match(adminPaymentsPage, /Пополнения баланса и стат
 assert.match(adminPaymentsPage, /Пользователь \/ userId/);
 assert.match(adminPaymentsPage, /Provider Payment ID/);
 assert.match(adminPaymentsPage, /Технические данные платежа/);
+assert.match(adminPaymentsPage, /Обновить статус/);
+assert.match(adminPaymentsPage, /rawStateResponseJson/);
 assert.match(adminPaymentsPage, /Не удалось загрузить платежи/);
 assert.doesNotMatch(adminPaymentsPage, /комисси/i);
 
@@ -496,6 +536,27 @@ assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/request-archive/);
 assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/archive-safety/);
 assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/archive/);
 assert.doesNotMatch(apiClient, /adminDeleteUser/);
+assert.match(apiClient, /adminAssignManager/);
+assert.match(apiClient, /adminRevokeManager/);
+assert.match(apiClient, /managerBlockUser/);
+
+const managerDashboard = read("pages/ManagerDashboard.tsx");
+assert.doesNotMatch(managerDashboard, /Обновить статус/);
+assert.match(managerDashboard, /Кабинет менеджера/);
+assert.match(managerDashboard, /не можете менять системные настройки и роли пользователей/);
+assert.match(managerDashboard, /Заблокировать/);
+assert.doesNotMatch(managerDashboard, /Назначить менеджером/);
+assert.doesNotMatch(managerDashboard, /Снять роль менеджера/);
+assert.doesNotMatch(managerDashboard, /Настройки сервиса/);
+assert.doesNotMatch(managerDashboard, /Юридические документы/);
+assert.doesNotMatch(managerDashboard, /Изменить статус платежа/);
+assert.doesNotMatch(managerDashboard, /Зачислить платёж/);
+
+const adminDashboardManagerControls = read("pages/AdminDashboard.tsx");
+assert.match(adminDashboardManagerControls, /Назначить менеджером/);
+assert.match(adminDashboardManagerControls, /Снять роль менеджера/);
+
+assert.match(appRoutes, /path="\/app\/manager\/\*"/);
 
 const forbiddenUserLabels = [
   "Предлагаемая оплата",

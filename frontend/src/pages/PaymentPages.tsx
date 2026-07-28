@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, Clock, XCircle } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock, RefreshCcw, XCircle } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -31,7 +31,7 @@ export function MockPaymentPage() {
     setIsSubmitting(true);
     try {
       await api.mockPaymentSucceed(payment.id);
-      navigate("/app/balance/payment-success", { replace: true });
+      navigate(`/app/balance/payment-success?paymentId=${encodeURIComponent(payment.id)}&orderId=${encodeURIComponent(payment.orderId)}`, { replace: true });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не удалось подтвердить платёж");
     } finally {
@@ -44,7 +44,7 @@ export function MockPaymentPage() {
     setIsSubmitting(true);
     try {
       await api.mockPaymentFail(payment.id);
-      navigate("/app/balance/payment-fail", { replace: true });
+      navigate(`/app/balance/payment-fail?paymentId=${encodeURIComponent(payment.id)}&orderId=${encodeURIComponent(payment.orderId)}`, { replace: true });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не удалось отменить платёж");
     } finally {
@@ -98,6 +98,7 @@ export function PaymentSuccessPage() {
       <p>
         Если платёж подтверждён, баланс будет обновлён автоматически. Обновите страницу баланса через несколько секунд.
       </p>
+      <PaymentStatusRefresh />
       <div className="trust-row">
         <Link className="primary-button" to={balancePathForRole(effectiveRoleForUser(user))}>Перейти к балансу</Link>
         <Link className="secondary-button" to={homePathForRole(effectiveRoleForUser(user))}>На главную</Link>
@@ -110,7 +111,7 @@ export function PaymentFailPage() {
   const { user } = useAuth();
   return (
     <PaymentShell title="Платёж не завершён" icon={<AlertCircle size={28} />}>
-      <p>Попробуйте ещё раз или обратитесь к администратору через раздел связи с администратором.</p>
+      <p>Платёж не завершён. Деньги не зачислены на баланс. Попробуйте ещё раз или обратитесь к администратору.</p>
       <div className="trust-row">
         <Link className="primary-button" to={balancePathForRole(effectiveRoleForUser(user))}>Вернуться к балансу</Link>
         <Link className="secondary-button" to={supportPathForRole(effectiveRoleForUser(user))}>Связь с администратором</Link>
@@ -123,9 +124,59 @@ export function PaymentPendingPage() {
   const { user } = useAuth();
   return (
     <PaymentShell title="Платёж проверяется" icon={<Clock size={28} />}>
-      <p>Мы ожидаем подтверждение платежа от платёжного провайдера.</p>
+      <p>Платёж проверяется. Мы ожидаем подтверждение от платёжного провайдера.</p>
+      <PaymentStatusRefresh />
       <Link className="primary-button" to={balancePathForRole(effectiveRoleForUser(user))}>Перейти к балансу</Link>
     </PaymentShell>
+  );
+}
+
+function PaymentStatusRefresh() {
+  const [searchParams] = useSearchParams();
+  const [paymentId, setPaymentId] = useState(searchParams.get("paymentId") ?? "");
+  const [message, setMessage] = useState("");
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  async function resolvePaymentId() {
+    if (paymentId) return paymentId;
+    const orderId = searchParams.get("orderId");
+    const payments = await api.getMyPayments();
+    const matched = orderId
+      ? payments.find((payment) => payment.orderId === orderId)
+      : payments.find((payment) => payment.provider === "tbank" && ["created", "pending"].includes(payment.status));
+    if (matched) setPaymentId(matched.id);
+    return matched?.id ?? "";
+  }
+
+  async function refresh() {
+    setIsRefreshing(true);
+    try {
+      const resolvedPaymentId = await resolvePaymentId();
+      if (!resolvedPaymentId) {
+        setMessage("Платёж не найден.");
+        return;
+      }
+      const result = await api.refreshPaymentStatus(resolvedPaymentId);
+      setMessage(result.message);
+    } catch {
+      setMessage("Не удалось проверить статус платежа. Попробуйте позже или обратитесь к администратору.");
+    } finally {
+      setIsRefreshing(false);
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  return (
+    <div className="list">
+      {message && <p className="notice">{message}</p>}
+      <button className="secondary-button" type="button" onClick={() => void refresh()} disabled={isRefreshing}>
+        <RefreshCcw size={18} />
+        {isRefreshing ? "Проверяем" : "Проверить статус платежа"}
+      </button>
+    </div>
   );
 }
 
@@ -153,6 +204,7 @@ function CreditIcon() {
 function balancePathForRole(role?: string) {
   if (role === "client") return "/app/client/balance";
   if (role === "performer") return "/app/performer/balance";
+  if (role === "manager") return "/app/manager/balances";
   if (role === "admin" || role === "superadmin") return "/app/admin/balances";
   return "/app";
 }
@@ -160,6 +212,7 @@ function balancePathForRole(role?: string) {
 function homePathForRole(role?: string) {
   if (role === "client") return "/app/client/requests";
   if (role === "performer") return "/app/performer/requests";
+  if (role === "manager") return "/app/manager";
   if (role === "admin" || role === "superadmin") return "/app/admin";
   return "/app";
 }
@@ -167,6 +220,7 @@ function homePathForRole(role?: string) {
 function supportPathForRole(role?: string) {
   if (role === "client") return "/app/client/support";
   if (role === "performer") return "/app/performer/support";
+  if (role === "manager") return "/app/manager/support";
   if (role === "admin" || role === "superadmin") return "/app/admin/support";
   return "/app";
 }

@@ -244,7 +244,7 @@ export function requiredDocumentTypesForRegistration(role: "client" | "performer
 }
 
 export function requiredDocumentTypesForFeature(role: UserRole, feature: ConsentFeature) {
-  if (role === "oauth_pending") return [];
+  if (role === "oauth_pending" || role === "manager") return [];
   const normalizedRole = role === "superadmin" ? "admin" : role;
   return FEATURE_REQUIRED[feature]?.[normalizedRole] ?? [];
 }

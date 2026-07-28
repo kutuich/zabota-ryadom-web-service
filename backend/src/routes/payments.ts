@@ -1,12 +1,18 @@
 import type { PaymentTransaction, Prisma } from "@prisma/client";
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { env } from "../config/env";
 import { prisma } from "../db/prisma";
 import { authenticate, requireAdmin } from "../middleware/auth";
 import { getBalanceSummary } from "../services/balanceService";
 import { requireFeatureConsent } from "../services/legalService";
-import { createTopUpPayment, PaymentInitError, type PaymentStatus } from "../services/paymentAdapter";
+import {
+  createTopUpPayment,
+  getPaymentAdapter,
+  PaymentInitError,
+  PaymentStateError,
+  type PaymentStatus
+} from "../services/paymentAdapter";
 import { generateTopUpOrderId } from "../services/paymentOrderId";
 import { creditPaymentToBalance, getPaymentBalanceSummary } from "../services/paymentService";
 import { writeAudit } from "../services/auditService";
@@ -17,7 +23,7 @@ export const paymentsRouter = Router();
 export const adminPaymentsRouter = Router();
 
 const topUpSchema = z.object({
-  amount: z.number().int().positive()
+  amount: z.number().int().positive().max(1_000_000)
 });
 
 paymentsRouter.post(
@@ -32,8 +38,8 @@ paymentsRouter.post(
     }
 
     const orderId = generateTopUpOrderId(req.user!.id);
-    const successUrl = env.tbankSuccessUrl;
-    const failUrl = env.tbankFailUrl;
+    const baseSuccessUrl = env.tbankSuccessUrl;
+    const baseFailUrl = env.tbankFailUrl;
     const notificationUrl = env.tbankNotificationUrl;
     const metadata = {
       userId: req.user!.id,
@@ -41,6 +47,22 @@ paymentsRouter.post(
     };
     const description = "Пополнение баланса";
 
+    const createdPayment = await prisma.paymentTransaction.create({
+      data: {
+        userId: req.user!.id,
+        provider: env.paymentProvider,
+        orderId,
+        amount: input.amount,
+        status: "created",
+        description,
+        successUrl: baseSuccessUrl,
+        failUrl: baseFailUrl,
+        notificationUrl,
+        metadataJson: JSON.stringify(metadata)
+      }
+    });
+    const successUrl = appendPaymentReference(baseSuccessUrl, createdPayment.id, orderId);
+    const failUrl = appendPaymentReference(baseFailUrl, createdPayment.id, orderId);
     const initInput = {
       userId: req.user!.id,
       amount: input.amount,
@@ -52,25 +74,20 @@ paymentsRouter.post(
       metadata
     };
 
-    const initResult = await createTopUpPayment(initInput).catch(async (error) => {
+    let initResult: Awaited<ReturnType<typeof createTopUpPayment>>;
+    try {
+      initResult = await createTopUpPayment(initInput);
+    } catch (error) {
       if (error instanceof PaymentInitError) {
-        const failedPayment = await prisma.paymentTransaction.create({
+        const failedPayment = await prisma.paymentTransaction.update({
+          where: { id: createdPayment.id },
           data: {
-            userId: req.user!.id,
             provider: error.provider,
             providerPaymentId: error.providerPaymentId,
-            orderId,
-            amount: input.amount,
             status: error.status,
-            description,
-            paymentUrl: null,
-            successUrl,
-            failUrl,
-            notificationUrl,
             rawInitRequestJson: error.rawRequestJson,
             rawInitResponseJson: error.rawResponseJson,
-            metadataJson: JSON.stringify(metadata),
-            failedAt: new Date()
+            failedAt: error.status === "failed" ? new Date() : null
           }
         });
         await writeAudit(req.user!.id, "payment.top_up_init_failed", "payment", failedPayment.id, {
@@ -79,30 +96,35 @@ paymentsRouter.post(
           provider: failedPayment.provider,
           status: failedPayment.status
         });
-        throw new HttpError(502, error.message, "payment_init_failed");
+        throw new HttpError(502, "Не удалось создать платёж", "payment_init_failed");
       }
-      if (error instanceof Error && error.message === "Платёжный провайдер не настроен") {
-        throw new HttpError(503, error.message, "payment_provider_not_configured");
-      }
-      throw error;
-    });
-
-    const payment = await prisma.paymentTransaction.create({
-      data: {
-        userId: req.user!.id,
-        provider: initResult.provider,
-        providerPaymentId: initResult.providerPaymentId,
+      const failedPayment = await prisma.paymentTransaction.update({
+        where: { id: createdPayment.id },
+        data: { status: "failed", failedAt: new Date() }
+      });
+      await writeAudit(req.user!.id, "payment.top_up_init_failed", "payment", failedPayment.id, {
         orderId,
         amount: input.amount,
+        provider: failedPayment.provider,
+        status: failedPayment.status
+      });
+      if (error instanceof Error && error.message === "Платёжный провайдер не настроен") {
+        throw new HttpError(503, "Платёжный провайдер не настроен", "payment_provider_not_configured");
+      }
+      throw new HttpError(502, "Не удалось создать платёж", "payment_init_failed");
+    }
+
+    const payment = await prisma.paymentTransaction.update({
+      where: { id: createdPayment.id },
+      data: {
+        provider: initResult.provider,
+        providerPaymentId: initResult.providerPaymentId,
         status: initResult.status,
-        description,
         paymentUrl: initResult.paymentUrl,
         successUrl,
         failUrl,
-        notificationUrl,
         rawInitRequestJson: initResult.rawRequestJson,
-        rawInitResponseJson: initResult.rawResponseJson,
-        metadataJson: JSON.stringify(metadata)
+        rawInitResponseJson: initResult.rawResponseJson
       }
     });
 
@@ -131,6 +153,109 @@ paymentsRouter.get(
 );
 
 paymentsRouter.post(
+  "/:id/refresh-status",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const payment = await prisma.paymentTransaction.findUnique({ where: { id: req.params.id } });
+    if (!payment) {
+      throw new HttpError(404, "Платёж не найден", "payment_not_found");
+    }
+
+    const realRole = req.user!.realRole;
+    if (realRole === "manager") {
+      throw new HttpError(403, "Менеджер может только просматривать платежи", "manager_permission_denied");
+    }
+    const isAdmin = ["admin", "superadmin"].includes(realRole);
+    if (!isAdmin && payment.userId !== req.user!.id) {
+      throw new HttpError(403, "Нет доступа к платежу", "forbidden");
+    }
+
+    if (payment.provider === "mock") {
+      return res.json(serializePaymentRefresh(payment, refreshMessage(payment.status)));
+    }
+    if (payment.provider !== "tbank") {
+      throw new HttpError(400, "Проверка статуса для этого провайдера недоступна", "payment_provider_mismatch");
+    }
+
+    const adapter = getPaymentAdapter("tbank");
+    if (!adapter.getState) {
+      throw new HttpError(503, "Проверка статуса платежа не настроена", "payment_state_not_configured");
+    }
+
+    let providerState: Awaited<ReturnType<NonNullable<typeof adapter.getState>>>;
+    try {
+      providerState = await adapter.getState(payment);
+    } catch (error) {
+      if (error instanceof PaymentStateError) {
+        if (error.requiresManualReview) {
+          const updated = await prisma.paymentTransaction.update({
+            where: { id: payment.id },
+            data: payment.creditedAt || payment.balanceTransactionId
+              ? { rawStateResponseJson: error.rawResponseJson }
+              : { status: "manual_review", rawStateResponseJson: error.rawResponseJson }
+          });
+          await writeAudit(req.user!.id, "payment.tbank_get_state_manual_review", "payment", payment.id, {
+            orderId: payment.orderId,
+            providerPaymentId: payment.providerPaymentId,
+            reasonCode: error.reasonCode
+          });
+          return res.json(serializePaymentRefresh(updated, "Платёж передан на ручную проверку."));
+        }
+        await writeAudit(req.user!.id, "payment.tbank_get_state_failed", "payment", payment.id, {
+          orderId: payment.orderId,
+          providerPaymentId: payment.providerPaymentId,
+          reasonCode: error.reasonCode
+        });
+        if (error.reasonCode === "provider_not_configured") {
+          throw new HttpError(503, "Платёжный провайдер не настроен", "payment_provider_not_configured");
+        }
+      }
+      throw new HttpError(502, "Не удалось проверить статус платежа", "payment_state_failed");
+    }
+
+    const normalizedStatus = normalizeTbankStatus(providerState.providerStatus, providerState.success);
+    const updated = await prisma.$transaction(async (tx) => {
+      const current = await tx.paymentTransaction.findUnique({ where: { id: payment.id } });
+      if (!current) throw new HttpError(404, "Платёж не найден", "payment_not_found");
+      if (current.creditedAt || current.balanceTransactionId || current.status === "manual_review") {
+        return tx.paymentTransaction.update({
+          where: { id: current.id },
+          data: { rawStateResponseJson: providerState.rawResponseJson }
+        });
+      }
+      const nextStatus: PaymentStatus = isTerminalPaymentStatus(current.status) && normalizedStatus === "pending"
+        ? current.status as PaymentStatus
+        : normalizedStatus;
+      const now = new Date();
+      const row = await tx.paymentTransaction.update({
+        where: { id: current.id },
+        data: {
+          status: nextStatus,
+          rawStateResponseJson: providerState.rawResponseJson,
+          ...statusDatePatch(nextStatus, now)
+        }
+      });
+      await writeAudit(req.user!.id, "payment.tbank_get_state", "payment", row.id, {
+        orderId: row.orderId,
+        providerPaymentId: row.providerPaymentId,
+        providerStatus: providerState.providerStatus,
+        status: nextStatus
+      }, tx);
+      return row;
+    });
+
+    const finalPayment = updated.status === "succeeded"
+      ? (await creditPaymentToBalance(updated.id, {
+          reason: "Пополнение баланса через платёжную форму Т-Банка",
+          comment: updated.orderId
+        })).payment
+      : updated;
+
+    res.json(serializePaymentRefresh(finalPayment, refreshMessage(finalPayment.status)));
+  })
+);
+
+paymentsRouter.post(
   "/mock/:id/succeed",
   authenticate,
   asyncHandler(async (req, res) => {
@@ -143,6 +268,11 @@ paymentsRouter.post(
     if (payment.provider !== "mock") {
       throw new HttpError(400, "Тестовое подтверждение доступно только для mock-платежей", "payment_provider_mismatch");
     }
+
+    await prisma.paymentTransaction.updateMany({
+      where: { id: payment.id, status: { in: ["created", "pending"] }, creditedAt: null },
+      data: { status: "succeeded", paidAt: new Date() }
+    });
 
     const credit = await creditPaymentToBalance(payment.id, {
       reason: "Пополнение баланса через тестовую платёжную форму",
@@ -212,7 +342,7 @@ paymentsRouter.post(
 paymentsRouter.post(
   "/tbank/webhook",
   asyncHandler(async (req, res) => {
-    const payload = req.body ?? {};
+    const payload = isPlainRecord(req.body) ? req.body : {};
     const rawWebhookJson = JSON.stringify(payload);
     const providerPaymentId = valueAsString(payload.PaymentId ?? payload.PaymentID);
     const orderId = valueAsString(payload.OrderId ?? payload.OrderID);
@@ -233,41 +363,66 @@ paymentsRouter.post(
       throw new HttpError(400, "Некорректная подпись уведомления", "payment_webhook_token_invalid");
     }
 
+    const terminalKey = valueAsString(payload.TerminalKey);
+    if (!providerPaymentId || !orderId || !terminalKey || terminalKey !== env.tbankTerminalKey) {
+      await writeAudit(null, "payment.tbank_webhook_invalid_payload", "payment", null, {
+        providerPaymentId,
+        orderId,
+        terminalKeyMatches: terminalKey === env.tbankTerminalKey
+      });
+      throw new HttpError(400, "Некорректные данные уведомления", "payment_webhook_payload_invalid");
+    }
+
     const payment = await findPaymentForWebhook(providerPaymentId, orderId);
 
     if (!payment) {
       await writeAudit(null, "payment.tbank_webhook_unmatched", "payment", null, {
         providerPaymentId,
         orderId,
-        payload
+        status: valueAsString(payload.Status)
       });
-      return res.json({ ok: true, matched: false });
+      throw new HttpError(404, "Платёж не найден", "payment_not_found");
     }
 
-    const payloadAmount = payload.Amount === undefined ? null : Number(payload.Amount);
-    if (payloadAmount !== null && Number.isFinite(payloadAmount) && payloadAmount !== payment.amount * 100) {
+    const payloadAmount = Number(payload.Amount);
+    if (!Number.isSafeInteger(payloadAmount) || payloadAmount <= 0 || payloadAmount !== payment.amount * 100) {
       const updated = await prisma.paymentTransaction.update({
         where: { id: payment.id },
-        data: {
-          providerPaymentId: payment.providerPaymentId ?? providerPaymentId,
-          rawWebhookJson,
-          status: "manual_review"
-        }
+        data: payment.creditedAt
+          ? { rawWebhookJson }
+          : {
+              providerPaymentId: payment.providerPaymentId ?? providerPaymentId,
+              rawWebhookJson,
+              status: "manual_review"
+            }
       });
       await writeAudit(null, "payment.tbank_webhook_amount_mismatch", "payment", payment.id, {
         orderId: payment.orderId,
         expectedAmount: payment.amount * 100,
         payloadAmount
       });
-      return res.json({ ok: true, matched: true, status: updated.status });
+      return sendTbankOk(res);
     }
 
-    const normalizedStatus = normalizeTbankStatus(valueAsString(payload.Status));
+    const normalizedStatus = normalizeTbankStatus(valueAsString(payload.Status), payload.Success);
 
     const result = await prisma.$transaction(async (tx) => {
       const current = await tx.paymentTransaction.findUnique({ where: { id: payment.id } });
       if (!current) {
         throw new HttpError(404, "Платёж не найден", "payment_not_found");
+      }
+
+      if (current.creditedAt || current.balanceTransactionId) {
+        return tx.paymentTransaction.update({
+          where: { id: current.id },
+          data: { rawWebhookJson }
+        });
+      }
+      if (current.status === "manual_review") {
+        return tx.paymentTransaction.update({
+          where: { id: current.id },
+          data: { rawWebhookJson }
+        });
       }
 
       const now = new Date();
@@ -301,10 +456,10 @@ paymentsRouter.post(
         credited: credit.credited,
         balanceTransactionId: credit.balanceTransaction?.id ?? credit.payment.balanceTransactionId
       });
-      return res.json({ ok: true, matched: true, status: credit.payment.status });
+      return sendTbankOk(res);
     }
 
-    res.json({ ok: true, matched: true, status: result.status });
+    sendTbankOk(res);
   })
 );
 
@@ -342,7 +497,26 @@ adminPaymentsRouter.get(
 
     const rows = await prisma.paymentTransaction.findMany({
       where,
-      include: { user: { select: { id: true, displayName: true, role: true, phone: true, email: true } } },
+      select: {
+        id: true,
+        userId: true,
+        provider: true,
+        providerPaymentId: true,
+        orderId: true,
+        amount: true,
+        currency: true,
+        status: true,
+        purpose: true,
+        description: true,
+        balanceTransactionId: true,
+        createdAt: true,
+        updatedAt: true,
+        paidAt: true,
+        creditedAt: true,
+        failedAt: true,
+        cancelledAt: true,
+        user: { select: { id: true, displayName: true, role: true, phone: true, email: true } }
+      },
       orderBy: { createdAt: "desc" },
       take: limit
     });
@@ -366,11 +540,12 @@ adminPaymentsRouter.get(
       : null;
 
     res.json({
-      payment,
+      payment: serializeAdminPayment(payment),
       user: payment.user,
       balanceTransaction,
-      rawInitResponseJson: payment.rawInitResponseJson,
-      rawWebhookJson: payment.rawWebhookJson
+      rawInitResponseJson: redactProviderJson(payment.rawInitResponseJson),
+      rawStateResponseJson: redactProviderJson(payment.rawStateResponseJson),
+      rawWebhookJson: redactProviderJson(payment.rawWebhookJson)
     });
   })
 );
@@ -387,10 +562,46 @@ function serializePaymentSummary(payment: PaymentTransaction) {
   };
 }
 
-function serializePayment(payment: PaymentTransaction, includeRawWebhook = false) {
-  if (includeRawWebhook) return payment;
-  const { rawWebhookJson: _rawWebhookJson, ...safePayment } = payment;
-  return safePayment;
+function serializePayment(payment: PaymentTransaction, _includeTechnical = false) {
+  return {
+    id: payment.id,
+    userId: payment.userId,
+    provider: payment.provider,
+    providerPaymentId: payment.providerPaymentId,
+    orderId: payment.orderId,
+    amount: payment.amount,
+    currency: payment.currency,
+    status: payment.status,
+    purpose: payment.purpose,
+    description: payment.description,
+    paymentUrl: payment.paymentUrl,
+    createdAt: payment.createdAt,
+    updatedAt: payment.updatedAt,
+    paidAt: payment.paidAt,
+    creditedAt: payment.creditedAt,
+    failedAt: payment.failedAt,
+    cancelledAt: payment.cancelledAt
+  };
+}
+
+function serializeAdminPayment(payment: PaymentTransaction) {
+  return {
+    ...serializePayment(payment),
+    balanceTransactionId: payment.balanceTransactionId
+  };
+}
+
+function serializePaymentRefresh(payment: PaymentTransaction, message: string) {
+  return {
+    paymentId: payment.id,
+    orderId: payment.orderId,
+    provider: payment.provider,
+    amount: payment.amount,
+    status: payment.status,
+    creditedAt: payment.creditedAt,
+    balanceTransactionId: payment.balanceTransactionId,
+    message
+  };
 }
 
 function ensureMockEndpointAllowed(role: string) {
@@ -412,21 +623,46 @@ function valueAsString(value: unknown) {
 }
 
 async function findPaymentForWebhook(providerPaymentId: string, orderId: string) {
-  const conditions: Prisma.PaymentTransactionWhereInput[] = [];
-  if (providerPaymentId) conditions.push({ providerPaymentId });
-  if (orderId) conditions.push({ orderId });
-  if (conditions.length === 0) return null;
-  return prisma.paymentTransaction.findFirst({ where: { OR: conditions } });
+  if (!providerPaymentId || !orderId) return null;
+  return prisma.paymentTransaction.findFirst({
+    where: { provider: "tbank", providerPaymentId, orderId }
+  });
 }
 
-function normalizeTbankStatus(status: string): PaymentStatus {
+function normalizeTbankStatus(status: string, success: unknown): PaymentStatus {
   const normalized = status.toUpperCase();
-  if (["CONFIRMED", "AUTHORIZED", "SUCCESS", "SUCCEEDED", "COMPLETED"].includes(normalized)) return "succeeded";
+  if (normalized === "CONFIRMED") return isProviderSuccess(success) ? "succeeded" : "manual_review";
   if (["REJECTED", "FAILED"].includes(normalized)) return "failed";
   if (["CANCELED", "CANCELLED"].includes(normalized)) return "cancelled";
   if (normalized === "DEADLINE_EXPIRED" || normalized === "EXPIRED") return "expired";
   if (normalized === "REFUNDED") return "refunded";
+  if (["NEW", "FORM_SHOWED", "AUTHORIZING", "3DS_CHECKING", "3DS_CHECKED", "AUTHORIZED", "AUTH_FAIL"].includes(normalized)) return "pending";
   return "manual_review";
+}
+
+function isProviderSuccess(value: unknown) {
+  return value === true || (typeof value === "string" && value.toLowerCase() === "true");
+}
+
+function sendTbankOk(res: Response) {
+  return res.status(200).type("text/plain").send("OK");
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function redactProviderJson(value: string | null) {
+  if (!value) return null;
+  try {
+    const payload = JSON.parse(value) as unknown;
+    if (!isPlainRecord(payload)) return null;
+    const redacted = { ...payload };
+    for (const key of ["Token", "Password", "access_token", "refresh_token"]) delete redacted[key];
+    return JSON.stringify(redacted);
+  } catch {
+    return null;
+  }
 }
 
 function statusDatePatch(status: PaymentStatus, date: Date) {
@@ -435,4 +671,26 @@ function statusDatePatch(status: PaymentStatus, date: Date) {
   if (status === "cancelled") return { cancelledAt: date };
   if (status === "expired") return { failedAt: date };
   return {};
+}
+
+function isTerminalPaymentStatus(status: string) {
+  return ["succeeded", "failed", "cancelled", "expired", "refunded"].includes(status);
+}
+
+function refreshMessage(status: string) {
+  if (status === "succeeded") return "Платёж подтверждён. Баланс обновлён.";
+  if (["failed", "cancelled", "expired"].includes(status)) return "Платёж не завершён. Деньги не зачислены на баланс.";
+  if (status === "manual_review") return "Платёж передан на ручную проверку.";
+  return "Платёж пока проверяется. Повторите проверку чуть позже.";
+}
+
+function appendPaymentReference(baseUrl: string, paymentId: string, orderId: string) {
+  try {
+    const url = new URL(baseUrl);
+    url.searchParams.set("paymentId", paymentId);
+    url.searchParams.set("orderId", orderId);
+    return url.toString();
+  } catch {
+    return baseUrl;
+  }
 }

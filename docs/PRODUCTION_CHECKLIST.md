@@ -21,3 +21,11 @@
 - [ ] Проверена регистрация помощника.
 - [ ] Проверен mock payment.
 - [ ] Проверена админка платежей.
+- [ ] Перед реальной оплатой сделан backup `.env.production` и `/opt/zabota/data/zabota.db`.
+- [ ] Тестовый терминал Т-Банка и HTTPS notification URL проверены.
+- [ ] Подписанный `CONFIRMED` webhook зачисляет баланс ровно один раз.
+- [ ] Повторный webhook не создаёт вторую операцию `payment_credit:<paymentId>`.
+- [ ] При задержке webhook ручной `GetState` подтверждает pending-платёж.
+- [ ] Повторный `GetState` и любой порядок webhook/GetState не удваивают баланс.
+- [ ] Manager видит платежи read-only и не может вызвать refresh-status.
+- [ ] `PAYMENT_RECEIPT_ENABLED=false` до отдельной проверки фискализации.

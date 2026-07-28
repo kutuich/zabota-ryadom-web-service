@@ -20,6 +20,7 @@ import { publicRouter } from "./routes/public";
 import { requestsRouter } from "./routes/requests";
 import { settlementsRouter } from "./routes/settlements";
 import { meCitiesRouter } from "./routes/meCities";
+import { managerRouter } from "./routes/manager";
 import { sendError } from "./utils/http";
 
 export function createApp() {
@@ -55,6 +56,7 @@ export function createApp() {
   app.use("/api/balance", balanceRouter);
   app.use("/api/payments", paymentsRouter);
   app.use("/api/complaints", complaintsRouter);
+  app.use("/api/manager", managerRouter);
   app.use("/api/admin/payments", adminPaymentsRouter);
   app.use("/api/admin", adminRouter);
 

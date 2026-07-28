@@ -52,7 +52,7 @@ export async function creditPaymentToBalanceTx(
     };
   }
 
-  if (!["pending", "succeeded"].includes(current.status)) {
+  if (current.status !== "succeeded") {
     return { payment: current, balanceTransaction: null, credited: false };
   }
 
@@ -77,7 +77,7 @@ export async function creditPaymentToBalanceTx(
   const claimed = await tx.paymentTransaction.updateMany({
     where: {
       id: current.id,
-      status: { in: ["pending", "succeeded"] },
+      status: "succeeded",
       creditedAt: null,
       balanceTransactionId: null
     },

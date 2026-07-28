@@ -15,6 +15,7 @@ export type NavGroup = {
 const APP_CLIENT_PREFIX = "/app/client";
 const APP_PERFORMER_PREFIX = "/app/performer";
 const APP_ADMIN_PREFIX = "/app/admin";
+const APP_MANAGER_PREFIX = "/app/manager";
 
 export const clientNavigation: NavGroup[] = [
   {
@@ -104,16 +105,39 @@ export const adminNavigation: NavGroup[] = [
   }
 ];
 
+export const managerNavigation: NavGroup[] = [
+  { label: "Обзор", items: [{ label: "Главная", path: APP_MANAGER_PREFIX, end: true }] },
+  {
+    label: "Операционная работа",
+    items: [
+      { label: "Пользователи", path: `${APP_MANAGER_PREFIX}/users` },
+      { label: "Заявки", path: `${APP_MANAGER_PREFIX}/requests` },
+      { label: "Чаты", path: `${APP_MANAGER_PREFIX}/chats` },
+      { label: "Обращения", path: `${APP_MANAGER_PREFIX}/support` }
+    ]
+  },
+  {
+    label: "Финансы только для просмотра",
+    items: [
+      { label: "Платежи", path: `${APP_MANAGER_PREFIX}/payments` },
+      { label: "Операции баланса", path: `${APP_MANAGER_PREFIX}/balances` }
+    ]
+  },
+  { label: "Учётная запись", items: [{ label: "Профиль менеджера", path: `${APP_MANAGER_PREFIX}/profile` }] }
+];
+
 export function defaultPathForRole(role: UserRole) {
   if (role === "oauth_pending") return "/app/oauth/complete";
   if (role === "client") return `${APP_CLIENT_PREFIX}/requests`;
   if (role === "performer") return `${APP_PERFORMER_PREFIX}/requests`;
+  if (role === "manager") return APP_MANAGER_PREFIX;
   return APP_ADMIN_PREFIX;
 }
 
 export function roleForPath(pathname: string): UserRole | "admin_family" | null {
   if (pathname.startsWith(APP_CLIENT_PREFIX)) return "client";
   if (pathname.startsWith(APP_PERFORMER_PREFIX)) return "performer";
+  if (pathname === APP_MANAGER_PREFIX || pathname.startsWith(`${APP_MANAGER_PREFIX}/`)) return "manager";
   if (pathname === APP_ADMIN_PREFIX || pathname.startsWith(`${APP_ADMIN_PREFIX}/`)) return "admin_family";
   return null;
 }
@@ -131,14 +155,16 @@ export function isKnownPathForRole(role: UserRole, pathname: string) {
     ? clientNavigation
     : role === "performer"
       ? performerNavigation
-      : adminNavigation;
+      : role === "manager"
+        ? managerNavigation
+        : adminNavigation;
   const items = groups.flatMap((group) => group.items);
   if (items.some((item) => item.path === pathname)) return true;
   return items.some((item) => item.path.endsWith("/chats") && pathname.startsWith(`${item.path}/`));
 }
 
 export function allAppPaths() {
-  return [...clientNavigation, ...performerNavigation, ...adminNavigation].flatMap((group) =>
+  return [...clientNavigation, ...performerNavigation, ...managerNavigation, ...adminNavigation].flatMap((group) =>
     group.items.map((item) => item.path)
   );
 }
@@ -146,6 +172,7 @@ export function allAppPaths() {
 export function chatPathForRole(role: UserRole, chatId: string) {
   if (role === "client") return `${APP_CLIENT_PREFIX}/chats/${chatId}`;
   if (role === "performer") return `${APP_PERFORMER_PREFIX}/chats/${chatId}`;
+  if (role === "manager") return `${APP_MANAGER_PREFIX}/chats/${chatId}`;
   return `${APP_ADMIN_PREFIX}/chats/${chatId}`;
 }
 
