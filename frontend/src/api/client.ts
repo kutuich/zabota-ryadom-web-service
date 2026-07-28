@@ -13,6 +13,11 @@ import type {
   KnowledgeArticle,
   LegalDocument,
   LegalExportPayload,
+  ManagerCreateRequestInput,
+  ManagerUserDetails,
+  NpdRegisterResponse,
+  NpdStatus,
+  NpdTaxRegisterEntry,
   PaymentActionResult,
   PaymentRefreshResult,
   PaymentTransaction,
@@ -253,6 +258,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body)
     }),
+  recordManualBankRefund: (id: string, body: {
+    amount: number;
+    bankRefundDate: string;
+    reason: "customer_request" | "test_refund" | "service_cancelled" | "duplicate_payment" | "other";
+    comment: string;
+    bankReference?: string;
+  }) => apiFetch<{ refund: import("../types").RefundTransaction }>(`/admin/payments/${id}/manual-bank-refund`, {
+    method: "POST",
+    body: JSON.stringify(body)
+  }),
   adminSettings: () => apiFetch<unknown[]>("/admin/settings"),
   getTrialBalanceSettings: () => apiFetch<TrialBalanceSettings>("/admin/trial-balance/settings"),
   updateTrialBalanceSettings: (body: Pick<TrialBalanceSettings, "enabled" | "amount" | "autoGrantNewUsers">) =>
@@ -319,6 +334,12 @@ export const api = {
     }),
   adminCancelPendingOAuthRegistration: (userId: string) =>
     apiFetch<{ user: User }>(`/admin/users/${userId}/oauth-pending/cancel`, { method: "POST" }),
+  adminOAuthPendingRestoreSafety: (userId: string) =>
+    apiFetch<import("../types").OAuthPendingRestoreSafety>(`/admin/users/${userId}/oauth-pending-restore-safety`),
+  adminRestorePendingOAuthRegistration: (userId: string) =>
+    apiFetch<{ user: User; safety: import("../types").OAuthPendingRestoreSafety }>(`/admin/users/${userId}/restore-oauth-pending`, {
+      method: "POST"
+    }),
   adminUpdatePerformerVerification: (userId: string, body: Record<string, unknown>) =>
     apiFetch(`/admin/performers/${userId}/verification`, { method: "PATCH", body: JSON.stringify(body) }),
   adminUpdatePerformerDocumentStatus: (documentId: string, status: string, adminComment?: string) =>
@@ -328,14 +349,20 @@ export const api = {
     }),
   adminUpdateCategory: (categoryId: string, body: Partial<ServiceCategory>) =>
     apiFetch<ServiceCategory>(`/admin/categories/${categoryId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  getAdminNpdRegister: (from: string, to: string) =>
+    apiFetch<NpdRegisterResponse>(`/admin/npd-register${queryString({ from, to })}`),
+  updateAdminNpdRegisterEntry: (entryId: string, body: { npdStatus?: NpdStatus; npdComment?: string | null }) =>
+    apiFetch<NpdTaxRegisterEntry>(`/admin/npd-register/${entryId}`, { method: "PATCH", body: JSON.stringify(body) }),
   managerSummary: () => apiFetch<Record<string, number>>("/manager/summary"),
   managerUsers: () => apiFetch<User[]>("/manager/users"),
-  managerUser: (userId: string) => apiFetch<User>(`/manager/users/${userId}`),
+  managerUser: (userId: string) => apiFetch<ManagerUserDetails>(`/manager/users/${userId}`),
   managerBlockUser: (userId: string, reason: string) =>
     apiFetch<User>(`/manager/users/${userId}/block`, { method: "POST", body: JSON.stringify({ reason }) }),
   managerUnblockUser: (userId: string) =>
     apiFetch<User>(`/manager/users/${userId}/unblock`, { method: "POST" }),
   managerRequests: () => apiFetch<ClientRequest[]>("/manager/requests"),
+  managerCreateRequest: (input: ManagerCreateRequestInput) =>
+    apiFetch<ClientRequest>("/manager/requests", { method: "POST", body: JSON.stringify(input) }),
   managerRequest: (requestId: string) => apiFetch<ClientRequest>(`/manager/requests/${requestId}`),
   managerChats: () => apiFetch<Chat[]>("/manager/chats"),
   managerChat: (chatId: string) => apiFetch<Chat>(`/manager/chats/${chatId}`),

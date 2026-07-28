@@ -9,6 +9,20 @@ import type { PaymentTransaction } from "../types";
 import { effectiveRoleForUser } from "../utils/authRole";
 
 export function MockPaymentPage() {
+  const { user } = useAuth();
+  if (!import.meta.env.DEV) {
+    return (
+      <PaymentShell title="Пополнение временно недоступно" icon={<AlertCircle size={28} />}>
+        <p>Пополнение через банк пока не включено.</p>
+        <p className="privacy-note">Пополнение баланса выполняется через защищённую платёжную форму банка. Сервис не хранит данные банковских карт.</p>
+        <Link className="primary-button" to={balancePathForRole(effectiveRoleForUser(user))}>Вернуться к балансу</Link>
+      </PaymentShell>
+    );
+  }
+  return <LocalMockPaymentPage />;
+}
+
+function LocalMockPaymentPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user } = useAuth();

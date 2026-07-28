@@ -4,6 +4,7 @@ import { prisma } from "../db/prisma";
 import { HttpError } from "../utils/http";
 import { writeAudit } from "./auditService";
 import { getPaymentAdapter, PaymentRefundError } from "./paymentAdapter";
+import { ensureRefundNpdEntryTx } from "./npdTaxRegisterService";
 
 export const paymentRefundIdempotencyKey = (refundId: string) => `payment_refund:${refundId}`;
 
@@ -17,6 +18,13 @@ type RefundInput = {
 export async function refundPayment(input: RefundInput) {
   let prepared = await prepareRefund(input);
   if (prepared.status === "succeeded") {
+    await prisma.$transaction(async (tx) => {
+      const completed = await tx.refundTransaction.findUniqueOrThrow({
+        where: { id: prepared.id },
+        include: { payment: true }
+      });
+      await ensureRefundNpdEntryTx(tx, completed, completed.payment, completed.balanceTransactionId);
+    });
     return refundResult(prepared, true);
   }
   if (prepared.status === "provider_succeeded") {
@@ -134,7 +142,10 @@ async function finalizeRefund(refundId: string) {
         include: { payment: true }
       });
       if (!refund) throw new HttpError(404, "Возврат не найден", "payment_refund_not_found");
-      if (refund.status === "succeeded") return refundResult(refund, true);
+      if (refund.status === "succeeded") {
+        await ensureRefundNpdEntryTx(tx, refund, refund.payment, refund.balanceTransactionId);
+        return refundResult(refund, true);
+      }
       if (refund.status !== "provider_succeeded") {
         throw new HttpError(409, "Возврат ещё не подтверждён провайдером", "payment_refund_not_confirmed");
       }
@@ -155,6 +166,7 @@ async function finalizeRefund(refundId: string) {
           where: { id: refund.paymentTransactionId },
           data: { status: "refunded" }
         });
+        await ensureRefundNpdEntryTx(tx, completed, refund.payment, existingLedger.id);
         return refundResult(completed, true);
       }
 
@@ -203,6 +215,7 @@ async function finalizeRefund(refundId: string) {
         where: { id: refund.paymentTransactionId },
         data: { status: "refunded" }
       });
+      await ensureRefundNpdEntryTx(tx, completed, refund.payment, balanceTransaction.id);
       await writeAudit(refund.createdByAdminId, "admin.payment.refund", "payment", refund.paymentTransactionId, {
         refundTransactionId: refund.id,
         amount: refund.amount,

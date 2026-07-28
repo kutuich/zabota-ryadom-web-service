@@ -28,7 +28,13 @@ import type { UserRole } from "../types/domain";
 import { asyncHandler, HttpError } from "../utils/http";
 import { normalizeSettlementName } from "../services/settlementService";
 import { serializeAgreedTerms } from "../services/agreementTermsService";
-import { getOAuthPendingCancellationSafety, getUserArchiveSafety } from "../services/userLifecycleService";
+import {
+  getArchivedOAuthPendingRestoreSafety,
+  getOAuthPendingCancellationSafety,
+  getUserArchiveSafety,
+  OAUTH_PENDING_CANCEL_ARCHIVE_REASON,
+  restoreArchivedOAuthPendingUser
+} from "../services/userLifecycleService";
 import { signUserToken, type ActingRole } from "../services/authTokenService";
 import { assignManagerRole, blockUser, revokeManagerRole, unblockUser } from "../services/userAccessService";
 
@@ -222,7 +228,7 @@ adminRouter.post(
           safety
         );
       }
-      const reason = "Незавершённая VK-регистрация отменена администратором";
+      const reason = OAUTH_PENDING_CANCEL_ARCHIVE_REASON;
       const user = await tx.user.update({
         where: { id: current.id },
         data: {
@@ -243,6 +249,40 @@ adminRouter.post(
       return { user, safety };
     });
     const { passwordHash: _passwordHash, ...safeUser } = result.user;
+    res.json({ user: safeUser, safety: result.safety });
+  })
+);
+
+adminRouter.get(
+  "/users/:id/oauth-pending-restore-safety",
+  asyncHandler(async (req, res) => {
+    res.json(await getArchivedOAuthPendingRestoreSafety(req.params.id));
+  })
+);
+
+adminRouter.post(
+  "/users/:id/restore-oauth-pending",
+  asyncHandler(async (req, res) => {
+    const result = await prisma.$transaction((tx) => restoreArchivedOAuthPendingUser({
+      userId: req.params.id,
+      actorUserId: req.user!.id,
+      source: "admin_panel"
+    }, tx));
+    const updated = await prisma.user.findUniqueOrThrow({
+      where: { id: result.user.id },
+      include: {
+        city: true,
+        userCities: { where: { isActive: true }, include: { city: true } },
+        clientProfile: true,
+        performerProfile: true,
+        performerDocuments: { orderBy: { uploadedAt: "desc" } },
+        identities: {
+          select: { id: true, provider: true, providerUserId: true, displayName: true, avatarUrl: true, createdAt: true }
+        },
+        riskFlags: { where: { resolvedAt: null }, orderBy: { createdAt: "desc" } }
+      }
+    });
+    const { passwordHash: _passwordHash, ...safeUser } = updated;
     res.json({ user: safeUser, safety: result.safety });
   })
 );

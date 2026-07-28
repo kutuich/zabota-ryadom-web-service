@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { AdminPaymentsPage } from "./AdminPaymentsPage";
+import { AdminNpdRegisterPage } from "./AdminNpdRegisterPage";
 import { Shell } from "../components/Shell";
 import { StatusBadge, statusTone } from "../components/StatusBadge";
 import { ChatPanel } from "../components/ChatPanel";
@@ -11,7 +12,7 @@ import { EmptyState } from "../components/EmptyState";
 import { PriceSummary } from "../components/PriceSummary";
 import { AgreedTermsSummary } from "../components/AgreedTermsSummary";
 import { ResponsiveDataList } from "../components/ResponsiveDataList";
-import type { AdminBalanceAdjustmentInput, AdminBalanceTransaction, Chat, City, ClientRequest, KnowledgeArticle, LegalDocument, ServiceCategory, TrialBalanceSettings, User, UserArchiveSafety, UserConsent, UserConsentStatus } from "../types";
+import type { AdminBalanceAdjustmentInput, AdminBalanceTransaction, Chat, City, ClientRequest, KnowledgeArticle, LegalDocument, OAuthPendingRestoreSafety, ServiceCategory, TrialBalanceSettings, User, UserArchiveSafety, UserConsent, UserConsentStatus } from "../types";
 import { labelChildcare, labelCriminalRecord, labelSelfEmployed, labelStatus, labelTrust, requestDisplayTitle } from "../utils/labels";
 import { adminNavigation, chatPathForRole, sectionTitleForPath } from "../routes/navigation";
 import { downloadXlsx, downloadZip } from "../utils/xlsx";
@@ -72,6 +73,7 @@ export function AdminDashboard() {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [selectedUserLegalStatuses, setSelectedUserLegalStatuses] = useState<UserConsentStatus[]>([]);
   const [selectedUserArchiveSafety, setSelectedUserArchiveSafety] = useState<UserArchiveSafety | null>(null);
+  const [selectedOAuthRestoreSafety, setSelectedOAuthRestoreSafety] = useState<OAuthPendingRestoreSafety | null>(null);
   const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<{ request: ClientRequest; response: any } | null>(null);
   const [expandedBalanceUserId, setExpandedBalanceUserId] = useState<string | null>(null);
@@ -228,12 +230,34 @@ export function AdminDashboard() {
     }
   }
 
+  async function restorePendingOAuthRegistration(user: User) {
+    if (!window.confirm("Восстановить незавершённую VK-регистрацию? Пользователь сможет снова войти через VK и заполнить профиль.")) return;
+    try {
+      const result = await api.adminRestorePendingOAuthRegistration(user.id);
+      setSelectedUser(result.user);
+      setSelectedOAuthRestoreSafety(null);
+      setNotice("Незавершённая VK-регистрация восстановлена.");
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Не удалось восстановить незавершённую регистрацию.");
+    }
+  }
+
   async function openUserProfile(user: User) {
     setSelectedUser(user);
     setBalanceAdjustmentForm(createBalanceAdjustmentDraft());
     setBalanceAdjustmentError("");
     setSelectedUserLegalStatuses([]);
     setSelectedUserArchiveSafety(null);
+    setSelectedOAuthRestoreSafety(null);
+    if (isArchivedIncompleteVkRegistration(user)) {
+      try {
+        setSelectedOAuthRestoreSafety(await api.adminOAuthPendingRestoreSafety(user.id));
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Не удалось проверить возможность восстановления.");
+      }
+      return;
+    }
     if (isIncompleteVkRegistration(user)) return;
     try {
       const [legalStatuses, safety] = await Promise.all([
@@ -1008,6 +1032,8 @@ export function AdminDashboard() {
 
       {activeTab === "Платежи" && <AdminPaymentsPage />}
 
+      {activeTab === "Мой налог" && <AdminNpdRegisterPage />}
+
       {activeTab === "Начисления" && (
         <section className="form-grid">
           <p className="span-2 notice">
@@ -1269,6 +1295,19 @@ export function AdminDashboard() {
       {selectedUser && (
         <Modal title={`Профиль пользователя: ${selectedUser.displayName}`} onClose={() => setSelectedUser(null)}>
           <UserProfile user={selectedUser} legalStatuses={selectedUserLegalStatuses} archiveSafety={selectedUserArchiveSafety} />
+          {isArchivedIncompleteVkRegistration(selectedUser) && selectedOAuthRestoreSafety && (
+            <section className="plain-section">
+              <h3>Незавершённая VK-регистрация</h3>
+              {selectedOAuthRestoreSafety.canRestore ? (
+                <p>Этот профиль был создан при входе через VK, но регистрация не была завершена. Его можно восстановить, чтобы пользователь снова прошёл заполнение анкеты.</p>
+              ) : (
+                <>
+                  <p>Этот архивный профиль нельзя восстановить как незавершённую регистрацию.</p>
+                  <ul>{selectedOAuthRestoreSafety.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+                </>
+              )}
+            </section>
+          )}
           <BalanceAdjustmentPanel
             user={selectedUser}
             transactions={transactions.filter((transaction) => transaction.userId === selectedUser.id).slice(0, 20)}
@@ -1313,6 +1352,12 @@ export function AdminDashboard() {
               <button className="secondary-button" type="button" onClick={() => cancelPendingOAuthRegistration(selectedUser)}>
                 <Archive size={18} />
                 Отменить незавершённую регистрацию
+              </button>
+            )}
+            {isArchivedIncompleteVkRegistration(selectedUser) && selectedOAuthRestoreSafety?.canRestore && (
+              <button className="secondary-button" type="button" onClick={() => restorePendingOAuthRegistration(selectedUser)}>
+                <RefreshCcw size={18} />
+                Восстановить незавершённую регистрацию
               </button>
             )}
           </div>
@@ -2051,6 +2096,12 @@ function isIncompleteVkRegistration(user: User) {
     && Boolean(user.identities?.some((identity) => identity.provider === "vk"));
 }
 
+function isArchivedIncompleteVkRegistration(user: User) {
+  return user.role === "oauth_pending"
+    && user.status === "archived"
+    && Boolean(user.identities?.some((identity) => identity.provider === "vk"));
+}
+
 function legalScopeLabel(scope: string) {
   if (scope === "customer") return "Заказчики";
   if (scope === "helper") return "Помощники";
@@ -2092,6 +2143,7 @@ function adminTabFromPath(pathname: string) {
   if (pathname.startsWith("/app/admin/chats")) return "Чаты";
   if (pathname.startsWith("/app/admin/support")) return "Обращения";
   if (pathname.startsWith("/app/admin/balances")) return "Балансы";
+  if (pathname.startsWith("/app/admin/npd-register")) return "Мой налог";
   if (pathname.startsWith("/app/admin/payments")) return "Платежи";
   if (pathname.startsWith("/app/admin/bonuses")) return "Начисления";
   if (pathname.startsWith("/app/admin/blocked")) return "Блокировки";

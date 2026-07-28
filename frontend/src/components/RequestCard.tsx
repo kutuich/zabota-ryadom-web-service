@@ -54,6 +54,9 @@ export function RequestCard({
         </div>
         <StatusBadge tone={statusTone(request.status)}>{labelStatus(request.status)}</StatusBadge>
       </div>
+      {request.createdByRole === "manager" && priceRole === "client" && (
+        <p className="notice manager-request-origin">Заявка создана при помощи менеджера сервиса.</p>
+      )}
       <p>{request.description}</p>
       <div className="meta-row">
         <span>

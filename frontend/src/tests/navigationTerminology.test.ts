@@ -84,6 +84,7 @@ assert.equal(managerLabels.includes("Настройки сервиса"), false)
 assert.equal(managerLabels.includes("Юридические документы"), false);
 assert.equal(managerLabels.includes("Архив"), false);
 assert.equal(managerLabels.includes("Начисления"), false);
+assert.equal(managerLabels.includes("Мой налог"), false);
 assert.equal(clientNavigation.at(-1)?.label, "Дополнительно");
 assert.equal(performerNavigation.at(-1)?.label, "Дополнительно");
 
@@ -100,6 +101,7 @@ const adminPaths = [
   "/app/admin/support",
   "/app/admin/balances",
   "/app/admin/payments",
+  "/app/admin/npd-register",
   "/app/admin/bonuses",
   "/app/admin/blocked",
   "/app/admin/categories",
@@ -239,6 +241,9 @@ assert.match(adminDashboard, /Юридические документы/);
 assert.match(adminDashboard, /Экспорт всех согласий в Excel/);
 assert.match(adminDashboard, /Скачать полный legal-архив ZIP/);
 assert.match(adminDashboard, /Скачать полный legal-архив пользователя ZIP/);
+assert.match(adminDashboard, /Восстановить незавершённую регистрацию/);
+assert.match(adminDashboard, /Незавершённая VK-регистрация восстановлена/);
+assert.match(adminDashboard, /adminRestorePendingOAuthRegistration/);
 assert.match(adminDashboard, /Документы/);
 assert.match(adminDashboard, /Согласия пользователей/);
 assert.match(adminDashboard, /Выгрузки/);
@@ -266,6 +271,8 @@ assert.match(landingAuth, /helper-documents-consent/);
 assert.match(landingAuth, /Хочу получать информационные сообщения/);
 assert.match(landingAuth, /className="consent-document-link"/);
 assert.match(landingAuth, /className="consent-optional-label">\(необязательно\)<\/strong>/);
+assert.match(landingAuth, /Регистрация через VK ранее была остановлена\. Обратитесь в поддержку или войдите другим способом\./);
+assert.doesNotMatch(landingAuth, /Сессия VK ID истекла/);
 assert.match(landingAuth, /"privacy"/);
 assert.doesNotMatch(landingAuth, /"privacy_policy"/);
 assert.match(landingAuth, /app-auth-logo\.png/);
@@ -417,7 +424,9 @@ assert.match(balancePanel, /data-balance-history="operations"/);
 assert.equal((balancePanel.match(/balance-panel__history/g) ?? []).length, 2);
 assert.match(balancePanel, /plain-section span-full balance-panel__history/);
 assert.match(balancePanel, /Пробный баланс/);
-assert.match(balancePanel, /платёжная форма банка или тестовая платёжная форма/);
+assert.match(balancePanel, /Пополнение баланса выполняется через защищённую платёжную форму банка/);
+assert.match(balancePanel, /payment\.provider === "mock" && !import\.meta\.env\.DEV/);
+assert.match(balancePanel, /Пополнение через банк пока не включено/);
 assert.match(balancePanel, /Сервис не хранит данные банковских карт/);
 assert.match(balancePanel, /createTopUpPayment/);
 assert.match(balancePanel, /getMyPayments/);
@@ -429,6 +438,7 @@ assert.match(balancePanel, /disabled=\{isSubmitting \|\| !canSubmitTopUp\}/);
 assert.match(balancePanel, /payment\.description/);
 assert.match(balancePanel, /window\.location\.href = payment\.paymentUrl/);
 assert.doesNotMatch(balancePanel, /mockTopUp/);
+assert.doesNotMatch(balancePanel, /Подтвердить mock-платёж|Провалить mock-платёж|Тестовая оплата/);
 assert.doesNotMatch(balancePanel, /Пополнить тестово/);
 assert.doesNotMatch(balancePanel, /Тестовое пополнение/);
 assert.match(balancePanel, /Возврат платежа/);
@@ -485,6 +495,11 @@ assert.match(paymentPages, /api\.refreshPaymentStatus/);
 assert.match(paymentPages, /PaymentStatusRefresh/);
 assert.match(paymentPages, /mockPaymentSucceed/);
 assert.match(paymentPages, /mockPaymentFail/);
+assert.match(paymentPages, /if \(!import\.meta\.env\.DEV\)/);
+assert.match(paymentPages, /Пополнение временно недоступно/);
+assert.match(paymentPages, /Пополнение через банк пока не включено/);
+const paymentResultPages = paymentPages.slice(paymentPages.indexOf("export function PaymentSuccessPage"));
+assert.doesNotMatch(paymentResultPages, /mockPaymentSucceed|mockPaymentFail|Оплатить тестово/);
 
 const forgotPasswordPage = read("pages/ForgotPasswordPage.tsx");
 assert.match(forgotPasswordPage, /Восстановление доступа/);
@@ -521,6 +536,8 @@ assert.match(adminPaymentsPage, /Технические данные плате�
 assert.match(adminPaymentsPage, /Обновить статус/);
 assert.match(adminPaymentsPage, /rawStateResponseJson/);
 assert.match(adminPaymentsPage, /Не удалось загрузить платежи/);
+assert.match(adminPaymentsPage, /payment\.provider === "tbank" && payment\.status === "succeeded"/);
+assert.doesNotMatch(adminPaymentsPage, /Вернуть тестовый платёж|mockPaymentSucceed|mockPaymentFail/);
 assert.doesNotMatch(adminPaymentsPage, /комисси/i);
 
 const trialBalanceAdminDashboard = read("pages/AdminDashboard.tsx");
@@ -583,19 +600,33 @@ assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/archive-safety/);
 assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/archive/);
 assert.match(apiClient, /\/auth\/oauth\/cancel/);
 assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/oauth-pending\/cancel/);
+assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/oauth-pending-restore-safety/);
+assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/restore-oauth-pending/);
 assert.doesNotMatch(apiClient, /adminDeleteUser/);
 assert.match(apiClient, /adminAssignManager/);
 assert.match(apiClient, /adminRevokeManager/);
 assert.match(apiClient, /managerBlockUser/);
+assert.match(apiClient, /managerCreateRequest/);
+assert.match(apiClient, /\/manager\/requests/);
 assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/balance-adjustment/);
 assert.match(apiClient, /adminAdjustBalance/);
 
 const managerDashboard = read("pages/ManagerDashboard.tsx");
 assert.doesNotMatch(managerDashboard, /Отменить незавершённую регистрацию/);
+assert.doesNotMatch(managerDashboard, /Восстановить незавершённую регистрацию/);
 assert.doesNotMatch(managerDashboard, /Обновить статус/);
 assert.match(managerDashboard, /Кабинет менеджера/);
 assert.match(managerDashboard, /не можете менять системные настройки и роли пользователей/);
 assert.match(managerDashboard, /Заблокировать/);
+assert.match(managerDashboard, /Создать заявку от имени Заказчика/);
+assert.match(managerDashboard, /Создать черновик заявки/);
+assert.match(managerDashboard, /<select required value=\{value\.customerUserId\}/);
+assert.match(managerDashboard, /row\.role === "client" && row\.status === "active"/);
+assert.match(managerDashboard, /Основной баланс/);
+assert.match(managerDashboard, /Бонусный баланс/);
+assert.match(managerDashboard, /Последняя активность/);
+assert.match(managerDashboard, /Создано менеджером/);
+assert.match(managerDashboard, /Отклик Помощника автоматически не создаётся/);
 assert.doesNotMatch(managerDashboard, /Назначить менеджером/);
 assert.doesNotMatch(managerDashboard, /Снять роль менеджера/);
 assert.doesNotMatch(managerDashboard, /Настройки сервиса/);
@@ -604,12 +635,17 @@ assert.doesNotMatch(managerDashboard, /Изменить статус плате�
 assert.doesNotMatch(managerDashboard, /Зачислить платёж/);
 assert.doesNotMatch(managerDashboard, /Корректировка баланса/);
 assert.doesNotMatch(managerDashboard, /Провести корректировку/);
+assert.doesNotMatch(managerDashboard, /Вернуть платёж/);
+
+const managerCreatedRequestCard = read("components/RequestCard.tsx");
+assert.match(managerCreatedRequestCard, /Заявка создана при помощи менеджера сервиса/);
 
 const adminDashboardManagerControls = read("pages/AdminDashboard.tsx");
 assert.match(adminDashboardManagerControls, /Незавершённая VK-регистрация/);
 assert.match(adminDashboardManagerControls, /Вход через VK начат, профиль не завершён/);
 assert.match(adminDashboardManagerControls, /Отменить незавершённую регистрацию/);
 assert.match(adminDashboardManagerControls, /adminCancelPendingOAuthRegistration/);
+assert.match(adminDashboardManagerControls, /adminOAuthPendingRestoreSafety/);
 assert.doesNotMatch(adminDashboardManagerControls, /Удалить пользователя/);
 assert.match(adminDashboardManagerControls, /Назначить менеджером/);
 assert.match(adminDashboardManagerControls, /Снять роль менеджера/);
@@ -625,6 +661,28 @@ assert.match(adminDashboardManagerControls, /Последние операции
 assert.match(adminDashboardManagerControls, /createdByAdmin\?\.displayName/);
 
 assert.match(appRoutes, /path="\/app\/manager\/\*"/);
+
+const npdRegisterPage = read("pages/AdminNpdRegisterPage.tsx");
+assert.match(npdRegisterPage, /Мой налог/);
+assert.match(npdRegisterPage, /data-npd-day/);
+assert.match(npdRegisterPage, /Итоги дня/);
+assert.match(npdRegisterPage, /Сервисный платёж за использование сервиса|entry\.copyText/);
+assert.match(npdRegisterPage, /Возврат/);
+assert.match(npdRegisterPage, /Скопировать/);
+assert.match(npdRegisterPage, /Отражено в «Мой налог»/);
+assert.match(npdRegisterPage, /Текст скопирован/);
+assert.match(npdRegisterPage, /Проверьте аннулирование или корректировку чека/);
+assert.match(npdRegisterPage, /updateAdminNpdRegisterEntry/);
+assert.match(npdRegisterPage, /реальные поступления через T-Bank/);
+assert.match(npdRegisterPage, /Возврат по банку/);
+assert.doesNotMatch(npdRegisterPage, /source === "mock"/);
+
+const adminPaymentsBankRefundPage = read("pages/AdminPaymentsPage.tsx");
+assert.match(adminPaymentsBankRefundPage, /Зафиксировать возврат по банку/);
+assert.match(adminPaymentsBankRefundPage, /Вернуть через T-Bank/);
+assert.match(adminPaymentsBankRefundPage, /деньги уже фактически возвращены Заказчику через банк/);
+assert.match(adminPaymentsBankRefundPage, /payment\.provider === "tbank"/);
+assert.match(adminPaymentsBankRefundPage, /recordManualBankRefund/);
 
 const forbiddenUserLabels = [
   "Предлагаемая оплата",

@@ -104,6 +104,10 @@ export type User = {
   status: string;
   balance: number;
   bonusBalance: number;
+  createdAt?: string;
+  updatedAt?: string;
+  lastSeenAt?: string | null;
+  registrationSource?: "standard" | "vk" | "vk_pending";
   isPhoneVerified: boolean;
   isEmailVerified: boolean;
   phoneVerifiedAt?: string | null;
@@ -130,6 +134,12 @@ export type User = {
   legalConsents?: UserConsent[];
   identities?: UserIdentity[];
   userCities?: UserCity[];
+};
+
+export type OAuthPendingRestoreSafety = {
+  canRestore: boolean;
+  reasons: string[];
+  counts: Record<string, number>;
 };
 
 export type UserArchiveSafety = {
@@ -207,6 +217,8 @@ export type ClientRequest = {
   id: string;
   publicNumber?: string | null;
   clientId: string;
+  createdByRole?: string | null;
+  createdByManagerId?: string | null;
   cityId: string;
   categoryId: string;
   contactName?: string | null;
@@ -269,6 +281,7 @@ export type ClientRequest = {
   chat?: { id: string; status: string; performerId?: string; agreedTerms?: AgreedTerms | null } | null;
   chats?: Array<{ id: string; status: string; performerId: string; agreedTerms?: AgreedTerms | null; archivedAt?: string | null }>;
   client?: Pick<User, "id" | "displayName">;
+  createdByManager?: Pick<User, "id" | "displayName"> | null;
   responseId?: string;
   responseStatus?: string;
   match?: {
@@ -605,6 +618,7 @@ export type BalanceTransaction = {
   id: string;
   userId: string;
   type: string;
+  source?: string | null;
   amount: number;
   balanceKind: string;
   reason: string;
@@ -615,7 +629,51 @@ export type BalanceTransaction = {
   bonusExpiresAt?: string | null;
   relatedRequestId?: string | null;
   createdByAdminId?: string | null;
+  createdByAdmin?: Pick<User, "id" | "displayName"> | null;
   createdAt: string;
+};
+
+export type ManagerUserDetails = {
+  user: User;
+  finance: {
+    mainBalance: number;
+    bonusBalance: number;
+    availableBalance: number;
+    balanceTransactions: BalanceTransaction[];
+  };
+  activity: {
+    requestsCount: number;
+    responsesCount: number;
+    chatsCount: number;
+    complaintsCount: number;
+    lastActivityAt: string;
+  };
+};
+
+export type ManagerCreateRequestInput = {
+  customerUserId: string;
+  cityId: string;
+  categoryId: string;
+  contactName?: string;
+  contactPhone?: string;
+  helpFor?: "elderly" | "child" | "limited_mobility" | "home_family" | "other";
+  dependentAge?: number;
+  title: string;
+  description: string;
+  addressStreet: string;
+  addressHouse: string;
+  addressApartment?: string;
+  addressEntrance?: string;
+  addressFloor?: string;
+  addressIntercom?: string;
+  addressComment?: string;
+  date?: string;
+  timeFrom?: string;
+  timeTo?: string;
+  expectedDurationHours?: number;
+  urgency?: "normal" | "urgent" | "regular";
+  priceEstimateAmount?: number;
+  comment?: string;
 };
 
 export type AdminBalanceTransaction = BalanceTransaction & {
@@ -652,12 +710,17 @@ export type RefundTransaction = {
   id: string;
   paymentTransactionId: string;
   provider: string;
+  refundType?: string | null;
+  userId?: string | null;
   providerRefundId?: string | null;
   externalRequestId: string;
   amount: number;
   currency: string;
   status: string;
   reason: string;
+  bankRefundDate?: string | null;
+  bankReference?: string | null;
+  adminComment?: string | null;
   balanceTransactionId?: string | null;
   createdByAdminId: string;
   createdByAdmin?: Pick<User, "id" | "displayName"> | null;
@@ -665,6 +728,72 @@ export type RefundTransaction = {
   updatedAt: string;
   completedAt?: string | null;
   failedAt?: string | null;
+};
+
+export type NpdStatus = "pending" | "recorded" | "not_required" | "needs_review";
+
+export type NpdTaxRegisterEntry = {
+  id: string;
+  operationType: "payment" | "refund" | "service_fee" | "admin_adjustment";
+  paymentTransactionId?: string | null;
+  refundTransactionId?: string | null;
+  balanceTransactionId?: string | null;
+  userId: string;
+  amount: number;
+  operationDate: string;
+  title: string;
+  description: string;
+  copyText: string;
+  refundCopyText?: string | null;
+  source: "tbank" | "manual_bank";
+  isTestOperation: boolean;
+  npdStatus: NpdStatus;
+  npdRecordedAt?: string | null;
+  npdComment?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  user: Pick<User, "id" | "displayName" | "role" | "phone" | "email">;
+  npdRecordedByAdmin?: Pick<User, "id" | "displayName"> | null;
+  paymentTransaction?: {
+    id: string;
+    orderId: string;
+    providerPaymentId?: string | null;
+    provider: string;
+    status: string;
+    amount: number;
+    refunds: Array<{ id: string; providerRefundId?: string | null; status: string; amount: number }>;
+  } | null;
+  refundTransaction?: {
+    id: string;
+    providerRefundId?: string | null;
+    status: string;
+    amount: number;
+    reason: string;
+    refundType?: string | null;
+    bankRefundDate?: string | null;
+    bankReference?: string | null;
+    adminComment?: string | null;
+    payment: { id: string; orderId: string; providerPaymentId?: string | null; amount: number };
+  } | null;
+};
+
+export type NpdRegisterTotals = {
+  paymentsCount: number;
+  paymentsAmount: number;
+  refundsCount: number;
+  refundsAmount: number;
+  netAmount: number;
+  pendingCount: number;
+  recordedCount: number;
+  needsReviewCount: number;
+  notRequiredCount: number;
+};
+
+export type NpdRegisterResponse = {
+  from: string;
+  to: string;
+  totals: NpdRegisterTotals;
+  days: Array<{ date: string; totals: NpdRegisterTotals; entries: NpdTaxRegisterEntry[] }>;
 };
 
 export type Bootstrap = {

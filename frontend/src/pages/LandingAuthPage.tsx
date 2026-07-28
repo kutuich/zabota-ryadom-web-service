@@ -133,7 +133,12 @@ export function LandingAuthPage() {
   }
 
   const roleTitle = role === "client" ? "Регистрация заказчика" : "Регистрация помощника";
-  const oauthFailed = new URLSearchParams(location.search).get("oauthError") === "vk";
+  const oauthParams = new URLSearchParams(location.search);
+  const oauthFailed = oauthParams.get("oauthError") === "vk";
+  const oauthReason = oauthParams.get("oauthReason");
+  const oauthErrorMessage = oauthReason === "archived-not-restorable"
+    ? "Регистрация через VK ранее была остановлена. Обратитесь в поддержку или войдите другим способом."
+    : "Не получилось войти через VK. Попробуйте ещё раз или войдите по телефону/email.";
 
   if (mode === "register") {
     return (
@@ -364,7 +369,7 @@ export function LandingAuthPage() {
         )}
 
         {oauthFailed && !error && (
-          <p className="error-text">Не получилось войти через VK. Попробуйте ещё раз или войдите по телефону/email.</p>
+          <p className="error-text">{oauthErrorMessage}</p>
         )}
 
         <label>

@@ -43,6 +43,11 @@ export function BalancePanel() {
         await load();
         return;
       }
+      if (payment.provider === "mock" && !import.meta.env.DEV) {
+        setMessage("Пополнение через банк пока не включено.");
+        await load();
+        return;
+      }
       window.location.href = payment.paymentUrl;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не удалось создать платёж. Попробуйте позже.");
@@ -86,7 +91,7 @@ export function BalancePanel() {
       <section className="plain-section span-full balance-panel__top-up">
         <h2>Пополнить баланс</h2>
         <p className="privacy-note">
-          Выберите сумму пополнения. После нажатия кнопки откроется платёжная форма банка или тестовая платёжная форма.
+          Пополнение баланса выполняется через защищённую платёжную форму банка. Сервис не хранит данные банковских карт.
         </p>
         <p className="notice">
           Сервис не хранит данные банковских карт, CVV/CVC-коды, пароли банковских приложений и коды из SMS.
@@ -199,7 +204,7 @@ export function paymentStatusLabel(status: string) {
 
 export function paymentProviderLabel(provider: string) {
   if (provider === "tbank") return "платёжная форма Т-Банка";
-  if (provider === "mock") return "тестовая платёжная форма";
+  if (provider === "mock") return "пополнение через банк не включено";
   return provider;
 }
 

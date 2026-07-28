@@ -5,6 +5,7 @@ import { prisma } from "../db/prisma";
 import { getConsentStatuses, requiredDocumentTypesForRegistration } from "./legalService";
 import { normalizeRussianPhone } from "./phoneService";
 import { HttpError } from "../utils/http";
+import { restoreArchivedOAuthPendingUser } from "./userLifecycleService";
 
 export const VK_OAUTH_TRANSACTION_COOKIE = "zabota_vk_oauth";
 export const VK_OAUTH_SESSION_COOKIE = "zabota_vk_session";
@@ -209,6 +210,27 @@ export async function resolveVkUser(input: {
       });
     }
 
+    if (user.role === "admin" || user.role === "superadmin") {
+      throw new HttpError(403, "Вход администратора через VK ID недоступен", "vk_admin_login_forbidden");
+    }
+    if (existingIdentity && user.status === "archived" && user.role === "oauth_pending") {
+      const restored = await restoreArchivedOAuthPendingUser({
+        userId: user.id,
+        actorUserId: user.id,
+        source: "vk_callback",
+        providerUserId: input.providerUserId
+      }, tx);
+      user = restored.user;
+    } else if (user.status === "archived" && user.role === "oauth_pending") {
+      throw new HttpError(
+        400,
+        "Регистрация через VK ранее была остановлена. Обратитесь в поддержку или войдите другим способом.",
+        "oauth_pending_restore_not_allowed"
+      );
+    } else if (user.status !== "active") {
+      throw new HttpError(403, "Профиль заблокирован или архивирован", "vk_user_access_denied");
+    }
+
     const identity = await tx.userIdentity.upsert({
       where: { provider_providerUserId: { provider: VK_ID_PROVIDER, providerUserId: input.providerUserId } },
       create: {
@@ -227,10 +249,6 @@ export async function resolveVkUser(input: {
         rawProfileJson: JSON.stringify(sanitizeVkProfile(input.profile))
       }
     });
-
-    if (user.role === "admin" || user.role === "superadmin") {
-      throw new HttpError(403, "Вход администратора через VK ID недоступен", "vk_admin_login_forbidden");
-    }
 
     return { user, identity };
   });

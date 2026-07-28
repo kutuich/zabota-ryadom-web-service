@@ -84,6 +84,7 @@ export const adminNavigation: NavGroup[] = [
     items: [
       { label: "Балансы", path: `${APP_ADMIN_PREFIX}/balances` },
       { label: "Платежи", path: `${APP_ADMIN_PREFIX}/payments` },
+      { label: "Мой налог", path: `${APP_ADMIN_PREFIX}/npd-register` },
       { label: "Начисления", path: `${APP_ADMIN_PREFIX}/bonuses` }
     ]
   },

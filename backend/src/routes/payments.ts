@@ -17,6 +17,7 @@ import { generateTopUpOrderId } from "../services/paymentOrderId";
 import { creditPaymentToBalance, getPaymentBalanceSummary } from "../services/paymentService";
 import { refundPayment } from "../services/refundService";
 import { writeAudit } from "../services/auditService";
+import { createManualBankRefund } from "../services/manualBankRefundService";
 import { verifyTbankToken } from "../services/tbankToken";
 import { asyncHandler, HttpError } from "../utils/http";
 
@@ -30,6 +31,14 @@ const topUpSchema = z.object({
 const refundSchema = z.object({
   amount: z.number().int().positive().max(1_000_000).optional(),
   reason: z.string().trim().min(3).max(500)
+});
+
+const manualBankRefundSchema = z.object({
+  amount: z.number().int().positive().max(1_000_000),
+  bankRefundDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  reason: z.enum(["customer_request", "test_refund", "service_cancelled", "duplicate_payment", "other"]),
+  comment: z.string().trim().min(3).max(1000),
+  bankReference: z.string().trim().max(300).optional().nullable()
 });
 
 paymentsRouter.post(
@@ -265,7 +274,7 @@ paymentsRouter.post(
   "/mock/:id/succeed",
   authenticate,
   asyncHandler(async (req, res) => {
-    ensureMockEndpointAllowed(req.user!.role);
+    ensureMockEndpointAllowed();
     const payment = await prisma.paymentTransaction.findUnique({ where: { id: req.params.id } });
     if (!payment) {
       throw new HttpError(404, "Платёж не найден", "payment_not_found");
@@ -303,7 +312,7 @@ paymentsRouter.post(
   "/mock/:id/fail",
   authenticate,
   asyncHandler(async (req, res) => {
-    ensureMockEndpointAllowed(req.user!.role);
+    ensureMockEndpointAllowed();
     const payment = await prisma.paymentTransaction.findUnique({ where: { id: req.params.id } });
     if (!payment) {
       throw new HttpError(404, "Платёж не найден", "payment_not_found");
@@ -548,6 +557,27 @@ adminPaymentsRouter.post(
   })
 );
 
+adminPaymentsRouter.post(
+  "/:id/manual-bank-refund",
+  asyncHandler(async (req, res) => {
+    const input = manualBankRefundSchema.parse(req.body);
+    const bankRefundDate = new Date(`${input.bankRefundDate}T12:00:00+05:00`);
+    if (Number.isNaN(bankRefundDate.getTime())) {
+      throw new HttpError(400, "Укажите корректную дату возврата", "manual_bank_refund_date_invalid");
+    }
+    const refund = await createManualBankRefund({
+      paymentId: req.params.id,
+      amount: input.amount,
+      bankRefundDate,
+      reason: input.reason,
+      comment: input.comment,
+      bankReference: input.bankReference,
+      adminUserId: req.user!.id
+    });
+    res.status(201).json({ refund: serializeRefund(refund) });
+  })
+);
+
 adminPaymentsRouter.get(
   "/:id",
   asyncHandler(async (req, res) => {
@@ -625,12 +655,17 @@ function serializeRefund(refund: {
   id: string;
   paymentTransactionId: string;
   provider: string;
+  refundType?: string | null;
+  userId?: string | null;
   providerRefundId: string | null;
   externalRequestId: string;
   amount: number;
   currency: string;
   status: string;
   reason: string;
+  bankRefundDate?: Date | null;
+  bankReference?: string | null;
+  adminComment?: string | null;
   balanceTransactionId: string | null;
   createdByAdminId: string;
   createdAt: Date;
@@ -643,12 +678,17 @@ function serializeRefund(refund: {
     id: refund.id,
     paymentTransactionId: refund.paymentTransactionId,
     provider: refund.provider,
+    refundType: refund.refundType,
+    userId: refund.userId,
     providerRefundId: refund.providerRefundId,
     externalRequestId: refund.externalRequestId,
     amount: refund.amount,
     currency: refund.currency,
     status: refund.status,
     reason: refund.reason,
+    bankRefundDate: refund.bankRefundDate,
+    bankReference: refund.bankReference,
+    adminComment: refund.adminComment,
     balanceTransactionId: refund.balanceTransactionId,
     createdByAdminId: refund.createdByAdminId,
     createdByAdmin: refund.createdByAdmin,
@@ -672,11 +712,10 @@ function serializePaymentRefresh(payment: PaymentTransaction, message: string) {
   };
 }
 
-function ensureMockEndpointAllowed(role: string) {
-  if (env.nodeEnv !== "production" || env.paymentProvider === "mock" || ["admin", "superadmin"].includes(role)) {
-    return;
+function ensureMockEndpointAllowed() {
+  if (env.nodeEnv === "production") {
+    throw new HttpError(403, "Тестовая платёжная форма недоступна", "mock_payment_forbidden");
   }
-  throw new HttpError(403, "Тестовая платёжная форма недоступна", "mock_payment_forbidden");
 }
 
 function assertPaymentOwner(paymentUserId: string, authenticatedUserId: string) {

@@ -89,6 +89,7 @@ model User {
   clientProfile            ClientProfile?
   performerProfile         PerformerProfile?
   clientRequests           ClientRequest[]      @relation("ClientRequests")
+  managerCreatedRequests   ClientRequest[]      @relation("ManagerCreatedRequests")
   selectedRequests         ClientRequest[]      @relation("SelectedPerformerRequests")
   responses                RequestResponse[]
   chatsAsClient            Chat[]               @relation("ClientChats")
@@ -97,6 +98,7 @@ model User {
   balanceTransactions      BalanceTransaction[] @relation("UserBalanceTransactions")
   paymentTransactions      PaymentTransaction[] @relation("UserPaymentTransactions")
   adminCreatedRefunds      RefundTransaction[]  @relation("AdminCreatedRefunds")
+  receivedRefunds          RefundTransaction[]  @relation("UserRefundTransactions")
   adminCreatedTransactions BalanceTransaction[] @relation("AdminCreatedTransactions")
   complaintsFrom           Complaint[]          @relation("ComplaintsFrom")
   complaintsAgainst        Complaint[]          @relation("ComplaintsAgainst")
@@ -115,6 +117,8 @@ model User {
   identities               UserIdentity[]
   userCities               UserCity[]
   activatedCities          City[]               @relation("CityActivatedBy")
+  npdTaxEntries            NpdTaxRegisterEntry[] @relation("UserNpdTaxEntries")
+  npdRecordedEntries       NpdTaxRegisterEntry[] @relation("AdminRecordedNpdTaxEntries")
 
   @@index([role])
   @@index([cityId])
@@ -235,6 +239,8 @@ model ClientRequest {
   publicNumber           String?
   seedKey                String?              @unique
   clientId               String
+  createdByRole          String?
+  createdByManagerId     String?
   cityId                 String
   categoryId             String
   contactName            String?
@@ -295,6 +301,7 @@ model ClientRequest {
   cancelledAt            DateTime?
   archivedAt             DateTime?
   client                 User                 @relation("ClientRequests", fields: [clientId], references: [id])
+  createdByManager       User?                @relation("ManagerCreatedRequests", fields: [createdByManagerId], references: [id], onDelete: SetNull)
   city                   City                 @relation(fields: [cityId], references: [id])
   category               ServiceCategory      @relation(fields: [categoryId], references: [id])
   selectedPerformer      User?                @relation("SelectedPerformerRequests", fields: [selectedPerformerId], references: [id])
@@ -307,6 +314,7 @@ model ClientRequest {
   @@index([cityId, status])
   @@index([publicNumber])
   @@index([clientId])
+  @@index([createdByManagerId])
   @@index([selectedPerformerId])
 }
 
@@ -409,6 +417,7 @@ model BalanceTransaction {
   user             User           @relation("UserBalanceTransactions", fields: [userId], references: [id])
   createdByAdmin   User?          @relation("AdminCreatedTransactions", fields: [createdByAdminId], references: [id])
   relatedRequest   ClientRequest? @relation(fields: [relatedRequestId], references: [id])
+  npdTaxEntry      NpdTaxRegisterEntry?
 
   @@index([userId, createdAt])
   @@index([type])
@@ -444,6 +453,7 @@ model PaymentTransaction {
   cancelledAt          DateTime?
   user                 User     @relation("UserPaymentTransactions", fields: [userId], references: [id])
   refunds              RefundTransaction[]
+  npdTaxEntry          NpdTaxRegisterEntry?
 
   @@index([userId])
   @@index([provider])
@@ -456,12 +466,17 @@ model RefundTransaction {
   id                   String             @id @default(cuid())
   paymentTransactionId String             @unique
   provider             String
+  refundType           String?
+  userId               String?
   providerRefundId     String?
   externalRequestId    String             @unique
   amount               Int
   currency             String             @default("RUB")
   status               String             @default("processing")
   reason               String
+  bankRefundDate       DateTime?
+  bankReference        String?
+  adminComment         String?
   rawRequestJson       String?
   rawResponseJson      String?
   balanceTransactionId String?            @unique
@@ -471,12 +486,49 @@ model RefundTransaction {
   completedAt          DateTime?
   failedAt             DateTime?
   payment              PaymentTransaction @relation(fields: [paymentTransactionId], references: [id])
+  user                 User?              @relation("UserRefundTransactions", fields: [userId], references: [id])
   createdByAdmin       User               @relation("AdminCreatedRefunds", fields: [createdByAdminId], references: [id])
+  npdTaxEntry          NpdTaxRegisterEntry?
 
   @@index([provider])
+  @@index([refundType])
+  @@index([userId])
   @@index([status])
   @@index([createdAt])
   @@index([createdByAdminId])
+}
+
+model NpdTaxRegisterEntry {
+  id                       String             @id @default(cuid())
+  operationType            String
+  paymentTransactionId     String?            @unique
+  refundTransactionId      String?            @unique
+  balanceTransactionId     String?            @unique
+  userId                   String
+  amount                   Int
+  operationDate            DateTime
+  title                    String
+  description              String
+  copyText                 String
+  refundCopyText           String?
+  source                   String
+  isTestOperation          Boolean            @default(false)
+  npdStatus                String             @default("pending")
+  npdRecordedAt            DateTime?
+  npdRecordedByAdminId     String?
+  npdComment               String?
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+  paymentTransaction       PaymentTransaction? @relation(fields: [paymentTransactionId], references: [id], onDelete: Cascade)
+  refundTransaction        RefundTransaction? @relation(fields: [refundTransactionId], references: [id], onDelete: Cascade)
+  balanceTransaction       BalanceTransaction? @relation(fields: [balanceTransactionId], references: [id], onDelete: SetNull)
+  user                     User               @relation("UserNpdTaxEntries", fields: [userId], references: [id], onDelete: Cascade)
+  npdRecordedByAdmin       User?              @relation("AdminRecordedNpdTaxEntries", fields: [npdRecordedByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([operationDate])
+  @@index([npdStatus, operationDate])
+  @@index([userId, operationDate])
+  @@index([operationType])
 }
 
 model Complaint {

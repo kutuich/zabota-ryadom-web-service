@@ -1273,6 +1273,84 @@ textarea {
   min-width: 0;
 }
 
+.manager-origin-badge {
+  display: block;
+  width: fit-content;
+  margin-top: 6px;
+  padding: 3px 7px;
+  border: 1px solid #bdd7f3;
+  border-radius: 4px;
+  background: #edf6ff;
+  color: #245f9f;
+  font-weight: 600;
+}
+
+.manager-request-form label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.manager-request-origin {
+  margin: 0 0 12px;
+}
+
+.npd-period-toolbar,
+.npd-actions,
+.npd-copy-box {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.npd-period-toolbar label {
+  display: grid;
+  gap: 5px;
+  font-weight: 600;
+}
+
+.npd-totals .panel-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.npd-totals--compact {
+  margin: 12px 0 18px;
+}
+
+.npd-entry {
+  border-left: 4px solid #4f83bd;
+}
+
+.npd-copy-box {
+  justify-content: space-between;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f7faf8;
+}
+
+.npd-copy-box strong {
+  flex: 1 1 360px;
+}
+
+.npd-actions {
+  margin-top: 14px;
+}
+
+@media (max-width: 760px) {
+  .npd-totals .panel-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .npd-period-toolbar > *,
+  .npd-actions > * {
+    width: 100%;
+  }
+}
+
 .response-list {
   display: grid;
   gap: 10px;

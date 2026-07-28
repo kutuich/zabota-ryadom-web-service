@@ -26,6 +26,12 @@ export function AdminPaymentsPage() {
   const [refundPayment, setRefundPayment] = useState<AdminPaymentDetails | null>(null);
   const [refundReason, setRefundReason] = useState("");
   const [isRefunding, setIsRefunding] = useState(false);
+  const [manualBankRefundPayment, setManualBankRefundPayment] = useState<AdminPaymentDetails | null>(null);
+  const [manualBankRefundDate, setManualBankRefundDate] = useState(todayDateKey());
+  const [manualBankRefundReason, setManualBankRefundReason] = useState<"customer_request" | "test_refund" | "service_cancelled" | "duplicate_payment" | "other">("customer_request");
+  const [manualBankReference, setManualBankReference] = useState("");
+  const [manualBankComment, setManualBankComment] = useState("");
+  const [isRecordingManualBankRefund, setIsRecordingManualBankRefund] = useState(false);
 
   async function loadPayments(nextFilters = filters) {
     setIsLoading(true);
@@ -88,6 +94,29 @@ export function AdminPaymentsPage() {
       setRefundPayment(null);
     } finally {
       setIsRefunding(false);
+    }
+  }
+
+  async function submitManualBankRefund() {
+    if (!manualBankRefundPayment || !manualBankRefundDate || manualBankComment.trim().length < 3) return;
+    const paymentId = manualBankRefundPayment.payment.id;
+    setIsRecordingManualBankRefund(true);
+    setDetailsError("");
+    try {
+      await api.recordManualBankRefund(paymentId, {
+        amount: manualBankRefundPayment.payment.amount,
+        bankRefundDate: manualBankRefundDate,
+        reason: manualBankRefundReason,
+        comment: manualBankComment.trim(),
+        bankReference: manualBankReference.trim() || undefined
+      });
+      setManualBankRefundPayment(null);
+      await Promise.all([openPayment(paymentId), loadPayments()]);
+    } catch (submitError) {
+      setDetailsError(submitError instanceof Error ? submitError.message : "Не удалось зафиксировать возврат по банку.");
+      setManualBankRefundPayment(null);
+    } finally {
+      setIsRecordingManualBankRefund(false);
     }
   }
 
@@ -215,6 +244,13 @@ export function AdminPaymentsPage() {
                 setRefundReason("");
                 setRefundPayment(selectedPayment);
               }}
+              onManualBankRefund={() => {
+                setManualBankRefundDate(todayDateKey());
+                setManualBankRefundReason("customer_request");
+                setManualBankReference("");
+                setManualBankComment("");
+                setManualBankRefundPayment(selectedPayment);
+              }}
             />
           )}
         </section>
@@ -258,6 +294,39 @@ export function AdminPaymentsPage() {
           </section>
         </div>
       )}
+      {manualBankRefundPayment && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="manual-bank-refund-title">
+          <section className="modal-panel">
+            <div className="card__head">
+              <div>
+                <h2 id="manual-bank-refund-title">Зафиксировать возврат по банку</h2>
+                <p className="privacy-note">Сумма полного возврата: {manualBankRefundPayment.payment.amount} ₽.</p>
+              </div>
+              <button className="secondary-button" type="button" onClick={() => setManualBankRefundPayment(null)} disabled={isRecordingManualBankRefund}>Закрыть</button>
+            </div>
+            <p className="notice notice--warning">Подтвердите, что деньги уже фактически возвращены Заказчику через банк. После подтверждения операция будет списана с баланса пользователя и попадёт в реестр «Мой налог».</p>
+            <div className="form-grid">
+              <label>Сумма возврата<input type="number" value={manualBankRefundPayment.payment.amount} readOnly /></label>
+              <label>Дата фактического возврата в банке<input type="date" value={manualBankRefundDate} onChange={(event) => setManualBankRefundDate(event.target.value)} required /></label>
+              <label>Причина<select value={manualBankRefundReason} onChange={(event) => setManualBankRefundReason(event.target.value as typeof manualBankRefundReason)}>
+                <option value="customer_request">По заявлению Заказчика</option>
+                <option value="test_refund">Тестовый возврат реального платежа</option>
+                <option value="service_cancelled">Услуга отменена</option>
+                <option value="duplicate_payment">Дублирующий платёж</option>
+                <option value="other">Другая причина</option>
+              </select></label>
+              <label>Номер операции / комментарий банка<input value={manualBankReference} onChange={(event) => setManualBankReference(event.target.value)} maxLength={300} /></label>
+              <label className="span-full">Комментарий администратора<textarea value={manualBankComment} onChange={(event) => setManualBankComment(event.target.value)} maxLength={1000} rows={4} required /></label>
+            </div>
+            <div className="trust-row">
+              <button className="primary-button" type="button" onClick={() => void submitManualBankRefund()} disabled={isRecordingManualBankRefund || !manualBankRefundDate || manualBankComment.trim().length < 3}>
+                <Undo2 size={18} />{isRecordingManualBankRefund ? "Фиксируем возврат" : "Зафиксировать возврат"}
+              </button>
+              <button className="secondary-button" type="button" onClick={() => setManualBankRefundPayment(null)} disabled={isRecordingManualBankRefund}>Отмена</button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
@@ -266,12 +335,14 @@ function PaymentDetails({
   details,
   isRefreshing,
   onRefresh,
-  onRefund
+  onRefund,
+  onManualBankRefund
 }: {
   details: AdminPaymentDetails;
   isRefreshing: boolean;
   onRefresh: () => void;
   onRefund: () => void;
+  onManualBankRefund: () => void;
 }) {
   const payment = details.payment;
   const user = details.user ?? payment.user;
@@ -305,11 +376,19 @@ function PaymentDetails({
           {isRefreshing ? "Проверяем" : "Обновить статус"}
         </button>
       )}
-      {payment.status === "succeeded" && payment.creditedAt && !(details.refunds?.length) && (
-        <button className="secondary-button" type="button" onClick={onRefund}>
-          <Undo2 size={18} />
-          Вернуть платёж
-        </button>
+      {payment.provider === "tbank" && payment.status === "succeeded" && payment.creditedAt && !(details.refunds?.length) && (
+        <div className="trust-row">
+          <button className="secondary-button" type="button" onClick={onRefund}>
+            <Undo2 size={18} />
+            Вернуть через T-Bank
+          </button>
+          {payment.provider === "tbank" && (
+            <button className="secondary-button" type="button" onClick={onManualBankRefund}>
+              <Undo2 size={18} />
+              Зафиксировать возврат по банку
+            </button>
+          )}
+        </div>
       )}
       {!!details.refunds?.length && (
         <section className="plain-section">
@@ -319,6 +398,10 @@ function PaymentDetails({
               <span>Сумма</span><strong>{refund.amount} {refund.currency}</strong>
               <span>Статус</span><strong>{refundStatusLabel(refund.status)}</strong>
               <span>Причина</span><strong>{refund.reason}</strong>
+              {refund.refundType === "bank_refund_manual" && <><span>Источник</span><strong>Возврат по банку</strong></>}
+              {refund.bankRefundDate && <><span>Дата возврата в банке</span><strong>{formatDateTimeRu(refund.bankRefundDate)}</strong></>}
+              {refund.bankReference && <><span>Номер операции банка</span><strong>{refund.bankReference}</strong></>}
+              {refund.adminComment && <><span>Комментарий администратора</span><strong>{refund.adminComment}</strong></>}
               <span>Выполнил</span><strong>{refund.createdByAdmin?.displayName ?? refund.createdByAdminId}</strong>
               <span>Дата</span><strong>{formatDateTimeRu(refund.createdAt)}</strong>
               <span>ID возврата провайдера</span><strong>{refund.providerRefundId ?? "не указан"}</strong>
@@ -410,4 +493,10 @@ function refundStatusLabel(status: string) {
     manual_review: "Требует проверки"
   };
   return labels[status] ?? status;
+}
+
+function todayDateKey() {
+  const today = new Date();
+  const offset = today.getTimezoneOffset() * 60_000;
+  return new Date(today.getTime() - offset).toISOString().slice(0, 10);
 }

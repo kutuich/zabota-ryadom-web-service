@@ -76,6 +76,8 @@ export function serializeRequestForUser(
     id: request.id,
     publicNumber: request.publicNumber,
     clientId: request.clientId,
+    createdByRole: request.createdByRole,
+    createdByManagerId: request.createdByManagerId,
     cityId: request.cityId,
     categoryId: request.categoryId,
     contactName: canSeeContact ? request.contactName : null,

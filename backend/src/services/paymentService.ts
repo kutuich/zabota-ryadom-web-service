@@ -1,6 +1,7 @@
 import type { PaymentTransaction, Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import { HttpError } from "../utils/http";
+import { ensurePaymentNpdEntryTx } from "./npdTaxRegisterService";
 
 type Tx = Prisma.TransactionClient;
 
@@ -43,11 +44,13 @@ export async function creditPaymentToBalanceTx(
   }
 
   if (current.creditedAt || current.balanceTransactionId) {
+    const balanceTransaction = current.balanceTransactionId
+      ? await tx.balanceTransaction.findUnique({ where: { id: current.balanceTransactionId } })
+      : null;
+    await ensurePaymentNpdEntryTx(tx, current, balanceTransaction?.id ?? null);
     return {
       payment: current,
-      balanceTransaction: current.balanceTransactionId
-        ? await tx.balanceTransaction.findUnique({ where: { id: current.balanceTransactionId } })
-        : null,
+      balanceTransaction,
       credited: false
     };
   }
@@ -70,6 +73,7 @@ export async function creditPaymentToBalanceTx(
         balanceTransactionId: existingTransaction.id
       }
     });
+    await ensurePaymentNpdEntryTx(tx, updated, existingTransaction.id);
     return { payment: updated, balanceTransaction: existingTransaction, credited: false };
   }
 
@@ -95,6 +99,9 @@ export async function creditPaymentToBalanceTx(
     const balanceTransaction = paymentAfterClaim.balanceTransactionId
       ? await tx.balanceTransaction.findUnique({ where: { id: paymentAfterClaim.balanceTransactionId } })
       : await tx.balanceTransaction.findUnique({ where: { idempotencyKey } });
+    if (paymentAfterClaim.creditedAt || balanceTransaction) {
+      await ensurePaymentNpdEntryTx(tx, paymentAfterClaim, balanceTransaction?.id ?? null);
+    }
     return { payment: paymentAfterClaim, balanceTransaction, credited: false };
   }
 
@@ -136,6 +143,7 @@ export async function creditPaymentToBalanceTx(
       balanceTransactionId: balanceTransaction.id
     }
   });
+  await ensurePaymentNpdEntryTx(tx, updated, balanceTransaction.id);
 
   return { payment: updated, balanceTransaction, credited: true };
 }

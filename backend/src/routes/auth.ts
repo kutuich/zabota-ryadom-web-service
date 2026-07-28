@@ -135,7 +135,11 @@ authRouter.get("/oauth/vk/callback", async (req, res) => {
     return res.redirect(302, safeOAuthRedirectPath(env.vkIdSuccessRedirectPath, "/app/oauth/complete"));
   } catch (error) {
     clearOAuthCookie(res, VK_OAUTH_TRANSACTION_COOKIE);
-    const reason = error instanceof HttpError && error.code === "vk_identity_already_linked" ? "already-linked" : "failed";
+    const reason = error instanceof HttpError && error.code === "vk_identity_already_linked"
+      ? "already-linked"
+      : error instanceof HttpError && error.code === "oauth_pending_restore_not_allowed"
+        ? "archived-not-restorable"
+        : "failed";
     return res.redirect(302, `${failRedirect}&oauthReason=${reason}`);
   }
 });
@@ -147,7 +151,7 @@ authRouter.post(
     if (!session) throw new HttpError(401, "Сессия VK ID истекла. Войдите ещё раз", "vk_session_invalid");
     clearOAuthCookie(res, VK_OAUTH_SESSION_COOKIE);
     const user = await prisma.user.findUnique({ where: { id: session.userId } });
-    if (!user || !isUserRole(user.role) || user.role === "admin" || user.role === "superadmin") {
+    if (!user || user.status !== "active" || !isUserRole(user.role) || user.role === "admin" || user.role === "superadmin") {
       throw new HttpError(401, "Профиль VK ID не найден", "vk_session_invalid");
     }
     const profileComplete = await isUserProfileComplete(user.id);
