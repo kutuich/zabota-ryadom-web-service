@@ -2,7 +2,12 @@ import { Router } from "express";
 import { z } from "zod";
 import { authenticate, requireAdmin } from "../middleware/auth";
 import { prisma } from "../db/prisma";
-import { FIXED_SERVICE_FEE_SETTING_KEYS, grantAdminBonus } from "../services/balanceService";
+import {
+  adjustUserBalanceByAdmin,
+  FIXED_SERVICE_FEE_SETTING_KEYS,
+  grantAdminBonus,
+  MAX_ADMIN_BALANCE_ADJUSTMENT
+} from "../services/balanceService";
 import {
   getTrialBalanceAdminView,
   grantTrialBalanceToEligibleUsers,
@@ -336,7 +341,7 @@ adminRouter.post(
     const input = z.object({
       amount: z.number().int().positive(),
       reason: z.string().min(3).max(500),
-      comment: z.string().max(1000).optional(),
+      comment: z.string().trim().min(10).max(1000),
       bonusExpiresAt: z.string().optional()
     }).parse(req.body);
 
@@ -350,6 +355,26 @@ adminRouter.post(
         input.bonusExpiresAt ? new Date(input.bonusExpiresAt) : null
       )
     );
+  })
+);
+
+adminRouter.post(
+  "/users/:id/balance-adjustment",
+  asyncHandler(async (req, res) => {
+    const input = z.object({
+      wallet: z.enum(["main", "bonus"]),
+      direction: z.enum(["credit", "debit"]),
+      amount: z.number().int().positive().max(MAX_ADMIN_BALANCE_ADJUSTMENT),
+      reason: z.enum(["payment_issue", "goodwill_bonus", "manual_correction", "refund", "penalty_reversal", "other"]),
+      comment: z.string().trim().min(10).max(1000),
+      clientRequestId: z.string().trim().min(8).max(120).optional()
+    }).parse(req.body);
+    res.json(await adjustUserBalanceByAdmin({
+      actorUserId: req.user!.id,
+      actorRole: req.user!.realRole as "admin" | "superadmin",
+      targetUserId: req.params.id,
+      ...input
+    }));
   })
 );
 

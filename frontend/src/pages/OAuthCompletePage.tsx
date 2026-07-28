@@ -146,7 +146,7 @@ export function OAuthCompletePage() {
           {documents.map(([type, label, slug]) => (
             <label className="checkbox-row" key={type}>
               <input type="checkbox" checked={Boolean(accepted[type])} onChange={(event) => setAccepted({ ...accepted, [type]: event.target.checked })} />
-              <span>{label} <Link to={`/legal/${slug}`} target="_blank">открыть</Link></span>
+              <span>{label} <Link className="consent-document-link" to={`/legal/${slug}`} target="_blank">открыть</Link></span>
             </label>
           ))}
           {role === "client" ? (
@@ -157,7 +157,7 @@ export function OAuthCompletePage() {
               <label className="checkbox-row"><input type="checkbox" checked={helperNoProcedures} onChange={(event) => setHelperNoProcedures(event.target.checked)} /><span>Подтверждаю, что оказываю только бытовую помощь без медицинских процедур.</span></label>
             </>
           )}
-          <label className="checkbox-row"><input type="checkbox" checked={marketingAccepted} onChange={(event) => setMarketingAccepted(event.target.checked)} /><span>Хочу получать информационные сообщения (необязательно).</span></label>
+          <label className="checkbox-row"><input type="checkbox" checked={marketingAccepted} onChange={(event) => setMarketingAccepted(event.target.checked)} /><span>Хочу получать информационные сообщения <strong className="consent-optional-label">(необязательно)</strong>.</span></label>
         </fieldset>
 
         {error && <p className="error-text">{error}</p>}

@@ -1,4 +1,4 @@
-import { RefreshCcw, Search } from "lucide-react";
+import { RefreshCcw, Search, Undo2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { EmptyState } from "../components/EmptyState";
@@ -23,6 +23,9 @@ export function AdminPaymentsPage() {
   const [error, setError] = useState("");
   const [detailsError, setDetailsError] = useState("");
   const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
+  const [refundPayment, setRefundPayment] = useState<AdminPaymentDetails | null>(null);
+  const [refundReason, setRefundReason] = useState("");
+  const [isRefunding, setIsRefunding] = useState(false);
 
   async function loadPayments(nextFilters = filters) {
     setIsLoading(true);
@@ -66,6 +69,26 @@ export function AdminPaymentsPage() {
   function resetFilters() {
     setFilters(emptyFilters);
     loadPayments(emptyFilters);
+  }
+
+  async function submitRefund() {
+    if (!refundPayment || refundReason.trim().length < 3) return;
+    setIsRefunding(true);
+    setDetailsError("");
+    try {
+      await api.refundAdminPayment(refundPayment.payment.id, {
+        amount: refundPayment.payment.amount,
+        reason: refundReason.trim()
+      });
+      setRefundPayment(null);
+      setRefundReason("");
+      await Promise.all([openPayment(refundPayment.payment.id), loadPayments()]);
+    } catch (error) {
+      setDetailsError(error instanceof Error ? error.message : "Не удалось выполнить возврат.");
+      setRefundPayment(null);
+    } finally {
+      setIsRefunding(false);
+    }
   }
 
   useEffect(() => {
@@ -188,9 +211,52 @@ export function AdminPaymentsPage() {
               details={selectedPayment}
               isRefreshing={isRefreshingStatus}
               onRefresh={() => void refreshPaymentStatus(selectedPayment.payment.id)}
+              onRefund={() => {
+                setRefundReason("");
+                setRefundPayment(selectedPayment);
+              }}
             />
           )}
         </section>
+      )}
+      {refundPayment && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="refund-payment-title">
+          <section className="modal-panel">
+            <div className="card__head">
+              <div>
+                <h2 id="refund-payment-title">Вернуть платёж</h2>
+                <p className="privacy-note">Вы возвращаете {refundPayment.payment.amount} ₽.</p>
+              </div>
+              <button className="secondary-button" type="button" onClick={() => setRefundPayment(null)} disabled={isRefunding}>
+                Закрыть
+              </button>
+            </div>
+            <label>
+              Причина возврата
+              <textarea
+                value={refundReason}
+                onChange={(event) => setRefundReason(event.target.value)}
+                maxLength={500}
+                rows={4}
+                required
+              />
+            </label>
+            <div className="trust-row">
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => void submitRefund()}
+                disabled={isRefunding || refundReason.trim().length < 3}
+              >
+                <Undo2 size={18} />
+                {isRefunding ? "Выполняем возврат" : "Подтвердить"}
+              </button>
+              <button className="secondary-button" type="button" onClick={() => setRefundPayment(null)} disabled={isRefunding}>
+                Отмена
+              </button>
+            </div>
+          </section>
+        </div>
       )}
     </div>
   );
@@ -199,11 +265,13 @@ export function AdminPaymentsPage() {
 function PaymentDetails({
   details,
   isRefreshing,
-  onRefresh
+  onRefresh,
+  onRefund
 }: {
   details: AdminPaymentDetails;
   isRefreshing: boolean;
   onRefresh: () => void;
+  onRefund: () => void;
 }) {
   const payment = details.payment;
   const user = details.user ?? payment.user;
@@ -236,6 +304,27 @@ function PaymentDetails({
           <RefreshCcw size={18} />
           {isRefreshing ? "Проверяем" : "Обновить статус"}
         </button>
+      )}
+      {payment.status === "succeeded" && payment.creditedAt && !(details.refunds?.length) && (
+        <button className="secondary-button" type="button" onClick={onRefund}>
+          <Undo2 size={18} />
+          Вернуть платёж
+        </button>
+      )}
+      {!!details.refunds?.length && (
+        <section className="plain-section">
+          <h3>Возврат</h3>
+          {details.refunds.map((refund) => (
+            <div className="detail-grid" key={refund.id}>
+              <span>Сумма</span><strong>{refund.amount} {refund.currency}</strong>
+              <span>Статус</span><strong>{refundStatusLabel(refund.status)}</strong>
+              <span>Причина</span><strong>{refund.reason}</strong>
+              <span>Выполнил</span><strong>{refund.createdByAdmin?.displayName ?? refund.createdByAdminId}</strong>
+              <span>Дата</span><strong>{formatDateTimeRu(refund.createdAt)}</strong>
+              <span>ID возврата провайдера</span><strong>{refund.providerRefundId ?? "не указан"}</strong>
+            </div>
+          ))}
+        </section>
       )}
       <details className="details-box">
         <summary>Технические данные платежа</summary>
@@ -310,4 +399,15 @@ function paymentPurposeLabel(purpose: string) {
 function balanceKindLabel(kind: string) {
   if (kind === "bonus") return "Бонусный баланс";
   return "Основной баланс";
+}
+
+function refundStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    processing: "В обработке",
+    provider_succeeded: "Подтверждён провайдером",
+    succeeded: "Возвращён",
+    failed: "Не выполнен",
+    manual_review: "Требует проверки"
+  };
+  return labels[status] ?? status;
 }

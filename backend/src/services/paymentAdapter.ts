@@ -57,6 +57,21 @@ export type GetPaymentStateResult = {
   rawResponseJson: string;
 };
 
+export type RefundPaymentInput = {
+  providerPaymentId: string;
+  orderId: string;
+  amount: number;
+  externalRequestId: string;
+};
+
+export type RefundPaymentResult = {
+  provider: PaymentProvider;
+  providerRefundId: string;
+  providerStatus: string;
+  rawRequestJson: string;
+  rawResponseJson: string;
+};
+
 export class PaymentInitError extends Error {
   provider: PaymentProvider;
   providerPaymentId: string | null;
@@ -97,10 +112,31 @@ export class PaymentStateError extends Error {
   }
 }
 
+export class PaymentRefundError extends Error {
+  rawRequestJson: string | null;
+  rawResponseJson: string | null;
+  requiresManualReview: boolean;
+  reasonCode: string;
+
+  constructor(message: string, options: {
+    rawRequestJson?: string | null;
+    rawResponseJson?: string | null;
+    requiresManualReview?: boolean;
+    reasonCode: string;
+  }) {
+    super(message);
+    this.rawRequestJson = options.rawRequestJson ?? null;
+    this.rawResponseJson = options.rawResponseJson ?? null;
+    this.requiresManualReview = options.requiresManualReview ?? false;
+    this.reasonCode = options.reasonCode;
+  }
+}
+
 export interface PaymentAdapter {
   createTopUpPayment(input: CreateTopUpPaymentInput): Promise<CreateTopUpPaymentResult>;
   createTopUp(amount: number, userId: string): Promise<PaymentResult>;
   getState?(payment: GetPaymentStateInput): Promise<GetPaymentStateResult>;
+  refundPayment(input: RefundPaymentInput): Promise<RefundPaymentResult>;
 }
 
 export const mockPaymentAdapter: PaymentAdapter = {
@@ -129,6 +165,22 @@ export const mockPaymentAdapter: PaymentAdapter = {
       providerPaymentId: `mock-${userId}-${Date.now()}`,
       status: "succeeded",
       amount
+    };
+  },
+  async refundPayment(input) {
+    const response = {
+      Success: true,
+      Status: "REFUNDED",
+      PaymentId: input.providerPaymentId,
+      RefundId: `MOCK-REFUND-${input.externalRequestId}`,
+      Amount: input.amount * 100
+    };
+    return {
+      provider: "mock",
+      providerRefundId: response.RefundId,
+      providerStatus: response.Status,
+      rawRequestJson: JSON.stringify(input),
+      rawResponseJson: JSON.stringify(response)
     };
   }
 };
@@ -281,6 +333,82 @@ export const tbankPaymentAdapter: PaymentAdapter = {
       amountKopecks: responseAmount,
       providerStatus: responseStatus,
       success: true,
+      rawResponseJson
+    };
+  },
+  async refundPayment(input) {
+    if (!env.tbankTerminalKey || !env.tbankPassword || !env.tbankApiUrl) {
+      throw new PaymentRefundError("Платёжный провайдер не настроен", {
+        reasonCode: "provider_not_configured"
+      });
+    }
+
+    const cancelRequest = {
+      TerminalKey: env.tbankTerminalKey,
+      PaymentId: input.providerPaymentId,
+      Amount: input.amount * 100,
+      ExternalRequestId: input.externalRequestId
+      // TODO: add Receipt only after fiscalization is separately enabled and verified.
+    };
+    const requestBody = JSON.stringify({
+      ...cancelRequest,
+      Token: buildTbankToken(cancelRequest, env.tbankPassword)
+    });
+    let response: Response;
+    try {
+      response = await fetch(`${env.tbankApiUrl.replace(/\/$/, "")}/Cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: requestBody,
+        signal: AbortSignal.timeout(15_000)
+      });
+    } catch {
+      throw new PaymentRefundError("Платёжный провайдер временно недоступен", {
+        rawRequestJson: requestBody,
+        reasonCode: "provider_unavailable"
+      });
+    }
+
+    const responsePayload = await response.json().catch(() => ({})) as Record<string, unknown>;
+    const rawResponseJson = JSON.stringify(responsePayload);
+    if (!response.ok || !isProviderSuccess(responsePayload.Success)) {
+      throw new PaymentRefundError("Платёжный провайдер отклонил возврат", {
+        rawRequestJson: requestBody,
+        rawResponseJson,
+        reasonCode: "provider_rejected"
+      });
+    }
+
+    const responsePaymentId = valueAsString(responsePayload.PaymentId ?? responsePayload.PaymentID);
+    const responseTerminalKey = valueAsString(responsePayload.TerminalKey);
+    const providerStatus = valueAsString(responsePayload.Status).toUpperCase();
+    const providerRefundId = valueAsString(responsePayload.RefundId ?? responsePayload.RefundID ?? responsePayload.PaymentId);
+    const expectedAmount = input.amount * 100;
+    const amount = responsePayload.Amount === undefined || responsePayload.Amount === null ? expectedAmount : Number(responsePayload.Amount);
+    const originalAmount = responsePayload.OriginalAmount === undefined || responsePayload.OriginalAmount === null
+      ? expectedAmount
+      : Number(responsePayload.OriginalAmount);
+    const newAmount = responsePayload.NewAmount === undefined || responsePayload.NewAmount === null
+      ? 0
+      : Number(responsePayload.NewAmount);
+    const validStatus = providerStatus === "REFUNDED";
+    const identifiersMatch = responsePaymentId === input.providerPaymentId
+      && (!responseTerminalKey || responseTerminalKey === env.tbankTerminalKey);
+    const amountsMatch = amount === expectedAmount && originalAmount === expectedAmount && newAmount === 0;
+    if (!identifiersMatch || !amountsMatch || !providerRefundId || !validStatus) {
+      throw new PaymentRefundError("Платёжный провайдер вернул несовпадающие данные возврата", {
+        rawRequestJson: requestBody,
+        rawResponseJson,
+        requiresManualReview: true,
+        reasonCode: !validStatus ? "unexpected_refund_status" : !identifiersMatch ? "refund_identifier_mismatch" : "refund_data_mismatch"
+      });
+    }
+
+    return {
+      provider: "tbank",
+      providerRefundId,
+      providerStatus,
+      rawRequestJson: requestBody,
       rawResponseJson
     };
   },

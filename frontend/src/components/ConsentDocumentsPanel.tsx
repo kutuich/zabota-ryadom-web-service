@@ -56,7 +56,7 @@ export function ConsentDocumentsPanel({
   }
 
   return (
-    <section className="plain-section span-2">
+    <section className="plain-section span-full profile-legal-section">
       <div className="card__head">
         <div>
           <p className="eyebrow">Юридический блок</p>

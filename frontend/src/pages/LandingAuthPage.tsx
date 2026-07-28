@@ -281,7 +281,7 @@ export function LandingAuthPage() {
                   />
                   <span>
                     {item.label}{" "}
-                    <Link to={`/legal/${item.slug}`} target="_blank">открыть</Link>
+                    <Link className="consent-document-link" to={`/legal/${item.slug}`} target="_blank">открыть</Link>
                   </span>
                 </label>
               ))}
@@ -322,7 +322,8 @@ export function LandingAuthPage() {
                 />
                 <span>
                   Хочу получать информационные сообщения.{" "}
-                  <Link to="/legal/marketing-notifications-consent" target="_blank">открыть</Link>
+                  <Link className="consent-document-link" to="/legal/marketing-notifications-consent" target="_blank">открыть</Link>{" "}
+                  <strong className="consent-optional-label">(необязательно)</strong>
                 </span>
               </label>
             </div>

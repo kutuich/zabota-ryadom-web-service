@@ -508,6 +508,9 @@ export type BalanceSummary = {
     amount: number;
     balanceKind: string;
     reason: string;
+    comment?: string | null;
+    createdByAdminId?: string | null;
+    createdByAdmin?: Pick<User, "id" | "displayName"> | null;
     createdAt: string;
   }>;
 };
@@ -606,6 +609,7 @@ export type BalanceTransaction = {
   balanceKind: string;
   reason: string;
   comment?: string | null;
+  metadataJson?: string | null;
   balanceBefore?: number | null;
   balanceAfter?: number | null;
   bonusExpiresAt?: string | null;
@@ -614,13 +618,53 @@ export type BalanceTransaction = {
   createdAt: string;
 };
 
+export type AdminBalanceTransaction = BalanceTransaction & {
+  user?: Pick<User, "id" | "displayName" | "role"> | null;
+  createdByAdmin?: Pick<User, "id" | "displayName"> | null;
+};
+
+export type AdminBalanceAdjustmentInput = {
+  wallet: "main" | "bonus";
+  direction: "credit" | "debit";
+  amount: number;
+  reason: "payment_issue" | "goodwill_bonus" | "manual_correction" | "refund" | "penalty_reversal" | "other";
+  comment: string;
+  clientRequestId: string;
+};
+
+export type AdminBalanceAdjustmentResult = {
+  user: Pick<User, "id" | "displayName" | "role" | "status" | "balance" | "bonusBalance" | "cityId">;
+  transaction: AdminBalanceTransaction;
+  idempotent: boolean;
+};
+
 export type AdminPaymentDetails = {
   payment: PaymentTransaction & { user?: AdminPaymentUser | null };
   user?: AdminPaymentUser | null;
   balanceTransaction?: BalanceTransaction | null;
+  refunds?: RefundTransaction[];
   rawInitResponseJson?: string | null;
   rawStateResponseJson?: string | null;
   rawWebhookJson?: string | null;
+};
+
+export type RefundTransaction = {
+  id: string;
+  paymentTransactionId: string;
+  provider: string;
+  providerRefundId?: string | null;
+  externalRequestId: string;
+  amount: number;
+  currency: string;
+  status: string;
+  reason: string;
+  balanceTransactionId?: string | null;
+  createdByAdminId: string;
+  createdByAdmin?: Pick<User, "id" | "displayName"> | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+  failedAt?: string | null;
 };
 
 export type Bootstrap = {

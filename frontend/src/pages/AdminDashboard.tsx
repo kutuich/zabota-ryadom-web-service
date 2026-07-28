@@ -11,7 +11,7 @@ import { EmptyState } from "../components/EmptyState";
 import { PriceSummary } from "../components/PriceSummary";
 import { AgreedTermsSummary } from "../components/AgreedTermsSummary";
 import { ResponsiveDataList } from "../components/ResponsiveDataList";
-import type { Chat, City, ClientRequest, KnowledgeArticle, LegalDocument, ServiceCategory, TrialBalanceSettings, User, UserArchiveSafety, UserConsent, UserConsentStatus } from "../types";
+import type { AdminBalanceAdjustmentInput, AdminBalanceTransaction, Chat, City, ClientRequest, KnowledgeArticle, LegalDocument, ServiceCategory, TrialBalanceSettings, User, UserArchiveSafety, UserConsent, UserConsentStatus } from "../types";
 import { labelChildcare, labelCriminalRecord, labelSelfEmployed, labelStatus, labelTrust, requestDisplayTitle } from "../utils/labels";
 import { adminNavigation, chatPathForRole, sectionTitleForPath } from "../routes/navigation";
 import { downloadXlsx, downloadZip } from "../utils/xlsx";
@@ -49,7 +49,7 @@ export function AdminDashboard() {
   const [requests, setRequests] = useState<ClientRequest[]>([]);
   const [chats, setChats] = useState<Chat[]>([]);
   const [complaints, setComplaints] = useState<any[]>([]);
-  const [transactions, setTransactions] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<AdminBalanceTransaction[]>([]);
   const [settings, setSettings] = useState<any[]>([]);
   const [trialBalanceSettings, setTrialBalanceSettings] = useState<TrialBalanceSettings>({
     enabled: false,
@@ -78,6 +78,9 @@ export function AdminDashboard() {
   const [editingArticle, setEditingArticle] = useState<KnowledgeArticle | null>(null);
   const [orderingArticleId, setOrderingArticleId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  const [balanceAdjustmentForm, setBalanceAdjustmentForm] = useState<AdminBalanceAdjustmentInput>(() => createBalanceAdjustmentDraft());
+  const [balanceAdjustmentError, setBalanceAdjustmentError] = useState("");
+  const [isAdjustingBalance, setIsAdjustingBalance] = useState(false);
   const [bonusForm, setBonusForm] = useState({
     userId: "",
     amount: 150,
@@ -227,6 +230,8 @@ export function AdminDashboard() {
 
   async function openUserProfile(user: User) {
     setSelectedUser(user);
+    setBalanceAdjustmentForm(createBalanceAdjustmentDraft());
+    setBalanceAdjustmentError("");
     setSelectedUserLegalStatuses([]);
     setSelectedUserArchiveSafety(null);
     if (isIncompleteVkRegistration(user)) return;
@@ -239,6 +244,41 @@ export function AdminDashboard() {
       setSelectedUserArchiveSafety(safety);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Не удалось загрузить юридические согласия пользователя.");
+    }
+  }
+
+  async function submitBalanceAdjustment() {
+    if (!selectedUser) return;
+    if (!Number.isSafeInteger(balanceAdjustmentForm.amount) || balanceAdjustmentForm.amount <= 0 || balanceAdjustmentForm.amount > 100_000) {
+      setBalanceAdjustmentError("Укажите целую сумму от 1 до 100000 ₽.");
+      return;
+    }
+    if (balanceAdjustmentForm.comment.trim().length < 10) {
+      setBalanceAdjustmentError("Укажите комментарий не короче 10 символов.");
+      return;
+    }
+    const action = balanceAdjustmentForm.direction === "credit"
+      ? `начислить ${balanceAdjustmentForm.amount} ₽ на ${balanceAdjustmentForm.wallet === "main" ? "основной баланс" : "бонусный баланс"}`
+      : `списать ${balanceAdjustmentForm.amount} ₽ с ${balanceAdjustmentForm.wallet === "main" ? "основного баланса" : "бонусного баланса"}`;
+    if (!window.confirm(
+      `Вы действительно хотите ${action} пользователя ${selectedUser.displayName}? Операция будет записана в историю и аудит.`
+    )) return;
+
+    setIsAdjustingBalance(true);
+    setBalanceAdjustmentError("");
+    try {
+      const result = await api.adminAdjustBalance(selectedUser.id, {
+        ...balanceAdjustmentForm,
+        comment: balanceAdjustmentForm.comment.trim()
+      });
+      setSelectedUser((current) => current ? { ...current, ...result.user } : current);
+      setBalanceAdjustmentForm(createBalanceAdjustmentDraft());
+      setNotice("Корректировка баланса выполнена.");
+      await load();
+    } catch (error) {
+      setBalanceAdjustmentError(error instanceof Error ? error.message : "Не удалось провести корректировку баланса.");
+    } finally {
+      setIsAdjustingBalance(false);
     }
   }
 
@@ -278,6 +318,10 @@ export function AdminDashboard() {
   }
 
   async function grantBonus() {
+    if (bonusForm.comment.trim().length < 10) {
+      setNotice("Укажите комментарий не короче 10 символов.");
+      return;
+    }
     await api.adminGrantBonus(
       bonusForm.userId,
       Number(bonusForm.amount),
@@ -1007,7 +1051,7 @@ export function AdminDashboard() {
               onChange={(event) => setBonusForm({ ...bonusForm, comment: event.target.value })}
             />
           </label>
-          <button className="primary-button span-2" type="button" onClick={grantBonus}>
+          <button className="primary-button span-2" type="button" onClick={grantBonus} disabled={bonusForm.comment.trim().length < 10}>
             <Coins size={18} />
             Начислить бонус
           </button>
@@ -1225,6 +1269,15 @@ export function AdminDashboard() {
       {selectedUser && (
         <Modal title={`Профиль пользователя: ${selectedUser.displayName}`} onClose={() => setSelectedUser(null)}>
           <UserProfile user={selectedUser} legalStatuses={selectedUserLegalStatuses} archiveSafety={selectedUserArchiveSafety} />
+          <BalanceAdjustmentPanel
+            user={selectedUser}
+            transactions={transactions.filter((transaction) => transaction.userId === selectedUser.id).slice(0, 20)}
+            form={balanceAdjustmentForm}
+            error={balanceAdjustmentError}
+            isSubmitting={isAdjustingBalance}
+            onChange={setBalanceAdjustmentForm}
+            onSubmit={() => void submitBalanceAdjustment()}
+          />
           <div className="trust-row">
             {selectedUser.status === "active" && ["client", "performer"].includes(selectedUser.role) && (
               <button className="primary-button" type="button" onClick={() => assignManager(selectedUser)}>
@@ -1608,6 +1661,147 @@ function Modal({ title, children, onClose }: { title: string; children: ReactNod
   );
 }
 
+function BalanceAdjustmentPanel({
+  user,
+  transactions,
+  form,
+  error,
+  isSubmitting,
+  onChange,
+  onSubmit
+}: {
+  user: User;
+  transactions: AdminBalanceTransaction[];
+  form: AdminBalanceAdjustmentInput;
+  error: string;
+  isSubmitting: boolean;
+  onChange: (form: AdminBalanceAdjustmentInput) => void;
+  onSubmit: () => void;
+}) {
+  const canAdjust = user.status !== "archived" && ["client", "performer"].includes(user.role);
+  const invalid = !Number.isSafeInteger(form.amount) || form.amount <= 0 || form.amount > 100_000 || form.comment.trim().length < 10;
+  return (
+    <section className="plain-section admin-balance-adjustment">
+      <div className="card__head">
+        <div>
+          <p className="eyebrow">Финансовая история</p>
+          <h3>Корректировка баланса</h3>
+        </div>
+      </div>
+      <div className="panel-grid panel-grid--compact">
+        <div className="metric"><span>Основной баланс</span><strong>{user.balance} ₽</strong></div>
+        <div className="metric"><span>Бонусный баланс</span><strong>{user.bonusBalance} ₽</strong></div>
+        <div className="metric"><span>Доступно для заявок</span><strong>{user.balance + user.bonusBalance} ₽</strong></div>
+      </div>
+      {canAdjust ? (
+        <form className="form-grid" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
+          <label>
+            Кошелёк
+            <select value={form.wallet} onChange={(event) => onChange({ ...form, wallet: event.target.value as AdminBalanceAdjustmentInput["wallet"] })}>
+              <option value="main">Основной баланс</option>
+              <option value="bonus">Бонусный баланс</option>
+            </select>
+          </label>
+          <label>
+            Действие
+            <select value={form.direction} onChange={(event) => onChange({ ...form, direction: event.target.value as AdminBalanceAdjustmentInput["direction"] })}>
+              <option value="credit">Начислить</option>
+              <option value="debit">Списать</option>
+            </select>
+          </label>
+          <label>
+            Сумма, ₽
+            <input type="number" min={1} max={100_000} step={1} value={form.amount} onChange={(event) => onChange({ ...form, amount: Number(event.target.value) })} />
+          </label>
+          <label>
+            Причина
+            <select value={form.reason} onChange={(event) => onChange({ ...form, reason: event.target.value as AdminBalanceAdjustmentInput["reason"] })}>
+              {Object.entries(balanceAdjustmentReasonLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          <label className="span-2">
+            Комментарий администратора
+            <textarea minLength={10} maxLength={1000} value={form.comment} onChange={(event) => onChange({ ...form, comment: event.target.value })} />
+            <small>Минимум 10 символов. Комментарий сохраняется в истории и журнале аудита.</small>
+          </label>
+          {error && <p className="error-text span-2">{error}</p>}
+          <button className="primary-button span-2" type="submit" disabled={isSubmitting || invalid}>
+            {isSubmitting ? "Проводим корректировку" : "Провести корректировку"}
+          </button>
+        </form>
+      ) : (
+        <p className="notice">
+          {user.status === "archived"
+            ? "Архивному пользователю нельзя корректировать баланс."
+            : "Корректировка доступна только для профилей Заказчика и Помощника."}
+        </p>
+      )}
+      <div className="admin-balance-history">
+        <h3>Последние операции баланса</h3>
+        {transactions.map((transaction) => {
+          const metadata = parseAdjustmentMetadata(transaction.metadataJson);
+          return (
+            <div className="transaction-row" key={transaction.id}>
+              <span>{formatDateTimeRu(transaction.createdAt)}</span>
+              <strong>{balanceTransactionTypeLabel(transaction.type)}</strong>
+              <span>{transaction.amount > 0 ? "+" : ""}{transaction.amount} ₽</span>
+              <span>Основной: {metadata?.balanceBefore ?? (transaction.balanceKind === "real" ? transaction.balanceBefore : "—")} → {metadata?.balanceAfter ?? (transaction.balanceKind === "real" ? transaction.balanceAfter : "—")} ₽</span>
+              <span>Бонусный: {metadata?.bonusBalanceBefore ?? (transaction.balanceKind === "bonus" ? transaction.balanceBefore : "—")} → {metadata?.bonusBalanceAfter ?? (transaction.balanceKind === "bonus" ? transaction.balanceAfter : "—")} ₽</span>
+              <small>{balanceAdjustmentReasonLabels[transaction.reason] ?? transaction.reason}{transaction.comment ? `: ${transaction.comment}` : ""}</small>
+              <small>Выполнил: {transaction.createdByAdmin?.displayName ?? "система"}</small>
+            </div>
+          );
+        })}
+        {transactions.length === 0 && <p className="empty-text">Операций пока нет.</p>}
+      </div>
+    </section>
+  );
+}
+
+const balanceAdjustmentReasonLabels: Record<string, string> = {
+  payment_issue: "Ошибка платежа",
+  goodwill_bonus: "Компенсация / бонус",
+  manual_correction: "Ручная корректировка",
+  refund: "Возврат",
+  penalty_reversal: "Отмена ошибочного списания",
+  other: "Другое"
+};
+
+function createBalanceAdjustmentDraft(): AdminBalanceAdjustmentInput {
+  return {
+    wallet: "main",
+    direction: "credit",
+    amount: 150,
+    reason: "manual_correction",
+    comment: "",
+    clientRequestId: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  };
+}
+
+function parseAdjustmentMetadata(value?: string | null) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as {
+      balanceBefore?: number;
+      balanceAfter?: number;
+      bonusBalanceBefore?: number;
+      bonusBalanceAfter?: number;
+    };
+  } catch {
+    return null;
+  }
+}
+
+function balanceTransactionTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    admin_balance_credit: "Начисление основного баланса администратором",
+    admin_balance_debit: "Списание основного баланса администратором",
+    admin_bonus_credit: "Начисление бонусного баланса администратором",
+    admin_bonus_debit: "Списание бонусного баланса администратором"
+  };
+  return labels[type] ?? labelStatus(type);
+}
+
 function UserProfile({ user, legalStatuses, archiveSafety }: { user: User; legalStatuses: UserConsentStatus[]; archiveSafety: UserArchiveSafety | null }) {
   return (
     <div className="list">
@@ -1622,8 +1816,8 @@ function UserProfile({ user, legalStatuses, archiveSafety }: { user: User; legal
         <span>Предыдущая роль</span><strong>{user.roleBeforeManager ? userRoleLabel(user.roleBeforeManager) : "не указана"}</strong>
         <span>Назначен менеджером</span><strong>{user.managerAssignedAt ? formatDateTimeRu(user.managerAssignedAt) : "нет"}</strong>
         <span>Кем назначен</span><strong>{user.managerAssignedByAdminId ?? "не указано"}</strong>
-        <span>Телефон</span><strong>{user.phone ?? "не указан"}</strong>
-        <span>Email</span><strong>{user.email ?? "не указан"}</strong>
+        <span>Телефон</span><strong data-contact-field="phone">{user.phone?.trim() || "не указан"}</strong>
+        <span>Email</span><strong data-contact-field="email">{user.email?.trim() || "не указан"}</strong>
         <span>Город</span><strong>{user.city?.name ?? "не выбран"}</strong>
         <span>Статус</span><strong>{labelStatus(user.status)}</strong>
         <span>Основной баланс</span><strong>{user.balance} ₽</strong>

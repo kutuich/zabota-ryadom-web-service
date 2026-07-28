@@ -1,4 +1,7 @@
 import type {
+  AdminBalanceAdjustmentInput,
+  AdminBalanceAdjustmentResult,
+  AdminBalanceTransaction,
   BalanceSummary,
   AdminPaymentDetails,
   AdminPaymentFilters,
@@ -236,10 +239,20 @@ export const api = {
   adminUpdateCity: (cityId: string, body: Partial<City>) =>
     apiFetch<City>(`/admin/cities/${cityId}`, { method: "PATCH", body: JSON.stringify(body) }),
   adminCategories: () => apiFetch<ServiceCategory[]>("/admin/categories"),
-  adminTransactions: () => apiFetch<unknown[]>("/admin/balance-transactions"),
+  adminTransactions: () => apiFetch<AdminBalanceTransaction[]>("/admin/balance-transactions"),
+  adminAdjustBalance: (userId: string, body: AdminBalanceAdjustmentInput) =>
+    apiFetch<AdminBalanceAdjustmentResult>(`/admin/users/${userId}/balance-adjustment`, {
+      method: "POST",
+      body: JSON.stringify(body)
+    }),
   getAdminPayments: (filters: AdminPaymentFilters = {}) =>
     apiFetch<AdminPaymentListItem[]>(`/admin/payments${queryString(filters)}`),
   getAdminPayment: (id: string) => apiFetch<AdminPaymentDetails>(`/admin/payments/${id}`),
+  refundAdminPayment: (id: string, body: { amount: number; reason: string }) =>
+    apiFetch<{ refund: import("../types").RefundTransaction; idempotent: boolean }>(`/admin/payments/${id}/refund`, {
+      method: "POST",
+      body: JSON.stringify(body)
+    }),
   adminSettings: () => apiFetch<unknown[]>("/admin/settings"),
   getTrialBalanceSettings: () => apiFetch<TrialBalanceSettings>("/admin/trial-balance/settings"),
   updateTrialBalanceSettings: (body: Pick<TrialBalanceSettings, "enabled" | "amount" | "autoGrantNewUsers">) =>
@@ -276,7 +289,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ completedRequestDays })
     }),
-  adminGrantBonus: (userId: string, amount: number, reason: string, comment?: string, bonusExpiresAt?: string) =>
+  adminGrantBonus: (userId: string, amount: number, reason: string, comment: string, bonusExpiresAt?: string) =>
     apiFetch<BalanceSummary>(`/admin/users/${userId}/bonus`, {
       method: "POST",
       body: JSON.stringify({ amount, reason, comment, bonusExpiresAt })

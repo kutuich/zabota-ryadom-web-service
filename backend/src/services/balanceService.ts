@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 import { env } from "../config/env";
 import { prisma } from "../db/prisma";
 import { HttpError } from "../utils/http";
@@ -8,6 +9,7 @@ import { mockPaymentAdapter } from "./paymentAdapter";
 type Tx = Prisma.TransactionClient;
 
 export const FIXED_SERVICE_FEE_AMOUNT = 50;
+export const MAX_ADMIN_BALANCE_ADJUSTMENT = 100_000;
 export const FIXED_SERVICE_FEE_SETTING_KEYS = new Set([
   "clientServiceFeeAmount",
   "performerServiceFeeAmount",
@@ -46,6 +48,9 @@ export async function getBalanceSummary(userId: string) {
           amount: true,
           balanceKind: true,
           reason: true,
+          comment: true,
+          createdByAdminId: true,
+          createdByAdmin: { select: { id: true, displayName: true } },
           createdAt: true
         },
         orderBy: { createdAt: "desc" },
@@ -150,7 +155,7 @@ export async function grantAdminBonus(
   userId: string,
   amount: number,
   reason: string,
-  comment?: string,
+  comment: string,
   bonusExpiresAt?: Date | null
 ) {
   if (amount <= 0) {
@@ -158,6 +163,9 @@ export async function grantAdminBonus(
   }
   if (!reason.trim()) {
     throw new HttpError(400, "Укажите причину начисления", "reason_required");
+  }
+  if (comment.trim().length < 10) {
+    throw new HttpError(400, "Укажите комментарий не короче 10 символов", "comment_required");
   }
 
   await prisma.$transaction(async (tx) => {
@@ -183,7 +191,7 @@ export async function grantAdminBonus(
         amount,
         balanceKind: "bonus",
         reason,
-        comment,
+        comment: comment.trim(),
         balanceBefore,
         balanceAfter,
         bonusExpiresAt: bonusExpiresAt ?? undefined,
@@ -193,7 +201,7 @@ export async function grantAdminBonus(
     await writeAudit(adminId, "balance.admin_bonus", "user", userId, {
       amount,
       reason,
-      comment,
+      comment: comment.trim(),
       balanceBefore,
       balanceAfter,
       bonusExpiresAt
@@ -201,6 +209,138 @@ export async function grantAdminBonus(
   });
 
   return getBalanceSummary(userId);
+}
+
+export type AdminBalanceAdjustmentInput = {
+  actorUserId: string;
+  actorRole: "admin" | "superadmin";
+  targetUserId: string;
+  wallet: "main" | "bonus";
+  direction: "credit" | "debit";
+  amount: number;
+  reason: "payment_issue" | "goodwill_bonus" | "manual_correction" | "refund" | "penalty_reversal" | "other";
+  comment: string;
+  clientRequestId?: string;
+};
+
+export async function adjustUserBalanceByAdmin(
+  input: AdminBalanceAdjustmentInput,
+  dependencies: { auditWriter?: typeof writeAudit } = {}
+) {
+  if (!Number.isSafeInteger(input.amount) || input.amount <= 0 || input.amount > MAX_ADMIN_BALANCE_ADJUSTMENT) {
+    throw new HttpError(400, `Сумма должна быть целым числом от 1 до ${MAX_ADMIN_BALANCE_ADJUSTMENT} ₽`, "amount_invalid");
+  }
+  const comment = input.comment.trim();
+  if (comment.length < 10) {
+    throw new HttpError(400, "Укажите комментарий не короче 10 символов", "comment_required");
+  }
+
+  const requestId = input.clientRequestId?.trim() || randomUUID();
+  const idempotencyKey = `admin_adjustment:${input.targetUserId}:${input.actorUserId}:${requestId}`;
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.balanceTransaction.findUnique({
+      where: { idempotencyKey },
+      include: { createdByAdmin: { select: { id: true, displayName: true } } }
+    });
+    if (existing) {
+      const user = await adjustmentTargetPayload(tx, input.targetUserId);
+      if (!user) throw new HttpError(404, "Пользователь не найден", "user_not_found");
+      return { user, transaction: existing, idempotent: true };
+    }
+
+    const target = await adjustmentTargetPayload(tx, input.targetUserId);
+    if (!target) throw new HttpError(404, "Пользователь не найден", "user_not_found");
+    if (target.status === "archived") {
+      throw new HttpError(409, "Архивному пользователю нельзя корректировать баланс", "archived_user_balance_adjustment_forbidden");
+    }
+    if (target.role === "oauth_pending") {
+      throw new HttpError(409, "Незавершённому профилю нельзя корректировать баланс", "oauth_pending_balance_adjustment_forbidden");
+    }
+    if (!["client", "performer"].includes(target.role)) {
+      throw new HttpError(409, "Баланс можно корректировать только Заказчику или Помощнику", "balance_adjustment_target_forbidden");
+    }
+
+    const delta = input.direction === "credit" ? input.amount : -input.amount;
+    const walletField = input.wallet === "main" ? "balance" : "bonusBalance";
+    const updated = await tx.user.updateMany({
+      where: {
+        id: target.id,
+        ...(input.direction === "debit" ? { [walletField]: { gte: input.amount } } : {})
+      },
+      data: { [walletField]: { increment: delta } }
+    });
+    if (updated.count !== 1) {
+      throw new HttpError(409, "Недостаточно средств для списания", "insufficient_wallet_balance");
+    }
+
+    const user = await adjustmentTargetPayload(tx, target.id);
+    if (!user) throw new HttpError(404, "Пользователь не найден", "user_not_found");
+    const mainBalanceBefore = input.wallet === "main" ? user.balance - delta : user.balance;
+    const bonusBalanceBefore = input.wallet === "bonus" ? user.bonusBalance - delta : user.bonusBalance;
+    const metadata = {
+      actorUserId: input.actorUserId,
+      actorRole: input.actorRole,
+      targetUserId: target.id,
+      wallet: input.wallet,
+      direction: input.direction,
+      amount: input.amount,
+      reason: input.reason,
+      comment,
+      balanceBefore: mainBalanceBefore,
+      balanceAfter: user.balance,
+      bonusBalanceBefore,
+      bonusBalanceAfter: user.bonusBalance,
+      source: "admin_panel",
+      clientRequestId: requestId
+    };
+    const transaction = await tx.balanceTransaction.create({
+      data: {
+        userId: target.id,
+        type: adminAdjustmentType(input.wallet, input.direction),
+        source: "admin_panel",
+        idempotencyKey,
+        amount: delta,
+        balanceKind: input.wallet === "main" ? "real" : "bonus",
+        reason: input.reason,
+        comment,
+        metadataJson: JSON.stringify(metadata),
+        balanceBefore: input.wallet === "main" ? mainBalanceBefore : bonusBalanceBefore,
+        balanceAfter: input.wallet === "main" ? user.balance : user.bonusBalance,
+        createdByAdminId: input.actorUserId
+      },
+      include: { createdByAdmin: { select: { id: true, displayName: true } } }
+    });
+    await (dependencies.auditWriter ?? writeAudit)(
+      input.actorUserId,
+      "admin.balance.adjust",
+      "balance_transaction",
+      transaction.id,
+      metadata,
+      tx
+    );
+    return { user, transaction, idempotent: false };
+  });
+}
+
+function adminAdjustmentType(wallet: AdminBalanceAdjustmentInput["wallet"], direction: AdminBalanceAdjustmentInput["direction"]) {
+  if (wallet === "main") return direction === "credit" ? "admin_balance_credit" : "admin_balance_debit";
+  return direction === "credit" ? "admin_bonus_credit" : "admin_bonus_debit";
+}
+
+function adjustmentTargetPayload(tx: Tx, userId: string) {
+  return tx.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      displayName: true,
+      role: true,
+      status: true,
+      balance: true,
+      bonusBalance: true,
+      cityId: true,
+      updatedAt: true
+    }
+  });
 }
 
 export async function chargeAvailableBalanceTx(

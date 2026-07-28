@@ -189,8 +189,8 @@ export function ManagerDashboard() {
           <h2>Профиль менеджера</h2>
           <div className="detail-grid">
             <span>Имя / Логин</span><strong>{user.displayName}</strong>
-            <span>Телефон</span><strong>{user.phone ?? "не указан"}</strong>
-            <span>Email</span><strong>{user.email ?? "не указан"}</strong>
+            <span>Телефон</span><strong data-contact-field="phone">{user.phone?.trim() || "не указан"}</strong>
+            <span>Email</span><strong data-contact-field="email">{user.email?.trim() || "не указан"}</strong>
             <span>VK ID</span><strong>{user.identities?.some((identity) => identity.provider === "vk") ? "привязан" : "не привязан"}</strong>
           </div>
         </section>
@@ -207,8 +207,8 @@ export function ManagerDashboard() {
               <span>Роль</span><strong>{roleLabel(selectedUser.role)}</strong>
               <span>Статус</span><strong>{labelStatus(selectedUser.status)}</strong>
               <span>Город</span><strong>{selectedUser.city?.name ?? "не выбран"}</strong>
-              <span>Телефон</span><strong>{selectedUser.phone ?? "не указан"}</strong>
-              <span>Email</span><strong>{selectedUser.email ?? "не указан"}</strong>
+              <span>Телефон</span><strong data-contact-field="phone">{selectedUser.phone?.trim() || "не указан"}</strong>
+              <span>Email</span><strong data-contact-field="email">{selectedUser.email?.trim() || "не указан"}</strong>
               <span>Дата регистрации</span><strong>{formatDateTimeRu((selectedUser as any).createdAt)}</strong>
               <span>Причина блокировки</span><strong>{selectedUser.blockReason ?? "нет"}</strong>
               <span>Кем заблокирован</span><strong>{selectedUser.blockedByRole ? roleLabel(selectedUser.blockedByRole) : "нет"}</strong>

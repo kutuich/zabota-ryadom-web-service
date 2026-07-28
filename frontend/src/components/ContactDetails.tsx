@@ -9,6 +9,8 @@ export function ContactDetails({ user }: { user: User | null | undefined }) {
   const phoneVerified = Boolean(user?.phoneVerifiedAt || user?.isPhoneVerified);
   const emailVerified = Boolean(user?.emailVerifiedAt || user?.isEmailVerified);
   const vkIdentity = user?.identities?.find((identity) => identity.provider === "vk");
+  const phone = user?.phone?.trim() || "Не указан";
+  const email = user?.email?.trim() || "Не указан";
 
   async function linkVk() {
     setLinkError("");
@@ -25,11 +27,11 @@ export function ContactDetails({ user }: { user: User | null | undefined }) {
       <h2>Контактные данные</h2>
       <div className="detail-grid detail-grid--compact">
         <span>Телефон</span>
-        <strong>{user?.phone ?? "Не указан"}</strong>
+        <strong data-contact-field="phone">{phone}</strong>
         <span>Статус телефона</span>
         <strong>{phoneVerified ? "Подтверждён" : "Не подтверждён"}</strong>
         <span>Email</span>
-        <strong>{user?.email || "Не указан"}</strong>
+        <strong data-contact-field="email">{email}</strong>
         <span>Статус email</span>
         <strong>{emailVerified ? "Подтверждён" : "Не подтверждён"}</strong>
       </div>

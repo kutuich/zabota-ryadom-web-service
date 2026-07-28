@@ -20,7 +20,10 @@ export function RoleNavigation({
   return (
     <nav className={className} aria-label="Разделы">
       {groups.map((group) => (
-        <section className="role-nav__group" key={group.label}>
+        <section
+          className={group.label === "Дополнительно" ? "role-nav__group role-nav__group--more" : "role-nav__group"}
+          key={group.label}
+        >
           <p>{group.label}</p>
           {group.items.map((item) => (
             <NavLink

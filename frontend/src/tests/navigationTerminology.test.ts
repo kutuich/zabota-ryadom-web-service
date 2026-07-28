@@ -84,6 +84,8 @@ assert.equal(managerLabels.includes("Настройки сервиса"), false)
 assert.equal(managerLabels.includes("Юридические документы"), false);
 assert.equal(managerLabels.includes("Архив"), false);
 assert.equal(managerLabels.includes("Начисления"), false);
+assert.equal(clientNavigation.at(-1)?.label, "Дополнительно");
+assert.equal(performerNavigation.at(-1)?.label, "Дополнительно");
 
 const adminPaths = [
   "/app/admin",
@@ -173,6 +175,9 @@ assert.match(appRouter, /allowed\.includes\(effectiveRole\)/);
 const clientDashboard = read("pages/ClientDashboard.tsx");
 assert.match(clientDashboard, /navigate\(chatPathForRole\("client", result\.chat\.id\)\)/);
 assert.match(clientDashboard, /navigate\("\/app\/client\/requests"\)/);
+assert.match(clientDashboard, /className="checkbox-copy"/);
+assert.match(clientDashboard, /label: "Лёгкая уборка", description: "Влияет на бытовой формат визита\."/);
+assert.doesNotMatch(clientDashboard, /Лёгкая уборкаВлияет/);
 
 const performerDashboard = read("pages/PerformerDashboard.tsx");
 assert.match(performerDashboard, /navigate\("\/app\/performer\/responses"\)/);
@@ -259,6 +264,8 @@ assert.match(landingAuth, /Принимаю условия использова�
 assert.match(landingAuth, /helper_documents_consent/);
 assert.match(landingAuth, /helper-documents-consent/);
 assert.match(landingAuth, /Хочу получать информационные сообщения/);
+assert.match(landingAuth, /className="consent-document-link"/);
+assert.match(landingAuth, /className="consent-optional-label">\(необязательно\)<\/strong>/);
 assert.match(landingAuth, /"privacy"/);
 assert.doesNotMatch(landingAuth, /"privacy_policy"/);
 assert.match(landingAuth, /app-auth-logo\.png/);
@@ -342,6 +349,7 @@ assert.match(customerCityForm, /В этом городе пока может б�
 const consentPanel = read("components/ConsentDocumentsPanel.tsx");
 assert.match(consentPanel, /Принять обязательные документы/);
 assert.match(consentPanel, /Требуется новая версия/);
+assert.match(consentPanel, /span-full profile-legal-section/);
 
 const app = read("App.tsx");
 assert.match(app, /path="\/app"/);
@@ -372,6 +380,8 @@ assert.match(oauthComplete, /Выйти и войти другим способ�
 assert.match(oauthComplete, /войти по телефону или email/);
 assert.match(oauthComplete, /await cancelOAuth\(\)/);
 assert.match(oauthComplete, /navigate\("\/app\/login", \{ replace: true \}\)/);
+assert.match(oauthComplete, /className="consent-document-link"/);
+assert.match(oauthComplete, /className="consent-optional-label">\(необязательно\)<\/strong>/);
 
 const oauthAuthContext = read("context/AuthContext.tsx");
 assert.match(oauthAuthContext, /await api\.cancelOAuth\(\)/);
@@ -402,6 +412,10 @@ assert.match(balancePanel, /Пополнить баланс/);
 assert.match(balancePanel, /Перейти к оплате/);
 assert.match(balancePanel, /История пополнений/);
 assert.match(balancePanel, /История операций баланса/);
+assert.match(balancePanel, /data-balance-history="payments"/);
+assert.match(balancePanel, /data-balance-history="operations"/);
+assert.equal((balancePanel.match(/balance-panel__history/g) ?? []).length, 2);
+assert.match(balancePanel, /plain-section span-full balance-panel__history/);
 assert.match(balancePanel, /Пробный баланс/);
 assert.match(balancePanel, /платёжная форма банка или тестовая платёжная форма/);
 assert.match(balancePanel, /Сервис не хранит данные банковских карт/);
@@ -417,6 +431,25 @@ assert.match(balancePanel, /window\.location\.href = payment\.paymentUrl/);
 assert.doesNotMatch(balancePanel, /mockTopUp/);
 assert.doesNotMatch(balancePanel, /Пополнить тестово/);
 assert.doesNotMatch(balancePanel, /Тестовое пополнение/);
+assert.match(balancePanel, /Возврат платежа/);
+assert.match(balancePanel, /Выполнил:/);
+assert.match(balancePanel, /Комментарий:/);
+
+const adminPaymentsRefundUi = read("pages/AdminPaymentsPage.tsx");
+assert.match(adminPaymentsRefundUi, /Вернуть платёж/);
+assert.match(adminPaymentsRefundUi, /Причина возврата/);
+assert.match(adminPaymentsRefundUi, /refundAdminPayment/);
+assert.match(adminPaymentsRefundUi, /payment\.status === "succeeded"/);
+
+const roleNavigation = read("components/RoleNavigation.tsx");
+assert.match(roleNavigation, /group\.label === "Дополнительно"/);
+assert.match(roleNavigation, /role-nav__group--more/);
+
+const globalStyles = read("styles/global.css");
+assert.match(globalStyles, /\.span-full\s*\{[\s\S]*?grid-column:\s*1 \/ -1/);
+assert.match(globalStyles, /\.role-nav--user \.role-nav__group--more\s*\{[\s\S]*?margin-left:\s*auto/);
+assert.match(globalStyles, /\.checkbox-copy\s*\{[\s\S]*?display:\s*grid/);
+assert.match(globalStyles, /\.consent-document-link\s*\{[\s\S]*?font-weight:\s*700/);
 
 const clientPricingUi = read("pages/ClientDashboard.tsx");
 for (const expectedPackage of [
@@ -469,6 +502,10 @@ assert.match(contactDetails, /Статус email/);
 assert.match(contactDetails, /Подтверждён/);
 assert.match(contactDetails, /Не подтверждён/);
 assert.match(contactDetails, /Подтверждение телефона и email будет добавлено позже/);
+assert.match(contactDetails, /data-contact-field="phone">\{phone\}/);
+assert.match(contactDetails, /data-contact-field="email">\{email\}/);
+assert.match(contactDetails, /user\?\.phone\?\.trim\(\) \|\| "Не указан"/);
+assert.match(contactDetails, /user\?\.email\?\.trim\(\) \|\| "Не указан"/);
 
 const types = read("types/index.ts");
 assert.match(types, /normalizedPhone\?: string \| null/);
@@ -532,6 +569,7 @@ assert.match(apiClient, /\/payments\/mock\/\$\{id\}\/fail/);
 assert.match(apiClient, /\/chats\/\$\{chatId\}\/terms/);
 assert.match(apiClient, /\/admin\/payments/);
 assert.match(apiClient, /\/admin\/payments\/\$\{id\}/);
+assert.match(apiClient, /\/admin\/payments\/\$\{id\}\/refund/);
 assert.match(apiClient, /\/admin\/trial-balance\/settings/);
 assert.match(apiClient, /\/admin\/trial-balance\/grant-all/);
 assert.match(apiClient, /\/admin\/legal\/documents/);
@@ -549,6 +587,8 @@ assert.doesNotMatch(apiClient, /adminDeleteUser/);
 assert.match(apiClient, /adminAssignManager/);
 assert.match(apiClient, /adminRevokeManager/);
 assert.match(apiClient, /managerBlockUser/);
+assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/balance-adjustment/);
+assert.match(apiClient, /adminAdjustBalance/);
 
 const managerDashboard = read("pages/ManagerDashboard.tsx");
 assert.doesNotMatch(managerDashboard, /Отменить незавершённую регистрацию/);
@@ -562,6 +602,8 @@ assert.doesNotMatch(managerDashboard, /Настройки сервиса/);
 assert.doesNotMatch(managerDashboard, /Юридические документы/);
 assert.doesNotMatch(managerDashboard, /Изменить статус платежа/);
 assert.doesNotMatch(managerDashboard, /Зачислить платёж/);
+assert.doesNotMatch(managerDashboard, /Корректировка баланса/);
+assert.doesNotMatch(managerDashboard, /Провести корректировку/);
 
 const adminDashboardManagerControls = read("pages/AdminDashboard.tsx");
 assert.match(adminDashboardManagerControls, /Незавершённая VK-регистрация/);
@@ -571,6 +613,16 @@ assert.match(adminDashboardManagerControls, /adminCancelPendingOAuthRegistration
 assert.doesNotMatch(adminDashboardManagerControls, /Удалить пользователя/);
 assert.match(adminDashboardManagerControls, /Назначить менеджером/);
 assert.match(adminDashboardManagerControls, /Снять роль менеджера/);
+assert.match(adminDashboardManagerControls, /Корректировка баланса/);
+assert.match(adminDashboardManagerControls, /Основной баланс/);
+assert.match(adminDashboardManagerControls, /Бонусный баланс/);
+assert.match(adminDashboardManagerControls, /Доступно для заявок/);
+assert.match(adminDashboardManagerControls, /Комментарий администратора/);
+assert.match(adminDashboardManagerControls, /Провести корректировку/);
+assert.match(adminDashboardManagerControls, /disabled=\{isSubmitting \|\| invalid\}/);
+assert.match(adminDashboardManagerControls, /Корректировка баланса выполнена/);
+assert.match(adminDashboardManagerControls, /Последние операции баланса/);
+assert.match(adminDashboardManagerControls, /createdByAdmin\?\.displayName/);
 
 assert.match(appRoutes, /path="\/app\/manager\/\*"/);
 

@@ -96,6 +96,7 @@ model User {
   chatMessages             ChatMessage[]
   balanceTransactions      BalanceTransaction[] @relation("UserBalanceTransactions")
   paymentTransactions      PaymentTransaction[] @relation("UserPaymentTransactions")
+  adminCreatedRefunds      RefundTransaction[]  @relation("AdminCreatedRefunds")
   adminCreatedTransactions BalanceTransaction[] @relation("AdminCreatedTransactions")
   complaintsFrom           Complaint[]          @relation("ComplaintsFrom")
   complaintsAgainst        Complaint[]          @relation("ComplaintsAgainst")
@@ -398,6 +399,7 @@ model BalanceTransaction {
   balanceKind      String
   reason           String
   comment          String?
+  metadataJson     String?
   balanceBefore    Int?
   balanceAfter     Int?
   bonusExpiresAt   DateTime?
@@ -441,12 +443,40 @@ model PaymentTransaction {
   failedAt             DateTime?
   cancelledAt          DateTime?
   user                 User     @relation("UserPaymentTransactions", fields: [userId], references: [id])
+  refunds              RefundTransaction[]
 
   @@index([userId])
   @@index([provider])
   @@index([status])
   @@index([createdAt])
   @@index([orderId])
+}
+
+model RefundTransaction {
+  id                   String             @id @default(cuid())
+  paymentTransactionId String             @unique
+  provider             String
+  providerRefundId     String?
+  externalRequestId    String             @unique
+  amount               Int
+  currency             String             @default("RUB")
+  status               String             @default("processing")
+  reason               String
+  rawRequestJson       String?
+  rawResponseJson      String?
+  balanceTransactionId String?            @unique
+  createdByAdminId     String
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  completedAt          DateTime?
+  failedAt             DateTime?
+  payment              PaymentTransaction @relation(fields: [paymentTransactionId], references: [id])
+  createdByAdmin       User               @relation("AdminCreatedRefunds", fields: [createdByAdminId], references: [id])
+
+  @@index([provider])
+  @@index([status])
+  @@index([createdAt])
+  @@index([createdByAdminId])
 }
 
 model Complaint {

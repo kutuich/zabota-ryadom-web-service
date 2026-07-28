@@ -11,6 +11,7 @@ import { moderateChatMessage } from "../services/moderationService";
 import { detectMedicalTerms } from "../services/requestPolicy";
 import { nextRequestPublicNumber } from "../services/requestNumberService";
 import {
+  adjustUserBalanceByAdmin,
   ensureFixedServiceFeeSettings,
   FIXED_SERVICE_FEE_AMOUNT,
   getServiceFeeSettings,
@@ -211,6 +212,31 @@ async function run() {
     });
     assert.equal(tbankState.providerStatus, "CONFIRMED");
     assert.equal(tbankState.amountKopecks, 15000);
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const requestBody = JSON.parse(String(init?.body ?? "{}"));
+      assert.equal(String(url), "https://securepay.test/v2/Cancel");
+      assert.equal(requestBody.TerminalKey, "TEST_TERMINAL");
+      assert.equal(requestBody.PaymentId, "123456");
+      assert.equal(requestBody.Amount, 15000);
+      assert.equal(requestBody.ExternalRequestId, "550e8400-e29b-41d4-a716-446655440000");
+      assert.equal(requestBody.Token, buildTbankToken(requestBody, "TEST_PASSWORD"));
+      assert.equal(Object.prototype.hasOwnProperty.call(requestBody, "Receipt"), false);
+      return new Response(JSON.stringify({
+        Success: true,
+        PaymentId: "123456",
+        RefundId: "REFUND-123456",
+        Amount: 15000,
+        Status: "REFUNDED"
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    const tbankRefund = await tbankPaymentAdapter.refundPayment({
+      providerPaymentId: "123456",
+      orderId,
+      amount: 150,
+      externalRequestId: "550e8400-e29b-41d4-a716-446655440000"
+    });
+    assert.equal(tbankRefund.providerStatus, "REFUNDED");
+    assert.equal(tbankRefund.providerRefundId, "REFUND-123456");
   } finally {
     env.tbankTerminalKey = originalTbankEnv.terminalKey;
     env.tbankPassword = originalTbankEnv.password;
@@ -520,12 +546,146 @@ async function run() {
   await runCriticalSafetyTests();
   await runPaymentCreditIdempotencyTests();
   await runPaymentRouteTests();
+  await runAdminBalanceAdjustmentTests();
   await runAdminActingModeTests();
   await runManagerRoleTests();
   await runUserLifecycleTests();
   await runUploadStorageTests();
 
   console.log("Business tests passed");
+}
+
+async function runAdminBalanceAdjustmentTests() {
+  const app = createApp();
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const admin = await prisma.user.findFirstOrThrow({ where: { role: { in: ["admin", "superadmin"] }, status: "active" } });
+  const adminToken = tokenFor(admin.id, admin.role);
+  const createdUserIds: string[] = [];
+  const target = await prisma.user.create({
+    data: { role: "client", rolesJson: '["client"]', displayName: `Balance target ${suffix}`, status: "active", balance: 300, bonusBalance: 200 }
+  });
+  const manager = await prisma.user.create({
+    data: { role: "manager", rolesJson: '["manager"]', displayName: `Balance manager ${suffix}`, status: "active" }
+  });
+  const archived = await prisma.user.create({
+    data: { role: "client", rolesJson: '["client"]', displayName: `Balance archived ${suffix}`, status: "archived" }
+  });
+  const pending = await prisma.user.create({
+    data: { role: "oauth_pending", rolesJson: "[]", displayName: `Balance pending ${suffix}`, status: "active" }
+  });
+  createdUserIds.push(target.id, manager.id, archived.id, pending.id);
+  const managerToken = tokenFor(manager.id, "manager");
+  const targetToken = tokenFor(target.id, "client");
+  const endpoint = `/api/admin/users/${target.id}/balance-adjustment`;
+  const body = (overrides: Record<string, unknown> = {}) => ({
+    wallet: "main",
+    direction: "credit",
+    amount: 150,
+    reason: "manual_correction",
+    comment: "Проверенная ручная корректировка баланса",
+    clientRequestId: `adjust-${suffix}-${Math.random().toString(36).slice(2)}`,
+    ...overrides
+  });
+
+  try {
+    const paymentCountBefore = await prisma.paymentTransaction.count({ where: { userId: target.id } });
+    const creditBody = body({ clientRequestId: `credit-main-${suffix}` });
+    let response = await apiRequest(app, endpoint, { method: "POST", token: adminToken, body: creditBody });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.balance, 450);
+    assert.equal(response.payload.user.bonusBalance, 200);
+    assert.equal(response.payload.transaction.type, "admin_balance_credit");
+    assert.equal(response.payload.transaction.amount, 150);
+    assert.equal(response.payload.transaction.balanceBefore, 300);
+    assert.equal(response.payload.transaction.balanceAfter, 450);
+    assert.equal(response.payload.transaction.createdByAdminId, admin.id);
+    assert.match(response.payload.transaction.idempotencyKey, /^admin_adjustment:/);
+    const metadata = JSON.parse(response.payload.transaction.metadataJson);
+    assert.deepEqual(
+      [metadata.balanceBefore, metadata.balanceAfter, metadata.bonusBalanceBefore, metadata.bonusBalanceAfter],
+      [300, 450, 200, 200]
+    );
+    assert.ok(await prisma.auditLog.findFirst({
+      where: { actorUserId: admin.id, action: "admin.balance.adjust", entityId: response.payload.transaction.id }
+    }));
+    assert.equal(await prisma.paymentTransaction.count({ where: { userId: target.id } }), paymentCountBefore);
+
+    response = await apiRequest(app, endpoint, { method: "POST", token: adminToken, body: creditBody });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.idempotent, true);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: target.id } })).balance, 450);
+    assert.equal(await prisma.balanceTransaction.count({ where: { userId: target.id, type: "admin_balance_credit" } }), 1);
+
+    response = await apiRequest(app, endpoint, { method: "POST", token: adminToken, body: body({ direction: "debit", amount: 50 }) });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.balance, 400);
+    assert.equal(response.payload.transaction.type, "admin_balance_debit");
+
+    response = await apiRequest(app, endpoint, { method: "POST", token: adminToken, body: body({ wallet: "bonus", amount: 70 }) });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.bonusBalance, 270);
+    assert.equal(response.payload.transaction.type, "admin_bonus_credit");
+
+    response = await apiRequest(app, endpoint, { method: "POST", token: adminToken, body: body({ wallet: "bonus", direction: "debit", amount: 20 }) });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.bonusBalance, 250);
+    assert.equal(response.payload.transaction.type, "admin_bonus_debit");
+
+    const beforeRejectedDebit = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+    response = await apiRequest(app, endpoint, { method: "POST", token: adminToken, body: body({ direction: "debit", amount: 1000 }) });
+    assert.equal(response.status, 409);
+    assert.equal(response.payload.code, "insufficient_wallet_balance");
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: target.id } })).balance, beforeRejectedDebit.balance);
+
+    response = await apiRequest(app, `/api/admin/users/${archived.id}/balance-adjustment`, { method: "POST", token: adminToken, body: body() });
+    assert.equal(response.status, 409);
+    assert.equal(response.payload.code, "archived_user_balance_adjustment_forbidden");
+    response = await apiRequest(app, `/api/admin/users/${pending.id}/balance-adjustment`, { method: "POST", token: adminToken, body: body() });
+    assert.equal(response.status, 409);
+    assert.equal(response.payload.code, "oauth_pending_balance_adjustment_forbidden");
+
+    response = await apiRequest(app, endpoint, { method: "POST", token: managerToken, body: body() });
+    assert.equal(response.status, 403);
+    assert.equal(response.payload.code, "manager_permission_denied");
+    response = await apiRequest(app, endpoint, { method: "POST", token: targetToken, body: body() });
+    assert.equal(response.status, 403);
+    assert.equal(response.payload.code, "admin_required");
+
+    for (const invalidAmount of [0, -1, 1.5, 100_001]) {
+      response = await apiRequest(app, endpoint, { method: "POST", token: adminToken, body: body({ amount: invalidAmount }) });
+      assert.equal(response.status, 400);
+    }
+    response = await apiRequest(app, endpoint, { method: "POST", token: adminToken, body: body({ comment: "коротко" }) });
+    assert.equal(response.status, 400);
+
+    const beforeAuditFailure = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+    const rollbackRequestId = `audit-rollback-${suffix}`;
+    await assert.rejects(
+      adjustUserBalanceByAdmin({
+        actorUserId: admin.id,
+        actorRole: admin.role as "admin" | "superadmin",
+        targetUserId: target.id,
+        wallet: "main",
+        direction: "credit",
+        amount: 25,
+        reason: "manual_correction",
+        comment: "Проверка полного отката при ошибке аудита",
+        clientRequestId: rollbackRequestId
+      }, {
+        auditWriter: async () => { throw new Error("forced_audit_failure"); }
+      }),
+      /forced_audit_failure/
+    );
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: target.id } })).balance, beforeAuditFailure.balance);
+    assert.equal(await prisma.balanceTransaction.count({
+      where: { idempotencyKey: `admin_adjustment:${target.id}:${admin.id}:${rollbackRequestId}` }
+    }), 0);
+  } finally {
+    const transactionIds = (await prisma.balanceTransaction.findMany({ where: { userId: { in: createdUserIds } }, select: { id: true } })).map((row) => row.id);
+    await prisma.auditLog.deleteMany({ where: { entityId: { in: transactionIds }, action: "admin.balance.adjust" } });
+    await prisma.balanceTransaction.deleteMany({ where: { userId: { in: createdUserIds } } });
+    await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+  }
 }
 
 async function runManagerRoleTests() {
@@ -2431,6 +2591,7 @@ async function runPaymentRouteTests() {
     paymentIds.push(response.payload.id);
 
     const createdPayment = await prisma.paymentTransaction.findUniqueOrThrow({ where: { id: response.payload.id } });
+    assert.equal(createdPayment.userId, client.id);
     assert.equal(createdPayment.orderId, response.payload.orderId);
     assert.equal(createdPayment.status, "pending");
     assert.equal(createdPayment.balanceTransactionId, null);
@@ -2723,6 +2884,12 @@ async function runPaymentRouteTests() {
     });
     assert.equal(response.status, 403);
     assert.equal(response.payload.code, "manager_permission_denied");
+    response = await apiRequest(app, `/api/admin/payments/${createdPayment.id}/refund`, {
+      method: "POST",
+      token: adminToken,
+      body: { amount: 150, reason: "" }
+    });
+    assert.equal(response.status, 400);
 
     const balanceBeforeStateCredit = (await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance;
     response = await apiRequest(app, `/api/payments/${stateConfirmedPayment.id}/refresh-status`, {
@@ -2860,6 +3027,91 @@ async function runPaymentRouteTests() {
     assert.equal(response.payload.provider, "mock");
     assert.equal(response.payload.status, "succeeded");
 
+    response = await apiRequest(app, `/api/admin/payments/${createdPayment.id}/refund`, {
+      method: "POST",
+      token: clientToken,
+      body: { amount: 150, reason: "Проверка запрета возврата пользователем" }
+    });
+    assert.equal(response.status, 403);
+    response = await apiRequest(app, `/api/admin/payments/${createdPayment.id}/refund`, {
+      method: "POST",
+      token: managerToken,
+      body: { amount: 150, reason: "Проверка запрета возврата менеджером" }
+    });
+    assert.equal(response.status, 403);
+    assert.equal(response.payload.code, "manager_permission_denied");
+    response = await apiRequest(app, `/api/admin/payments/${createdPayment.id}/refund`, {
+      method: "POST",
+      token: adminToken,
+      body: { amount: 151, reason: "Сумма больше исходного платежа" }
+    });
+    assert.equal(response.status, 400);
+    assert.equal(await prisma.refundTransaction.count({ where: { paymentTransactionId: createdPayment.id } }), 0);
+
+    const balanceBeforeRefund = (await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance;
+    response = await apiRequest(app, `/api/admin/payments/${createdPayment.id}/refund`, {
+      method: "POST",
+      token: adminToken,
+      body: { amount: 150, reason: "Возврат тестового платежа по обращению" }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.refund.status, "succeeded");
+    assert.equal(response.payload.idempotent, false);
+    const completedRefund = await prisma.refundTransaction.findUniqueOrThrow({
+      where: { paymentTransactionId: createdPayment.id }
+    });
+    assert.ok(completedRefund.balanceTransactionId);
+    assert.equal((await prisma.paymentTransaction.findUniqueOrThrow({ where: { id: createdPayment.id } })).status, "refunded");
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, balanceBeforeRefund - 150);
+    const refundLedger = await prisma.balanceTransaction.findUniqueOrThrow({
+      where: { idempotencyKey: `payment_refund:${completedRefund.id}` }
+    });
+    assert.equal(refundLedger.type, "refund");
+    assert.equal(refundLedger.amount, -150);
+    assert.equal(refundLedger.createdByAdminId, admin.id);
+    response = await apiRequest(app, "/api/balance/me", {
+      method: "GET",
+      token: clientToken
+    });
+    assert.equal(response.status, 200);
+    const refundHistoryEntry = response.payload.transactions.find((row: any) => row.id === refundLedger.id);
+    assert.equal(refundHistoryEntry.amount, -150);
+    assert.equal(refundHistoryEntry.source, "mock");
+    assert.equal(refundHistoryEntry.comment, "Возврат тестового платежа по обращению");
+    assert.equal(refundHistoryEntry.createdByAdmin.displayName, admin.displayName);
+
+    response = await apiRequest(app, `/api/admin/payments/${createdPayment.id}/refund`, {
+      method: "POST",
+      token: adminToken,
+      body: { amount: 150, reason: "Повторный возврат не должен менять баланс" }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.idempotent, true);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, balanceBeforeRefund - 150);
+    assert.equal(await prisma.balanceTransaction.count({
+      where: { idempotencyKey: `payment_refund:${completedRefund.id}` }
+    }), 1);
+
+    response = await apiRequest(app, `/api/admin/payments/${failedPaymentId}/refund`, {
+      method: "POST",
+      token: adminToken,
+      body: { amount: 150, reason: "Неуспешный платёж нельзя вернуть" }
+    });
+    assert.equal(response.status, 409);
+    assert.equal(response.payload.code, "payment_not_refundable");
+
+    const balanceBeforeInsufficientRefundCheck = (await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance;
+    await prisma.user.update({ where: { id: client.id }, data: { balance: 0 } });
+    response = await apiRequest(app, `/api/admin/payments/${webhookPayment.id}/refund`, {
+      method: "POST",
+      token: adminToken,
+      body: { amount: 150, reason: "Проверка недостаточного основного баланса" }
+    });
+    assert.equal(response.status, 409);
+    assert.equal(response.payload.code, "payment_refund_balance_insufficient");
+    assert.equal(await prisma.refundTransaction.count({ where: { paymentTransactionId: webhookPayment.id } }), 0);
+    await prisma.user.update({ where: { id: client.id }, data: { balance: balanceBeforeInsufficientRefundCheck } });
+
     response = await apiRequest(app, `/api/admin/payments/${webhookPayment.id}`, {
       method: "GET",
       token: adminToken
@@ -2869,12 +3121,27 @@ async function runPaymentRouteTests() {
     assert.equal(Object.prototype.hasOwnProperty.call(response.payload, "rawStateResponseJson"), true);
     assert.equal(response.payload.rawWebhookJson.includes("Token"), false);
     assert.equal(JSON.stringify(response.payload).includes(env.tbankPassword), false);
+    response = await apiRequest(app, `/api/admin/payments/${createdPayment.id}`, {
+      method: "GET",
+      token: adminToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.refunds.length, 1);
+    assert.equal(response.payload.refunds[0].status, "succeeded");
   } finally {
     env.paymentProvider = originalPaymentProvider;
     env.tbankTerminalKey = originalTbankTerminalKey;
     env.tbankPassword = originalTbankPassword;
     globalThis.fetch = originalFetch;
+    const testRefunds = await prisma.refundTransaction.findMany({
+      where: { paymentTransactionId: { in: paymentIds } },
+      select: { id: true }
+    });
+    await prisma.refundTransaction.deleteMany({ where: { paymentTransactionId: { in: paymentIds } } });
     await prisma.paymentTransaction.deleteMany({ where: { id: { in: paymentIds } } });
+    await prisma.balanceTransaction.deleteMany({
+      where: { idempotencyKey: { in: testRefunds.map((refund) => `payment_refund:${refund.id}`) } }
+    });
     await prisma.balanceTransaction.deleteMany({ where: { comment: { in: orderIds } } });
     await prisma.user.deleteMany({ where: { id: { in: [noConsentUser.id, managerUser.id] } } });
     await Promise.all(Array.from(originalBalances.entries()).map(([userId, balance]) =>

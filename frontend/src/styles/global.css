@@ -746,6 +746,16 @@ p {
   white-space: nowrap;
 }
 
+.consent-document-link {
+  font-weight: 700;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.consent-optional-label {
+  font-weight: 700;
+}
+
 .auth-register-page .auth-submit {
   justify-self: center;
   width: min(360px, 100%);
@@ -916,6 +926,17 @@ textarea {
   height: 18px;
   min-height: 18px;
   margin-top: 2px;
+}
+
+.checkbox-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.checkbox-copy > small {
+  display: block;
+  line-height: 1.4;
 }
 
 .checkbox-grid {
@@ -1245,6 +1266,11 @@ textarea {
 
 .span-2 {
   grid-column: span 2;
+}
+
+.span-full {
+  grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .response-list {
@@ -1603,6 +1629,16 @@ textarea {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 18px;
+}
+
+.admin-balance-adjustment,
+.admin-balance-history {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-balance-history .transaction-row {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .trial-balance-settings {
@@ -1968,6 +2004,10 @@ summary:focus-visible {
   flex: 0 0 auto;
   flex-wrap: nowrap;
   padding: 0;
+}
+
+.role-nav--user .role-nav__group--more {
+  margin-left: auto;
 }
 
 .role-nav--user .role-nav__group p {
@@ -2938,6 +2978,10 @@ summary:focus-visible {
     text-align: left;
     font-size: 15px;
     white-space: nowrap;
+  }
+
+  .role-nav--user .role-nav__group--more {
+    margin-left: 0;
   }
 
   .nav-scrim {

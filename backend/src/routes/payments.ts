@@ -15,6 +15,7 @@ import {
 } from "../services/paymentAdapter";
 import { generateTopUpOrderId } from "../services/paymentOrderId";
 import { creditPaymentToBalance, getPaymentBalanceSummary } from "../services/paymentService";
+import { refundPayment } from "../services/refundService";
 import { writeAudit } from "../services/auditService";
 import { verifyTbankToken } from "../services/tbankToken";
 import { asyncHandler, HttpError } from "../utils/http";
@@ -24,6 +25,11 @@ export const adminPaymentsRouter = Router();
 
 const topUpSchema = z.object({
   amount: z.number().int().positive().max(1_000_000)
+});
+
+const refundSchema = z.object({
+  amount: z.number().int().positive().max(1_000_000).optional(),
+  reason: z.string().trim().min(3).max(500)
 });
 
 paymentsRouter.post(
@@ -525,12 +531,35 @@ adminPaymentsRouter.get(
   })
 );
 
+adminPaymentsRouter.post(
+  "/:id/refund",
+  asyncHandler(async (req, res) => {
+    const input = refundSchema.parse(req.body);
+    const result = await refundPayment({
+      paymentId: req.params.id,
+      amount: input.amount,
+      reason: input.reason,
+      adminUserId: req.user!.id
+    });
+    res.json({
+      refund: serializeRefund(result.refund),
+      idempotent: result.idempotent
+    });
+  })
+);
+
 adminPaymentsRouter.get(
   "/:id",
   asyncHandler(async (req, res) => {
     const payment = await prisma.paymentTransaction.findUnique({
       where: { id: req.params.id },
-      include: { user: { select: { id: true, displayName: true, role: true, phone: true, email: true } } }
+      include: {
+        user: { select: { id: true, displayName: true, role: true, phone: true, email: true } },
+        refunds: {
+          include: { createdByAdmin: { select: { id: true, displayName: true } } },
+          orderBy: { createdAt: "desc" }
+        }
+      }
     });
     if (!payment) {
       throw new HttpError(404, "Платёж не найден", "payment_not_found");
@@ -543,6 +572,7 @@ adminPaymentsRouter.get(
       payment: serializeAdminPayment(payment),
       user: payment.user,
       balanceTransaction,
+      refunds: payment.refunds.map(serializeRefund),
       rawInitResponseJson: redactProviderJson(payment.rawInitResponseJson),
       rawStateResponseJson: redactProviderJson(payment.rawStateResponseJson),
       rawWebhookJson: redactProviderJson(payment.rawWebhookJson)
@@ -588,6 +618,44 @@ function serializeAdminPayment(payment: PaymentTransaction) {
   return {
     ...serializePayment(payment),
     balanceTransactionId: payment.balanceTransactionId
+  };
+}
+
+function serializeRefund(refund: {
+  id: string;
+  paymentTransactionId: string;
+  provider: string;
+  providerRefundId: string | null;
+  externalRequestId: string;
+  amount: number;
+  currency: string;
+  status: string;
+  reason: string;
+  balanceTransactionId: string | null;
+  createdByAdminId: string;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+  failedAt: Date | null;
+  createdByAdmin?: { id: string; displayName: string } | null;
+}) {
+  return {
+    id: refund.id,
+    paymentTransactionId: refund.paymentTransactionId,
+    provider: refund.provider,
+    providerRefundId: refund.providerRefundId,
+    externalRequestId: refund.externalRequestId,
+    amount: refund.amount,
+    currency: refund.currency,
+    status: refund.status,
+    reason: refund.reason,
+    balanceTransactionId: refund.balanceTransactionId,
+    createdByAdminId: refund.createdByAdminId,
+    createdByAdmin: refund.createdByAdmin,
+    createdAt: refund.createdAt,
+    updatedAt: refund.updatedAt,
+    completedAt: refund.completedAt,
+    failedAt: refund.failedAt
   };
 }
 

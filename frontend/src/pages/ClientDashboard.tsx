@@ -699,8 +699,8 @@ export function ClientDashboard() {
                   checked={form.additionalActions.includes(option.value)}
                   onChange={() => setForm({ ...form, additionalActions: toggleValue(form.additionalActions, option.value) })}
                 />
-                <span>
-                  {option.label}
+                <span className="checkbox-copy">
+                  <span>{option.label}</span>
                   {option.description && <small>{option.description}</small>}
                 </span>
               </label>
@@ -829,7 +829,7 @@ export function ClientDashboard() {
                   checked={form.selectedAddonIds.includes(option.value)}
                   onChange={() => setForm({ ...form, selectedAddonIds: toggleValue(form.selectedAddonIds, option.value) })}
                 />
-                <span>{option.label}<small>{option.description}</small></span>
+                <span className="checkbox-copy"><span>{option.label}</span><small>{option.description}</small></span>
               </label>
             ))}
           </fieldset>
@@ -1121,8 +1121,8 @@ export function ClientDashboard() {
                         checked={editForm.additionalActions.includes(option.value)}
                         onChange={() => setEditForm({ ...editForm, additionalActions: toggleValue(editForm.additionalActions, option.value) })}
                       />
-                      <span>
-                        {option.label}
+                      <span className="checkbox-copy">
+                        <span>{option.label}</span>
                         {option.description && <small>{option.description}</small>}
                       </span>
                     </label>
@@ -1236,7 +1236,7 @@ export function ClientDashboard() {
                         checked={editForm.selectedAddonIds.includes(option.value)}
                         onChange={() => setEditForm({ ...editForm, selectedAddonIds: toggleValue(editForm.selectedAddonIds, option.value) })}
                       />
-                      <span>{option.label}<small>{option.description}</small></span>
+                      <span className="checkbox-copy"><span>{option.label}</span><small>{option.description}</small></span>
                     </label>
                   ))}
                 </fieldset>
@@ -1263,7 +1263,7 @@ export function ClientDashboard() {
 }
 
 const additionalActionOptions = [
-  { value: "light_cleaning", label: "лёгкая уборка", description: "Влияет на бытовой формат визита." },
+  { value: "light_cleaning", label: "Лёгкая уборка", description: "Влияет на бытовой формат визита." },
   { value: "laundry", label: "стирка", description: "Расширяет бытовой объём." },
   { value: "ironing", label: "глажка", description: "Расширяет бытовой объём." },
   { value: "bed_linen", label: "смена постельного", description: "Может повысить объём бытового визита." },

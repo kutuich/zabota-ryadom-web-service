@@ -69,7 +69,7 @@ export function BalancePanel() {
   const canSubmitTopUp = Number.isSafeInteger(amount) && amount >= minAmount && amount <= 1_000_000;
 
   return (
-    <section className="panel-grid">
+    <section className="panel-grid balance-panel">
       <div className="metric">
         <CreditCard size={20} />
         <span>Доступно для заявок</span>
@@ -83,7 +83,7 @@ export function BalancePanel() {
         <span>Бонусный баланс</span>
         <strong>{balance?.bonusBalance ?? 0} ₽</strong>
       </div>
-      <section className="plain-section span-2">
+      <section className="plain-section span-full balance-panel__top-up">
         <h2>Пополнить баланс</h2>
         <p className="privacy-note">
           Выберите сумму пополнения. После нажатия кнопки откроется платёжная форма банка или тестовая платёжная форма.
@@ -122,8 +122,8 @@ export function BalancePanel() {
         </div>
         <small>Минимальная сумма: {minAmount} ₽.</small>
       </section>
-      {message && <p className="notice span-2">{message}</p>}
-      <section className="plain-section span-2">
+      {message && <p className="notice span-full">{message}</p>}
+      <section className="plain-section span-full balance-panel__history" data-balance-history="payments">
         <h2>История пополнений</h2>
         {payments.length === 0 ? (
           <p className="empty-text">Пополнений пока нет.</p>
@@ -153,7 +153,7 @@ export function BalancePanel() {
           </div>
         )}
       </section>
-      <section className="plain-section span-2">
+      <section className="plain-section span-full balance-panel__history" data-balance-history="operations">
         <h2>История операций баланса</h2>
         {!balance?.transactions.length ? (
           <p className="empty-text">Операций пока нет.</p>
@@ -164,14 +164,17 @@ export function BalancePanel() {
                 <span>{formatDateTimeRu(transaction.createdAt)}</span>
                 <strong>{transaction.amount > 0 ? "+" : ""}{transaction.amount} ₽</strong>
                 <span>{transaction.balanceKind === "bonus" ? "Бонусный" : "Основной"}</span>
-                <span>{transaction.type === "trial_bonus" ? "Пробный баланс" : transaction.type}</span>
+                <span>{balanceTransactionTypeLabel(transaction.type)}</span>
                 <small>{transaction.reason}</small>
+                {transaction.source && <small>Источник: {paymentProviderLabel(transaction.source)}</small>}
+                {transaction.createdByAdmin && <small>Выполнил: {transaction.createdByAdmin.displayName}</small>}
+                {transaction.comment && <small>Комментарий: {transaction.comment}</small>}
               </div>
             ))}
           </div>
         )}
       </section>
-      <p className="privacy-note span-2">
+      <p className="privacy-note span-full">
         Доступно для заявок = основной баланс + бонусный баланс.
         После двойного подтверждения условий списывается сервисный сбор заказчика {balance?.clientServiceFeeAmount ?? 0} ₽
         и сервисный сбор помощника {balance?.performerServiceFeeAmount ?? 0} ₽. Если бонусы включены, сначала используется бонусный баланс.
@@ -198,4 +201,11 @@ export function paymentProviderLabel(provider: string) {
   if (provider === "tbank") return "платёжная форма Т-Банка";
   if (provider === "mock") return "тестовая платёжная форма";
   return provider;
+}
+
+function balanceTransactionTypeLabel(type: string) {
+  if (type === "trial_bonus") return "Пробный баланс";
+  if (type === "top_up") return "Пополнение через платёжную форму";
+  if (type === "refund") return "Возврат платежа";
+  return type;
 }
