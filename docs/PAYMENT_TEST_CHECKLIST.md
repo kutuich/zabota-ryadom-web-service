@@ -18,6 +18,7 @@
 ```env
 PAYMENT_PROVIDER=tbank
 PAYMENT_RECEIPT_ENABLED=false
+TBANK_TERMINAL_MODE=test
 TBANK_TERMINAL_KEY=
 TBANK_PASSWORD=
 TBANK_API_URL=https://securepay.tinkoff.ru/v2
@@ -25,6 +26,8 @@ TBANK_SUCCESS_URL=https://zabota-ugorsk.ru/app/balance/payment-success
 TBANK_FAIL_URL=https://zabota-ugorsk.ru/app/balance/payment-fail
 TBANK_NOTIFICATION_URL=https://zabota-ugorsk.ru/api/payments/tbank/webhook
 ```
+
+Тесты демо-терминала выполняются только с `TBANK_TERMINAL_MODE=test`. Платёж и зачисление баланса должны пройти, но запись в реестре «Мой налог» создаваться не должна. Для финальной проверки боевого терминала режим переключается на `live` вручную после завершения всех демо-тестов.
 
 Не коммитить реальные значения и не выводить их в логах.
 

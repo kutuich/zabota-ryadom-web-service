@@ -538,6 +538,9 @@ assert.match(adminPaymentsPage, /rawStateResponseJson/);
 assert.match(adminPaymentsPage, /Не удалось загрузить платежи/);
 assert.match(adminPaymentsPage, /payment\.provider === "tbank" && payment\.status === "succeeded"/);
 assert.doesNotMatch(adminPaymentsPage, /Вернуть тестовый платёж|mockPaymentSucceed|mockPaymentFail/);
+assert.match(adminPaymentsPage, /Тестовый T-Bank/);
+assert.match(adminPaymentsPage, /payment\.terminalMode === "test"/);
+assert.match(adminPaymentsPage, /payment\.terminalMode === "live"/);
 assert.doesNotMatch(adminPaymentsPage, /комисси/i);
 
 const trialBalanceAdminDashboard = read("pages/AdminDashboard.tsx");
@@ -673,7 +676,8 @@ assert.match(npdRegisterPage, /Отражено в «Мой налог»/);
 assert.match(npdRegisterPage, /Текст скопирован/);
 assert.match(npdRegisterPage, /Проверьте аннулирование или корректировку чека/);
 assert.match(npdRegisterPage, /updateAdminNpdRegisterEntry/);
-assert.match(npdRegisterPage, /реальные поступления через T-Bank/);
+assert.match(npdRegisterPage, /реальные live-платежи T-Bank/);
+assert.match(npdRegisterPage, /Тестовые T-Bank операции не отображаются/);
 assert.match(npdRegisterPage, /Возврат по банку/);
 assert.doesNotMatch(npdRegisterPage, /source === "mock"/);
 

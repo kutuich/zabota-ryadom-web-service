@@ -42,6 +42,7 @@
 - `PRODUCTION_ADMIN_PASSWORD` - пароль первого администратора, если база пустая.
 - `PRODUCTION_ADMIN_PHONE` - телефон первого администратора, если база пустая.
 - `TBANK_TERMINAL_KEY` - заполнять только перед включением Т-Банка.
+- `TBANK_TERMINAL_MODE` - `test` для демо-терминала, `live` только для боевого терминала; по умолчанию `test`.
 - `TBANK_PASSWORD` - заполнять только перед включением Т-Банка.
 - `TBANK_API_URL=https://securepay.tinkoff.ru/v2` - API URL Т-Банка.
 - `TBANK_SUCCESS_URL=https://zabota-ugorsk.ru/app/balance/payment-success` - URL успешного возврата.

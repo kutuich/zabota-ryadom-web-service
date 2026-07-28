@@ -42,6 +42,9 @@ export async function createManualBankRefund(input: ManualBankRefundInput) {
       if (payment.provider !== "tbank") {
         throw new HttpError(409, "Возврат по банку доступен только для реального платежа T-Bank", "manual_bank_refund_real_payment_required");
       }
+      if (payment.terminalMode !== "live") {
+        throw new HttpError(409, "Возврат по банку доступен только для live-платежа T-Bank", "manual_bank_refund_live_payment_required");
+      }
       if (payment.refunds.length > 0) {
         throw new HttpError(409, "Возврат по этому платежу уже зафиксирован", "manual_bank_refund_already_exists");
       }

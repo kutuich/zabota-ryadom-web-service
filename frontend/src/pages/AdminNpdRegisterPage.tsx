@@ -81,7 +81,8 @@ export function AdminNpdRegisterPage() {
         <div className="card__head">
           <div>
             <h2>Мой налог</h2>
-            <p className="privacy-note">В реестре отображаются только реальные поступления через T-Bank и реальные возвраты, зафиксированные администратором после выполнения возврата в банке. Mock-платежи, бонусы и ручные корректировки баланса в реестр не попадают.</p>
+            <p className="privacy-note">В реестр попадают только реальные live-платежи T-Bank и реальные возвраты по банку. Тестовые T-Bank операции не отображаются в реестре «Мой налог».</p>
+            <p className="privacy-note">Mock-платежи, бонусы и ручные корректировки баланса в реестр не попадают.</p>
             <p className="privacy-note">Данные в ФНС автоматически не отправляются.</p>
           </div>
           <button className="secondary-button" type="button" onClick={() => void load()} disabled={isLoading}>

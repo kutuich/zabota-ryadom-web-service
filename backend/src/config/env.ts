@@ -16,6 +16,10 @@ export function resolveUploadsDir(source: NodeJS.ProcessEnv = process.env, cwd =
     : path.resolve(path.basename(cwd) === "backend" ? cwd : path.join(cwd, "backend"), "uploads");
 }
 
+export function resolveTbankTerminalMode(source: NodeJS.ProcessEnv = process.env): "test" | "live" {
+  return source.TBANK_TERMINAL_MODE === "live" ? "live" : "test";
+}
+
 const defaultServiceFeeAmount = resolveDefaultServiceFeeAmount();
 
 export const env = {
@@ -37,6 +41,7 @@ export const env = {
   paymentReceiptEnabled: process.env.PAYMENT_RECEIPT_ENABLED === "true",
   allowLegacyMockTopUp: process.env.ALLOW_LEGACY_MOCK_TOP_UP === "true",
   tbankTerminalKey: process.env.TBANK_TERMINAL_KEY ?? "",
+  tbankTerminalMode: resolveTbankTerminalMode(),
   tbankPassword: process.env.TBANK_PASSWORD ?? "",
   tbankApiUrl: process.env.TBANK_API_URL ?? "https://securepay.tinkoff.ru/v2",
   tbankSuccessUrl: process.env.TBANK_SUCCESS_URL ?? "http://localhost:4000/app/balance/payment-success",

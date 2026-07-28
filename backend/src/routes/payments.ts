@@ -58,7 +58,8 @@ paymentsRouter.post(
     const notificationUrl = env.tbankNotificationUrl;
     const metadata = {
       userId: req.user!.id,
-      source: "top_up_init"
+      source: "top_up_init",
+      terminalMode: env.paymentProvider === "tbank" ? env.tbankTerminalMode : null
     };
     const description = "Пополнение баланса";
 
@@ -66,6 +67,7 @@ paymentsRouter.post(
       data: {
         userId: req.user!.id,
         provider: env.paymentProvider,
+        terminalMode: env.paymentProvider === "tbank" ? env.tbankTerminalMode : null,
         orderId,
         amount: input.amount,
         status: "created",
@@ -516,6 +518,7 @@ adminPaymentsRouter.get(
         id: true,
         userId: true,
         provider: true,
+        terminalMode: true,
         providerPaymentId: true,
         orderId: true,
         amount: true,
@@ -618,6 +621,7 @@ function serializePaymentSummary(payment: PaymentTransaction) {
     currency: payment.currency,
     status: payment.status,
     provider: payment.provider,
+    terminalMode: payment.terminalMode,
     paymentUrl: payment.paymentUrl
   };
 }

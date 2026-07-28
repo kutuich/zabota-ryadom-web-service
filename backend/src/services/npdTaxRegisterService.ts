@@ -16,7 +16,7 @@ export async function ensurePaymentNpdEntryTx(
   payment: PaymentTransaction,
   balanceTransactionId: string | null
 ) {
-  if (payment.provider !== "tbank") return null;
+  if (!isLiveTbankPayment(payment)) return null;
   return tx.npdTaxRegisterEntry.upsert({
     where: { paymentTransactionId: payment.id },
     create: {
@@ -46,7 +46,7 @@ export async function ensureRefundNpdEntryTx(
   payment: PaymentTransaction,
   balanceTransactionId: string | null
 ) {
-  if (!isRealRefundProvider(refund.provider)) return null;
+  if (!isRealRefundProvider(refund.provider) || !isLiveTbankPayment(payment)) return null;
   const isManualBankRefund = refund.provider === "manual_bank";
   return tx.npdTaxRegisterEntry.upsert({
     where: { refundTransactionId: refund.id },
@@ -82,7 +82,19 @@ export async function listNpdRegister(from?: string, to?: string) {
       operationDate: { gte: range.from, lt: range.toExclusive },
       isTestOperation: false,
       source: { in: ["tbank", "manual_bank"] },
-      operationType: { in: ["payment", "refund"] }
+      operationType: { in: ["payment", "refund"] },
+      OR: [
+        {
+          operationType: "payment",
+          paymentTransaction: { is: { provider: "tbank", terminalMode: "live" } }
+        },
+        {
+          operationType: "refund",
+          refundTransaction: {
+            is: { payment: { provider: "tbank", terminalMode: "live" } }
+          }
+        }
+      ]
     },
     include: {
       user: { select: { id: true, displayName: true, role: true, phone: true, email: true } },
@@ -143,6 +155,7 @@ async function backfillExistingNpdEntries() {
         where: {
           status: { in: ["succeeded", "refunded"] },
           provider: "tbank",
+          terminalMode: "live",
           creditedAt: { not: null },
           balanceTransactionId: { not: null }
         }
@@ -151,7 +164,8 @@ async function backfillExistingNpdEntries() {
         where: {
           status: "succeeded",
           provider: { in: ["tbank", "manual_bank"] },
-          balanceTransactionId: { not: null }
+          balanceTransactionId: { not: null },
+          payment: { provider: "tbank", terminalMode: "live" }
         },
         include: { payment: true }
       })
@@ -212,6 +226,10 @@ export async function updateNpdRegisterEntry(input: {
 
 function isRealRefundProvider(provider: string) {
   return provider === "tbank" || provider === "manual_bank";
+}
+
+function isLiveTbankPayment(payment: Pick<PaymentTransaction, "provider" | "terminalMode">) {
+  return payment.provider === "tbank" && payment.terminalMode === "live";
 }
 
 function calculateTotals(entries: Array<{ operationType: string; amount: number; npdStatus: string }>) {

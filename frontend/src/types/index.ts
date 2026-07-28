@@ -553,6 +553,7 @@ export type PaymentTransaction = {
   id: string;
   userId: string;
   provider: string;
+  terminalMode?: "test" | "live" | null;
   providerPaymentId?: string | null;
   orderId: string;
   amount: number;

@@ -428,6 +428,7 @@ model PaymentTransaction {
   id                   String   @id @default(cuid())
   userId               String
   provider             String
+  terminalMode         String?
   providerPaymentId    String?  @unique
   orderId              String   @unique
   amount               Int
@@ -457,6 +458,7 @@ model PaymentTransaction {
 
   @@index([userId])
   @@index([provider])
+  @@index([terminalMode])
   @@index([status])
   @@index([createdAt])
   @@index([orderId])

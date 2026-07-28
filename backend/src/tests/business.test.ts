@@ -46,7 +46,7 @@ import {
   grantTrialBalanceToUser,
   updateTrialBalanceSettings
 } from "../services/trialBalanceService";
-import { env, resolveDefaultServiceFeeAmount, resolveUploadsDir } from "../config/env";
+import { env, resolveDefaultServiceFeeAmount, resolveTbankTerminalMode, resolveUploadsDir } from "../config/env";
 import { creditPaymentToBalance, paymentCreditIdempotencyKey } from "../services/paymentService";
 import { normalizeSettlementName } from "../services/settlementService";
 import { getUserArchiveSafety, OAUTH_PENDING_CANCEL_ARCHIVE_REASON } from "../services/userLifecycleService";
@@ -64,6 +64,10 @@ import {
 } from "../services/legalService";
 
 async function run() {
+  assert.equal(resolveTbankTerminalMode({}), "test");
+  assert.equal(resolveTbankTerminalMode({ TBANK_TERMINAL_MODE: "test" }), "test");
+  assert.equal(resolveTbankTerminalMode({ TBANK_TERMINAL_MODE: "live" }), "live");
+  assert.equal(resolveTbankTerminalMode({ TBANK_TERMINAL_MODE: "invalid" }), "test");
   assert.equal(normalizeRussianPhone("+79224000320"), "+79224000320");
   assert.equal(normalizeRussianPhone("79224000320"), "+79224000320");
   assert.equal(normalizeRussianPhone("89224000320"), "+79224000320");
@@ -2738,10 +2742,12 @@ async function runPaymentRouteTests() {
   const originalNodeEnv = env.nodeEnv;
   const originalTbankTerminalKey = env.tbankTerminalKey;
   const originalTbankPassword = env.tbankPassword;
+  const originalTbankTerminalMode = env.tbankTerminalMode;
   const originalFetch = globalThis.fetch;
 
   try {
     env.paymentProvider = "mock";
+    env.tbankTerminalMode = "live";
     env.tbankTerminalKey = "WEBHOOK_TEST_TERMINAL";
     env.tbankPassword = "WEBHOOK_TEST_PASSWORD";
     let response = await apiRequest(app, "/api/payments/top-up/init", {
@@ -2811,7 +2817,7 @@ async function runPaymentRouteTests() {
       return new Response(JSON.stringify({
         Success: true,
         ErrorCode: "0",
-        PaymentId: `TBANK-INIT-${Date.now()}`,
+        PaymentId: `TBANK-INIT-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         PaymentURL: "https://securepay.tbank.test/payment/test",
         Status: "NEW",
         OrderId: requestBody.OrderId,
@@ -2833,6 +2839,23 @@ async function runPaymentRouteTests() {
     assert.ok(tbankInitPayment.providerPaymentId);
     assert.equal(tbankInitPayment.status, "pending");
     assert.equal(tbankInitPayment.creditedAt, null);
+    assert.equal(tbankInitPayment.terminalMode, "live");
+    assert.equal(JSON.parse(tbankInitPayment.metadataJson ?? "{}").terminalMode, "live");
+
+    env.tbankTerminalMode = "test";
+    response = await apiRequest(app, "/api/payments/top-up/init", {
+      method: "POST",
+      token: clientToken,
+      body: { amount: 150 }
+    });
+    assert.equal(response.status, 201);
+    const testTerminalPayment = await prisma.paymentTransaction.findUniqueOrThrow({ where: { id: response.payload.id } });
+    paymentIds.push(testTerminalPayment.id);
+    orderIds.push(testTerminalPayment.orderId);
+    assert.equal(testTerminalPayment.provider, "tbank");
+    assert.equal(testTerminalPayment.terminalMode, "test");
+    assert.equal(JSON.parse(testTerminalPayment.metadataJson ?? "{}").terminalMode, "test");
+    env.tbankTerminalMode = "live";
     env.paymentProvider = "mock";
     globalThis.fetch = originalFetch;
 
@@ -2952,6 +2975,7 @@ async function runPaymentRouteTests() {
       data: {
         userId: client.id,
         provider: "tbank",
+        terminalMode: "live",
         providerPaymentId: "TBANK-WEBHOOK-TEST",
         orderId: webhookOrderId,
         amount: 150,
@@ -3052,6 +3076,29 @@ async function runPaymentRouteTests() {
     assert.equal(tbankNpdEntry.source, "tbank");
     assert.equal(tbankNpdEntry.isTestOperation, false);
 
+    const testTerminalWebhookPayload = {
+      PaymentId: testTerminalPayment.providerPaymentId!,
+      OrderId: testTerminalPayment.orderId,
+      TerminalKey: env.tbankTerminalKey,
+      Success: true,
+      Status: "CONFIRMED",
+      Amount: 15000
+    };
+    const balanceBeforeTestTerminalWebhook = (await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance;
+    const testTerminalWebhookResponse = await rawAppRequest(app, "/api/payments/tbank/webhook", {
+      method: "POST",
+      body: {
+        ...testTerminalWebhookPayload,
+        Token: buildTbankToken(testTerminalWebhookPayload, env.tbankPassword)
+      }
+    });
+    assert.equal(testTerminalWebhookResponse.status, 200);
+    assert.equal(testTerminalWebhookResponse.text, "OK");
+    assert.equal((await prisma.paymentTransaction.findUniqueOrThrow({ where: { id: testTerminalPayment.id } })).status, "succeeded");
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, balanceBeforeTestTerminalWebhook + 150);
+    assert.equal(await prisma.npdTaxRegisterEntry.count({ where: { paymentTransactionId: testTerminalPayment.id } }), 0,
+      "Платёж тестового T-Bank терминала не должен создавать запись НПД");
+
     const stateResponses = new Map<string, Record<string, unknown>>();
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       assert.match(String(url), /\/GetState$/);
@@ -3075,6 +3122,7 @@ async function runPaymentRouteTests() {
         data: {
           userId: client!.id,
           provider: "tbank",
+          terminalMode: "live",
           providerPaymentId,
           orderId: stateOrderId,
           amount: 150,
@@ -3255,6 +3303,7 @@ async function runPaymentRouteTests() {
       data: {
         userId: client.id,
         provider: "tbank",
+        terminalMode: "live",
         providerPaymentId: `TBANK-MANUAL-BANK-${Date.now()}`,
         orderId: manualBankOrderId,
         amount: 150,
@@ -3296,6 +3345,44 @@ async function runPaymentRouteTests() {
     });
     assert.equal(response.status, 409);
     assert.equal(response.payload.code, "manual_bank_refund_real_payment_required");
+    response = await apiRequest(app, `/api/admin/payments/${testTerminalPayment.id}/manual-bank-refund`, {
+      method: "POST",
+      token: adminToken,
+      body: manualBankBody
+    });
+    assert.equal(response.status, 409);
+    assert.equal(response.payload.code, "manual_bank_refund_live_payment_required");
+    assert.equal(await prisma.refundTransaction.count({ where: { paymentTransactionId: testTerminalPayment.id } }), 0);
+    const fetchBeforeTestTerminalRefund = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      assert.match(String(url), /\/Cancel$/);
+      const requestBody = JSON.parse(String(init?.body ?? "{}"));
+      assert.equal(requestBody.PaymentId, testTerminalPayment.providerPaymentId);
+      return new Response(JSON.stringify({
+        Success: true,
+        TerminalKey: env.tbankTerminalKey,
+        PaymentId: testTerminalPayment.providerPaymentId,
+        RefundId: `TEST-REFUND-${testTerminalPayment.id}`,
+        Amount: 15000,
+        OriginalAmount: 15000,
+        NewAmount: 0,
+        Status: "REFUNDED"
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    response = await apiRequest(app, `/api/admin/payments/${testTerminalPayment.id}/refund`, {
+      method: "POST",
+      token: adminToken,
+      body: { amount: 150, reason: "Возврат тестового T-Bank платежа" }
+    });
+    assert.equal(response.status, 200);
+    const testTerminalRefund = await prisma.refundTransaction.findUniqueOrThrow({
+      where: { paymentTransactionId: testTerminalPayment.id }
+    });
+    assert.equal(testTerminalRefund.provider, "tbank");
+    assert.equal(testTerminalRefund.status, "succeeded");
+    assert.equal(await prisma.npdTaxRegisterEntry.count({ where: { refundTransactionId: testTerminalRefund.id } }), 0,
+      "Возврат тестового T-Bank платежа не должен создавать запись НПД");
+    globalThis.fetch = fetchBeforeTestTerminalRefund;
     response = await apiRequest(app, `/api/admin/payments/${tbankInitPayment.id}/manual-bank-refund`, {
       method: "POST",
       token: adminToken,
@@ -3358,6 +3445,7 @@ async function runPaymentRouteTests() {
       data: {
         userId: client.id,
         provider: "tbank",
+        terminalMode: "live",
         providerPaymentId: `TBANK-MANUAL-BANK-LOW-${Date.now()}`,
         orderId: insufficientOrderId,
         amount: 150,
@@ -3497,6 +3585,8 @@ async function runPaymentRouteTests() {
     assert.ok(listedRefundEntry);
     assert.equal(listedRefundEntry.refundTransaction.payment.id, manualBankPayment.id);
     assert.equal(npdEntries.some((entry: any) => entry.paymentTransactionId === createdPayment.id), false);
+    assert.equal(npdEntries.some((entry: any) => entry.paymentTransactionId === testTerminalPayment.id), false);
+    assert.ok(npdEntries.some((entry: any) => entry.paymentTransactionId === webhookPayment.id));
     assert.equal(npdEntries.some((entry: any) => entry.refundTransactionId === completedRefund.id), false);
     assert.ok(npdEntries.every((entry: any) => ["tbank", "manual_bank"].includes(entry.source)));
     assert.ok(npdEntries.every((entry: any) => entry.isTestOperation === false));
@@ -3563,6 +3653,7 @@ async function runPaymentRouteTests() {
     env.nodeEnv = originalNodeEnv;
     env.tbankTerminalKey = originalTbankTerminalKey;
     env.tbankPassword = originalTbankPassword;
+    env.tbankTerminalMode = originalTbankTerminalMode;
     globalThis.fetch = originalFetch;
     await prisma.auditLog.deleteMany({
       where: { actorUserId: admin.id, action: { in: ["admin.npd_register.update", "admin.bank_refund.create"] } }

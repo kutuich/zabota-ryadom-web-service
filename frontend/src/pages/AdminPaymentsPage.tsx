@@ -209,7 +209,11 @@ export function AdminPaymentsPage() {
                 <strong>{payment.user?.displayName ?? payment.userId}</strong>
                 <span>{userRoleLabel(payment.user?.role ?? payment.userRole ?? "")}</span>
                 <strong>{payment.amount} {payment.currency}</strong>
-                <span>{paymentProviderLabel(payment.provider)}</span>
+                <span>
+                  {payment.provider === "tbank" && payment.terminalMode === "test"
+                    ? <StatusBadge tone="warning">Тестовый T-Bank</StatusBadge>
+                    : paymentProviderLabel(payment.provider, payment.terminalMode)}
+                </span>
                 <StatusBadge tone={paymentStatusTone(payment.status)}>{paymentStatusLabel(payment.status)}</StatusBadge>
                 <small>{payment.orderId}</small>
                 <small>{payment.providerPaymentId ?? "не указан"}</small>
@@ -356,7 +360,7 @@ function PaymentDetails({
         <span>Роль пользователя</span><strong>{userRoleLabel(user?.role ?? "")}</strong>
         <span>Сумма</span><strong>{payment.amount} {payment.currency}</strong>
         <span>Валюта</span><strong>{payment.currency}</strong>
-        <span>Провайдер</span><strong>{paymentProviderLabel(payment.provider)}</strong>
+        <span>Провайдер</span><strong>{paymentProviderLabel(payment.provider, payment.terminalMode)}</strong>
         <span>Статус</span><strong>{paymentStatusLabel(payment.status)}</strong>
         <span>Назначение</span><strong>{paymentPurposeLabel(payment.purpose)}</strong>
         <span>Дата создания</span><strong>{formatDateTimeRu(payment.createdAt)}</strong>
@@ -382,7 +386,7 @@ function PaymentDetails({
             <Undo2 size={18} />
             Вернуть через T-Bank
           </button>
-          {payment.provider === "tbank" && (
+          {payment.provider === "tbank" && payment.terminalMode === "live" && (
             <button className="secondary-button" type="button" onClick={onManualBankRefund}>
               <Undo2 size={18} />
               Зафиксировать возврат по банку
@@ -459,8 +463,9 @@ function paymentStatusTone(status: string) {
   return "neutral";
 }
 
-function paymentProviderLabel(provider: string) {
+function paymentProviderLabel(provider: string, terminalMode?: string | null) {
   if (provider === "mock") return "Тестовая форма";
+  if (provider === "tbank" && terminalMode === "test") return "Тестовый T-Bank";
   if (provider === "tbank") return "Т-Банк";
   return provider;
 }
