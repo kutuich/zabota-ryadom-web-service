@@ -23,7 +23,7 @@ const documentsByRole = {
 
 export function OAuthCompletePage() {
   const navigate = useNavigate();
-  const { bootstrap, user, claimOAuthSession, completeOAuthProfile } = useAuth();
+  const { bootstrap, user, claimOAuthSession, cancelOAuth, completeOAuthProfile } = useAuth();
   const [role, setRole] = useState<"client" | "performer">("client");
   const [cityId, setCityId] = useState("");
   const [phone, setPhone] = useState("");
@@ -34,6 +34,7 @@ export function OAuthCompletePage() {
   const [helperNoProcedures, setHelperNoProcedures] = useState(false);
   const [isClaiming, setIsClaiming] = useState(!user);
   const [isSaving, setIsSaving] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -101,6 +102,15 @@ export function OAuthCompletePage() {
     }
   }
 
+  async function cancel() {
+    setIsCancelling(true);
+    try {
+      await cancelOAuth();
+    } finally {
+      navigate("/app/login", { replace: true });
+    }
+  }
+
   if (isClaiming) {
     return <main className="oauth-complete-page"><p>Завершаем вход через VK...</p></main>;
   }
@@ -152,6 +162,10 @@ export function OAuthCompletePage() {
 
         {error && <p className="error-text">{error}</p>}
         <button className="primary-button primary-button--wide" type="submit" disabled={isSaving}>{isSaving ? "Сохраняем..." : "Продолжить"}</button>
+        <p className="privacy-note">Вы можете отменить вход через VK и войти по телефону или email.</p>
+        <button className="secondary-button" type="button" onClick={() => void cancel()} disabled={isCancelling}>
+          {isCancelling ? "Выходим..." : "Выйти и войти другим способом"}
+        </button>
       </form>
     </main>
   );

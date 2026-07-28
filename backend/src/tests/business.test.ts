@@ -33,6 +33,7 @@ import { buildTbankToken, verifyTbankToken } from "../services/tbankToken";
 import { normalizeRussianPhone } from "../services/phoneService";
 import {
   VK_OAUTH_SESSION_COOKIE,
+  VK_OAUTH_TRANSACTION_COOKIE,
   createVkOAuthSessionCookie,
   isUserProfileComplete,
   resolveVkUser
@@ -513,6 +514,7 @@ async function run() {
   await runLegalBootstrapTests();
   await runAuthPhoneTests();
   await runVkOAuthTests();
+  await runOAuthPendingCancellationTests();
   await runTrialBalanceTests();
   await runBonusServiceFeeTests();
   await runCriticalSafetyTests();
@@ -1032,6 +1034,186 @@ async function runUserLifecycleTests() {
     }
     await prisma.paymentTransaction.deleteMany({ where: { userId: { in: createdUserIds } } });
     await prisma.balanceTransaction.deleteMany({ where: { userId: { in: createdUserIds } } });
+    await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+  }
+}
+
+async function runOAuthPendingCancellationTests() {
+  const app = createApp();
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const [admin, client, city, category] = await Promise.all([
+    prisma.user.findFirstOrThrow({ where: { role: { in: ["admin", "superadmin"] }, status: "active" } }),
+    prisma.user.findFirstOrThrow({ where: { role: "client", status: "active" } }),
+    prisma.city.findFirstOrThrow(),
+    prisma.serviceCategory.findFirstOrThrow()
+  ]);
+  const adminToken = tokenFor(admin.id, admin.role);
+  const clientToken = tokenFor(client.id, "client");
+  const createdUserIds: string[] = [];
+  const createdRequestIds: string[] = [];
+
+  async function createPending(label: string) {
+    const user = await prisma.user.create({
+      data: {
+        role: "oauth_pending",
+        rolesJson: "[]",
+        displayName: `Pending VK ${label}`,
+        status: "active",
+        identities: {
+          create: {
+            provider: "vk",
+            providerUserId: `vk-pending-${label}-${unique}`,
+            displayName: `Pending VK ${label}`
+          }
+        }
+      }
+    });
+    createdUserIds.push(user.id);
+    return user;
+  }
+
+  const manager = await prisma.user.create({
+    data: {
+      role: "manager",
+      rolesJson: '["manager"]',
+      displayName: "Pending cancellation manager",
+      status: "active"
+    }
+  });
+  createdUserIds.push(manager.id);
+  const managerToken = tokenFor(manager.id, "manager");
+
+  try {
+    const cancellable = await createPending("safe");
+    let response = await apiRequest(app, `/api/admin/users/${cancellable.id}/oauth-pending/cancel`, {
+      method: "POST",
+      token: clientToken
+    });
+    assert.equal(response.status, 403);
+    response = await apiRequest(app, `/api/admin/users/${cancellable.id}/oauth-pending/cancel`, {
+      method: "POST",
+      token: managerToken
+    });
+    assert.equal(response.status, 403);
+    assert.equal(response.payload.code, "manager_permission_denied");
+    response = await apiRequest(app, `/api/admin/users/${cancellable.id}/oauth-pending/cancel`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.status, "archived");
+    assert.equal(response.payload.user.role, "oauth_pending");
+    assert.match(response.payload.user.archiveReason, /незавершённая VK-регистрация/i);
+    assert.equal(await prisma.userIdentity.count({ where: { userId: cancellable.id, provider: "vk" } }), 1);
+    assert.ok(await prisma.auditLog.findFirst({
+      where: { actorUserId: admin.id, action: "admin.oauth_pending.cancel", entityId: cancellable.id }
+    }));
+    const activeUsers = await apiRequest(app, "/api/admin/users?status=active", { method: "GET", token: adminToken });
+    assert.equal(activeUsers.status, 200);
+    assert.equal(activeUsers.payload.some((user: { id: string }) => user.id === cancellable.id), false);
+
+    response = await apiRequest(app, `/api/admin/users/${client.id}/oauth-pending/cancel`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 409);
+    assert.ok(await prisma.user.findUnique({ where: { id: client.id } }));
+
+    const paymentPending = await createPending("payment");
+    await prisma.paymentTransaction.create({
+      data: {
+        userId: paymentPending.id,
+        provider: "mock",
+        orderId: `OAUTH-PENDING-PAYMENT-${unique}`,
+        amount: 150,
+        status: "pending"
+      }
+    });
+    response = await apiRequest(app, `/api/admin/users/${paymentPending.id}/oauth-pending/cancel`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 409);
+    assert.equal(response.payload.code, "oauth_pending_cancel_blocked");
+    assert.equal(response.payload.details.counts.payments, 1);
+
+    const ledgerPending = await createPending("ledger");
+    await prisma.balanceTransaction.create({
+      data: {
+        userId: ledgerPending.id,
+        type: "top_up",
+        amount: 0,
+        balanceKind: "real",
+        reason: "Pending cancellation safety test"
+      }
+    });
+    response = await apiRequest(app, `/api/admin/users/${ledgerPending.id}/oauth-pending/cancel`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 409);
+    assert.equal(response.payload.details.counts.balanceTransactions, 1);
+
+    const activityPending = await createPending("activity");
+    const request = await prisma.clientRequest.create({
+      data: {
+        clientId: client.id,
+        selectedPerformerId: activityPending.id,
+        cityId: city.id,
+        categoryId: category.id,
+        title: "OAuth pending safety request",
+        description: "OAuth pending safety request",
+        addressText: "Test",
+        approximateAddressText: "Test",
+        status: "discussion"
+      }
+    });
+    createdRequestIds.push(request.id);
+    const requestResponse = await prisma.requestResponse.create({
+      data: { requestId: request.id, performerId: activityPending.id, status: "pending" }
+    });
+    await prisma.chat.create({
+      data: {
+        requestId: request.id,
+        responseId: requestResponse.id,
+        clientId: client.id,
+        performerId: activityPending.id,
+        status: "open"
+      }
+    });
+    response = await apiRequest(app, `/api/admin/users/${activityPending.id}/oauth-pending/cancel`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 409);
+    assert.equal(response.payload.details.counts.requests, 1);
+    assert.equal(response.payload.details.counts.responses, 1);
+    assert.equal(response.payload.details.counts.chats, 1);
+    assert.match(response.payload.error, /история действий/i);
+
+    const consentPending = await createPending("consent");
+    await prisma.consent.create({
+      data: { userId: consentPending.id, type: "privacy", version: "test" }
+    });
+    response = await apiRequest(app, `/api/admin/users/${consentPending.id}/oauth-pending/cancel`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 409);
+    assert.equal(response.payload.details.counts.consents, 1);
+  } finally {
+    await prisma.auditLog.deleteMany({
+      where: { OR: [{ actorUserId: { in: createdUserIds } }, { entityType: "user", entityId: { in: createdUserIds } }] }
+    });
+    for (const requestId of createdRequestIds) {
+      await prisma.chatMessage.deleteMany({ where: { chat: { requestId } } });
+      await prisma.chat.deleteMany({ where: { requestId } });
+      await prisma.requestResponse.deleteMany({ where: { requestId } });
+      await prisma.clientRequest.deleteMany({ where: { id: requestId } });
+    }
+    await prisma.paymentTransaction.deleteMany({ where: { userId: { in: createdUserIds } } });
+    await prisma.balanceTransaction.deleteMany({ where: { userId: { in: createdUserIds } } });
+    await prisma.consent.deleteMany({ where: { userId: { in: createdUserIds } } });
     await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
   }
 }
@@ -2832,6 +3014,14 @@ async function runVkOAuthTests() {
   const providerUserId = `vk-test-${Date.now()}`;
   let createdUserId: string | undefined;
   try {
+    const cancelWithoutSession = await rawAppRequest(app, "/api/auth/oauth/cancel", { method: "POST" });
+    assert.equal(cancelWithoutSession.status, 200);
+    assert.deepEqual(JSON.parse(cancelWithoutSession.text), { ok: true });
+    const cancelCookies = JSON.stringify(cancelWithoutSession.headers["set-cookie"]);
+    assert.match(cancelCookies, new RegExp(VK_OAUTH_TRANSACTION_COOKIE));
+    assert.match(cancelCookies, new RegExp(VK_OAUTH_SESSION_COOKIE));
+    assert.match(cancelCookies, /Max-Age=0/);
+
     env.oauthEnabled = false;
     env.vkIdEnabled = false;
     let response = await apiRequest(app, "/api/auth/oauth/vk/start", { method: "GET" });
@@ -2882,7 +3072,7 @@ async function runVkOAuthTests() {
     });
     assert.equal(callback.status, 302);
     assert.equal(callback.headers.location, "/app/oauth/complete");
-    const sessionCookie = cookieHeader(callback.headers["set-cookie"]);
+    const sessionCookie = cookieHeader(callback.headers["set-cookie"], VK_OAUTH_SESSION_COOKIE);
     const session = await rawAppRequest(app, "/api/auth/oauth/session", { method: "POST", headers: { cookie: sessionCookie } });
     assert.equal(session.status, 200);
     const sessionPayload = JSON.parse(session.text);
@@ -2907,6 +3097,16 @@ async function runVkOAuthTests() {
     assert.equal(response.payload.user.role, "client");
     assert.equal(response.payload.nextPath, "/app/client/requests");
     assert.equal(await isUserProfileComplete(sessionPayload.user.id), true);
+
+    const completedIdentityCount = await prisma.userIdentity.count({ where: { userId: sessionPayload.user.id, provider: "vk" } });
+    response = await apiRequest(app, "/api/auth/oauth/cancel", {
+      method: "POST",
+      token: sessionPayload.token
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.payload, { ok: true });
+    assert.ok(await prisma.user.findUnique({ where: { id: sessionPayload.user.id } }));
+    assert.equal(await prisma.userIdentity.count({ where: { userId: sessionPayload.user.id, provider: "vk" } }), completedIdentityCount);
 
     const repeatedIdentity = await resolveVkUser({
       providerUserId,
@@ -2946,8 +3146,11 @@ async function runVkOAuthTests() {
   }
 }
 
-function cookieHeader(setCookie: unknown) {
-  const value = Array.isArray(setCookie) ? String(setCookie[0]) : String(setCookie ?? "");
+function cookieHeader(setCookie: unknown, cookieName?: string) {
+  const values = Array.isArray(setCookie) ? setCookie.map(String) : [String(setCookie ?? "")];
+  const value = cookieName
+    ? values.find((item) => item.startsWith(`${cookieName}=`)) ?? ""
+    : values[0] ?? "";
   assert.ok(value, "Expected Set-Cookie header");
   return value.split(";")[0]!;
 }

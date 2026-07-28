@@ -27,6 +27,7 @@ type AuthContextValue = {
   login: (phoneOrEmail: string, password: string) => Promise<void>;
   register: (input: RegisterInput) => Promise<void>;
   claimOAuthSession: () => Promise<{ profileComplete: boolean; nextPath: string }>;
+  cancelOAuth: () => Promise<void>;
   completeOAuthProfile: (input: Parameters<typeof api.completeOAuthProfile>[0]) => Promise<{ nextPath: string }>;
   startActing: (role: "customer" | "helper") => Promise<{ nextPath: string }>;
   stopActing: () => Promise<{ nextPath: string }>;
@@ -100,6 +101,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setToken(payload.token);
         setUser(payload.user);
         return { profileComplete: payload.profileComplete, nextPath: payload.nextPath };
+      },
+      async cancelOAuth() {
+        try {
+          await api.cancelOAuth();
+        } finally {
+          setStoredToken(null);
+          setToken(null);
+          setUser(null);
+        }
       },
       async completeOAuthProfile(input) {
         const payload = await api.completeOAuthProfile(input);

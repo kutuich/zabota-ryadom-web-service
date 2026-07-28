@@ -141,6 +141,8 @@ export function AdminDashboard() {
 
   const clients = useMemo(() => users.filter((user) => user.role === "client"), [users]);
   const performers = useMemo(() => users.filter((user) => user.role === "performer"), [users]);
+  const activeUsers = useMemo(() => users.filter((user) => user.status !== "archived"), [users]);
+  const archivedUsers = useMemo(() => users.filter((user) => user.status === "archived"), [users]);
   const selectedCity = adminCities.find((city) => city.id === cityInfoCityId) ?? null;
   const selectedCityRequests = cityInfoCityId ? requests.filter((request) => request.cityId === cityInfoCityId) : [];
   const selectedCityResponses = selectedCityRequests.flatMap((request) => (request.responses ?? []).map((response: any) => ({ request, response })));
@@ -211,10 +213,23 @@ export function AdminDashboard() {
     }
   }
 
+  async function cancelPendingOAuthRegistration(user: User) {
+    if (!window.confirm(`Отменить незавершённую VK-регистрацию ${user.displayName}?`)) return;
+    try {
+      await api.adminCancelPendingOAuthRegistration(user.id);
+      setSelectedUser(null);
+      setNotice("Незавершённая VK-регистрация отменена. Запись сохранена в архиве.");
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Не удалось отменить незавершённую регистрацию.");
+    }
+  }
+
   async function openUserProfile(user: User) {
     setSelectedUser(user);
     setSelectedUserLegalStatuses([]);
     setSelectedUserArchiveSafety(null);
+    if (isIncompleteVkRegistration(user)) return;
     try {
       const [legalStatuses, safety] = await Promise.all([
         api.adminUserLegalConsents(user.id),
@@ -767,8 +782,14 @@ export function AdminDashboard() {
         </section>
       )}
 
-      {activeTab === "Пользователи" && <UsersTable users={users} onBlock={block} onUnblock={unblock} onRequestArchive={requestArchive} onArchive={archiveUser} onSelect={openUserProfile} />}
-      {activeTab === "Заказчики" && <UsersTable users={clients} onBlock={block} onUnblock={unblock} onRequestArchive={requestArchive} onArchive={archiveUser} onSelect={openUserProfile} />}
+      {activeTab === "Пользователи" && (
+        <section className="list">
+          <p className="notice">Физическое удаление пользователей отключено для сохранения истории заявок, платежей, балансов, чатов и юридических согласий. Профили можно блокировать, архивировать или отменять, если VK-регистрация не была завершена.
+          </p>
+          <UsersTable users={activeUsers} onBlock={block} onUnblock={unblock} onRequestArchive={requestArchive} onArchive={archiveUser} onCancelPending={cancelPendingOAuthRegistration} onSelect={openUserProfile} />
+        </section>
+      )}
+      {activeTab === "Заказчики" && <UsersTable users={clients} onBlock={block} onUnblock={unblock} onRequestArchive={requestArchive} onArchive={archiveUser} onCancelPending={cancelPendingOAuthRegistration} onSelect={openUserProfile} />}
 
       {activeTab === "Помощники" && (
         <div className="data-table">
@@ -1000,6 +1021,7 @@ export function AdminDashboard() {
           onUnblock={unblock}
           onRequestArchive={requestArchive}
           onArchive={archiveUser}
+          onCancelPending={cancelPendingOAuthRegistration}
           onSelect={openUserProfile}
         />
       )}
@@ -1036,6 +1058,7 @@ export function AdminDashboard() {
             <Archive size={18} />
             Запустить архивирование
           </button>
+          <UsersTable users={archivedUsers} onBlock={block} onUnblock={unblock} onRequestArchive={requestArchive} onArchive={archiveUser} onCancelPending={cancelPendingOAuthRegistration} onSelect={openUserProfile} />
         </section>
       )}
 
@@ -1231,6 +1254,12 @@ export function AdminDashboard() {
               <button className="secondary-button" type="button" disabled={!selectedUserArchiveSafety?.canArchive} onClick={() => archiveUser(selectedUser)}>
                 <Archive size={18} />
                 Архивировать
+              </button>
+            )}
+            {isIncompleteVkRegistration(selectedUser) && (
+              <button className="secondary-button" type="button" onClick={() => cancelPendingOAuthRegistration(selectedUser)}>
+                <Archive size={18} />
+                Отменить незавершённую регистрацию
               </button>
             )}
           </div>
@@ -1510,6 +1539,7 @@ function UsersTable({
   onUnblock,
   onRequestArchive,
   onArchive,
+  onCancelPending,
   onSelect
 }: {
   users: User[];
@@ -1517,6 +1547,7 @@ function UsersTable({
   onUnblock: (userId: string) => void;
   onRequestArchive: (user: User) => void;
   onArchive: (user: User) => void;
+  onCancelPending: (user: User) => void;
   onSelect: (user: User) => void;
 }) {
   return (
@@ -1529,8 +1560,14 @@ function UsersTable({
           <span>{userRoleLabel(user.role)}</span>
           <span>{user.city?.name ?? "город не выбран"}</span>
           <span>{user.balance + user.bonusBalance} ₽</span>
-          <StatusBadge tone={statusTone(user.status)}>{labelStatus(user.status)}</StatusBadge>
-          {["blocked", "pending_archive"].includes(user.status) ? (
+          <StatusBadge tone={isIncompleteVkRegistration(user) ? "warning" : statusTone(user.status)}>
+            {isIncompleteVkRegistration(user) ? "Незавершённая VK-регистрация" : labelStatus(user.status)}
+          </StatusBadge>
+          {isIncompleteVkRegistration(user) ? (
+            <button className="secondary-button" type="button" onClick={() => onCancelPending(user)}>
+              Отменить незавершённую регистрацию
+            </button>
+          ) : ["blocked", "pending_archive"].includes(user.status) ? (
             <button className="secondary-button" type="button" onClick={() => onUnblock(user.id)}>
               Разблокировать
             </button>
@@ -1540,12 +1577,12 @@ function UsersTable({
               Заблокировать
             </button>
           ) : null}
-          {user.status === "pending_archive" ? (
+          {!isIncompleteVkRegistration(user) && user.status === "pending_archive" ? (
             <button className="secondary-button" type="button" onClick={() => onArchive(user)}>
               <Archive size={18} />
               Проверить архив
             </button>
-          ) : user.status !== "archived" ? (
+          ) : !isIncompleteVkRegistration(user) && user.status !== "archived" ? (
             <button className="secondary-button" type="button" onClick={() => onRequestArchive(user)}>
               <Archive size={18} />
               В ожидание архива
@@ -1574,6 +1611,11 @@ function Modal({ title, children, onClose }: { title: string; children: ReactNod
 function UserProfile({ user, legalStatuses, archiveSafety }: { user: User; legalStatuses: UserConsentStatus[]; archiveSafety: UserArchiveSafety | null }) {
   return (
     <div className="list">
+      {isIncompleteVkRegistration(user) && (
+        <p className="notice">
+          <strong>Незавершённая VK-регистрация.</strong> Вход через VK начат, профиль не завершён.
+        </p>
+      )}
       <div className="detail-grid">
         <div className="detail-grid__full"><h3>Роль и доступ</h3></div>
         <span>Роль</span><strong>{userRoleLabel(user.role)}</strong>
@@ -1804,8 +1846,15 @@ function userRoleLabel(role: string) {
   if (role === "performer") return "Помощник";
   if (role === "manager") return "Менеджер";
   if (role === "superadmin") return "Владелец";
-  if (role === "oauth_pending") return "Профиль не заполнен";
+  if (role === "oauth_pending") return "Незавершённая VK-регистрация";
   return "Администратор";
+}
+
+function isIncompleteVkRegistration(user: User) {
+  return user.role === "oauth_pending"
+    && user.status === "active"
+    && !user.cityId
+    && Boolean(user.identities?.some((identity) => identity.provider === "vk"));
 }
 
 function legalScopeLabel(scope: string) {

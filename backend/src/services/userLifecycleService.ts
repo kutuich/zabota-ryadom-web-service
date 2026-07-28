@@ -50,6 +50,25 @@ export type UserArchiveSafety = {
   requiredWaitDays: number;
 };
 
+export type OAuthPendingCancellationSafety = {
+  canCancel: boolean;
+  reasons: string[];
+  counts: {
+    requests: number;
+    responses: number;
+    chats: number;
+    chatMessages: number;
+    payments: number;
+    balanceTransactions: number;
+    consents: number;
+    legalConsents: number;
+    complaints: number;
+    documents: number;
+    reviews: number;
+    profileRecords: number;
+  };
+};
+
 export async function getUserArchiveSafety(userId: string, client: DbClient = prisma): Promise<UserArchiveSafety> {
   const user = await client.user.findUnique({
     where: { id: userId },
@@ -125,6 +144,80 @@ export async function getUserArchiveSafety(userId: string, client: DbClient = pr
     daysSinceBlockedOrRequested,
     requiredWaitDays: USER_ARCHIVE_WAIT_DAYS
   };
+}
+
+export async function getOAuthPendingCancellationSafety(
+  userId: string,
+  client: DbClient = prisma
+): Promise<OAuthPendingCancellationSafety> {
+  const user = await client.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      role: true,
+      status: true,
+      cityId: true,
+      balance: true,
+      bonusBalance: true,
+      clientProfile: { select: { userId: true } },
+      performerProfile: { select: { userId: true } },
+      identities: { where: { provider: "vk" }, select: { id: true } },
+      userCities: { select: { id: true } }
+    }
+  });
+  if (!user) throw new Error("user_not_found");
+
+  const [
+    requests,
+    responses,
+    chats,
+    chatMessages,
+    payments,
+    balanceTransactions,
+    consents,
+    legalConsents,
+    complaints,
+    documents,
+    reviews
+  ] = await Promise.all([
+    client.clientRequest.count({ where: { OR: [{ clientId: userId }, { selectedPerformerId: userId }] } }),
+    client.requestResponse.count({ where: { performerId: userId } }),
+    client.chat.count({ where: { OR: [{ clientId: userId }, { performerId: userId }] } }),
+    client.chatMessage.count({ where: { senderId: userId } }),
+    client.paymentTransaction.count({ where: { userId } }),
+    client.balanceTransaction.count({ where: { userId } }),
+    client.consent.count({ where: { userId } }),
+    client.userConsent.count({ where: { userId } }),
+    client.complaint.count({ where: { OR: [{ fromUserId: userId }, { againstUserId: userId }] } }),
+    client.performerDocument.count({ where: { performerId: userId } }),
+    client.review.count({ where: { OR: [{ fromUserId: userId }, { toUserId: userId }] } })
+  ]);
+  const profileRecords = Number(Boolean(user.clientProfile)) + Number(Boolean(user.performerProfile)) + user.userCities.length;
+  const counts = {
+    requests,
+    responses,
+    chats,
+    chatMessages,
+    payments,
+    balanceTransactions,
+    consents,
+    legalConsents,
+    complaints,
+    documents,
+    reviews,
+    profileRecords
+  };
+  const reasons: string[] = [];
+  if (user.role !== "oauth_pending") reasons.push("Роль пользователя уже выбрана.");
+  if (user.status !== "active") reasons.push("Профиль уже не является активной незавершённой регистрацией.");
+  if (user.identities.length === 0) reasons.push("Профиль не связан с VK ID.");
+  if (user.cityId) reasons.push("У пользователя уже выбран город.");
+  if (user.balance !== 0 || user.bonusBalance !== 0) reasons.push("У пользователя есть остаток на балансе.");
+  if (Object.values(counts).some((count) => count > 0)) {
+    reasons.push("У пользователя уже есть история действий.");
+  }
+
+  return { canCancel: reasons.length === 0, reasons, counts };
 }
 
 function latestDate(...dates: Array<Date | null>) {

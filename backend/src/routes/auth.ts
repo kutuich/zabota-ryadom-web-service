@@ -160,6 +160,12 @@ authRouter.post(
   })
 );
 
+authRouter.post("/oauth/cancel", (_req, res) => {
+  clearOAuthCookie(res, VK_OAUTH_TRANSACTION_COOKIE);
+  clearOAuthCookie(res, VK_OAUTH_SESSION_COOKIE);
+  res.json({ ok: true });
+});
+
 authRouter.post(
   "/oauth/complete-profile",
   authenticate,
@@ -526,12 +532,12 @@ function oauthFailureRedirect() {
 
 function setOAuthCookie(res: Response, name: string, value: string, maxAgeSeconds: number) {
   const secure = env.nodeEnv === "production" ? "; Secure" : "";
-  res.setHeader("Set-Cookie", `${name}=${encodeURIComponent(value)}; Path=/api/auth/oauth; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`);
+  res.append("Set-Cookie", `${name}=${encodeURIComponent(value)}; Path=/api/auth/oauth; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`);
 }
 
 function clearOAuthCookie(res: Response, name: string) {
   const secure = env.nodeEnv === "production" ? "; Secure" : "";
-  res.setHeader("Set-Cookie", `${name}=; Path=/api/auth/oauth; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
+  res.append("Set-Cookie", `${name}=; Path=/api/auth/oauth; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
 }
 
 function readCookie(req: Request, name: string) {

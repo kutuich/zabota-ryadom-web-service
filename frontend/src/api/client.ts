@@ -131,6 +131,7 @@ export const api = {
     apiFetch<{ token: string; user: User; profileComplete: boolean; nextPath: string }>("/auth/oauth/session", {
       method: "POST"
     }),
+  cancelOAuth: () => apiFetch<{ ok: true }>("/auth/oauth/cancel", { method: "POST" }),
   startVkLink: () =>
     apiFetch<{ authorizationUrl: string }>("/auth/oauth/vk/start", { method: "POST" }),
   completeOAuthProfile: (body: {
@@ -303,6 +304,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reason })
     }),
+  adminCancelPendingOAuthRegistration: (userId: string) =>
+    apiFetch<{ user: User }>(`/admin/users/${userId}/oauth-pending/cancel`, { method: "POST" }),
   adminUpdatePerformerVerification: (userId: string, body: Record<string, unknown>) =>
     apiFetch(`/admin/performers/${userId}/verification`, { method: "PATCH", body: JSON.stringify(body) }),
   adminUpdatePerformerDocumentStatus: (documentId: string, status: string, adminComment?: string) =>

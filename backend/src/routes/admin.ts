@@ -23,7 +23,7 @@ import type { UserRole } from "../types/domain";
 import { asyncHandler, HttpError } from "../utils/http";
 import { normalizeSettlementName } from "../services/settlementService";
 import { serializeAgreedTerms } from "../services/agreementTermsService";
-import { getUserArchiveSafety } from "../services/userLifecycleService";
+import { getOAuthPendingCancellationSafety, getUserArchiveSafety } from "../services/userLifecycleService";
 import { signUserToken, type ActingRole } from "../services/authTokenService";
 import { assignManagerRole, blockUser, revokeManagerRole, unblockUser } from "../services/userAccessService";
 
@@ -121,8 +121,10 @@ adminRouter.get(
 
 adminRouter.get(
   "/users",
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    const status = typeof req.query.status === "string" ? req.query.status : "";
     const users = await prisma.user.findMany({
+      where: status ? { status } : undefined,
       include: {
         city: true,
         userCities: { where: { isActive: true }, include: { city: true } },
@@ -197,6 +199,46 @@ adminRouter.delete(
       "Физическое удаление пользователей запрещено. Используйте блокировку или архивирование.",
       "physical_user_deletion_forbidden"
     );
+  })
+);
+
+adminRouter.post(
+  "/users/:id/oauth-pending/cancel",
+  asyncHandler(async (req, res) => {
+    const result = await prisma.$transaction(async (tx) => {
+      const current = await tx.user.findUnique({ where: { id: req.params.id } });
+      if (!current) throw new HttpError(404, "Пользователь не найден", "user_not_found");
+      const safety = await getOAuthPendingCancellationSafety(current.id, tx);
+      if (!safety.canCancel) {
+        throw new HttpError(
+          409,
+          "Нельзя отменить регистрацию: у пользователя уже есть история действий. Используйте блокировку или архивирование по правилам безопасности.",
+          "oauth_pending_cancel_blocked",
+          safety
+        );
+      }
+      const reason = "Незавершённая VK-регистрация отменена администратором";
+      const user = await tx.user.update({
+        where: { id: current.id },
+        data: {
+          status: "archived",
+          archivedAt: new Date(),
+          archivedByAdminId: req.user!.id,
+          archiveReason: reason,
+          archiveBlockedReason: null
+        }
+      });
+      await writeAudit(req.user!.id, "admin.oauth_pending.cancel", "user", user.id, {
+        reason: "oauth_pending_cancelled",
+        actorUserId: req.user!.id,
+        targetUserId: user.id,
+        source: "admin_panel",
+        safety
+      }, tx);
+      return { user, safety };
+    });
+    const { passwordHash: _passwordHash, ...safeUser } = result.user;
+    res.json({ user: safeUser, safety: result.safety });
   })
 );
 

@@ -368,6 +368,14 @@ assert.match(oauthComplete, /Помощник/);
 assert.match(oauthComplete, /customer_agreement/);
 assert.match(oauthComplete, /helper_terms/);
 assert.match(oauthComplete, /marketingNotificationsAccepted/);
+assert.match(oauthComplete, /Выйти и войти другим способом/);
+assert.match(oauthComplete, /войти по телефону или email/);
+assert.match(oauthComplete, /await cancelOAuth\(\)/);
+assert.match(oauthComplete, /navigate\("\/app\/login", \{ replace: true \}\)/);
+
+const oauthAuthContext = read("context/AuthContext.tsx");
+assert.match(oauthAuthContext, /await api\.cancelOAuth\(\)/);
+assert.match(oauthAuthContext, /setStoredToken\(null\)/);
 
 const vkContactDetails = read("components/ContactDetails.tsx");
 assert.match(vkContactDetails, /Привязать VK ID/);
@@ -535,12 +543,15 @@ assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/legal\/archive\.zip/);
 assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/request-archive/);
 assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/archive-safety/);
 assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/archive/);
+assert.match(apiClient, /\/auth\/oauth\/cancel/);
+assert.match(apiClient, /\/admin\/users\/\$\{userId\}\/oauth-pending\/cancel/);
 assert.doesNotMatch(apiClient, /adminDeleteUser/);
 assert.match(apiClient, /adminAssignManager/);
 assert.match(apiClient, /adminRevokeManager/);
 assert.match(apiClient, /managerBlockUser/);
 
 const managerDashboard = read("pages/ManagerDashboard.tsx");
+assert.doesNotMatch(managerDashboard, /Отменить незавершённую регистрацию/);
 assert.doesNotMatch(managerDashboard, /Обновить статус/);
 assert.match(managerDashboard, /Кабинет менеджера/);
 assert.match(managerDashboard, /не можете менять системные настройки и роли пользователей/);
@@ -553,6 +564,11 @@ assert.doesNotMatch(managerDashboard, /Изменить статус плате�
 assert.doesNotMatch(managerDashboard, /Зачислить платёж/);
 
 const adminDashboardManagerControls = read("pages/AdminDashboard.tsx");
+assert.match(adminDashboardManagerControls, /Незавершённая VK-регистрация/);
+assert.match(adminDashboardManagerControls, /Вход через VK начат, профиль не завершён/);
+assert.match(adminDashboardManagerControls, /Отменить незавершённую регистрацию/);
+assert.match(adminDashboardManagerControls, /adminCancelPendingOAuthRegistration/);
+assert.doesNotMatch(adminDashboardManagerControls, /Удалить пользователя/);
 assert.match(adminDashboardManagerControls, /Назначить менеджером/);
 assert.match(adminDashboardManagerControls, /Снять роль менеджера/);
 
