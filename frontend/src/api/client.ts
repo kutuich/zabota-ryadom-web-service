@@ -306,11 +306,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ completedRequestDays })
     }),
-  adminGrantBonus: (userId: string, amount: number, reason: string, comment: string, bonusExpiresAt?: string) =>
-    apiFetch<BalanceSummary>(`/admin/users/${userId}/bonus`, {
-      method: "POST",
-      body: JSON.stringify({ amount, reason, comment, bonusExpiresAt })
-    }),
   adminBlockUser: (userId: string, reason: string) =>
     apiFetch<User>(`/admin/users/${userId}/block`, { method: "POST", body: JSON.stringify({ reason }) }),
   adminUnblockUser: (userId: string) =>

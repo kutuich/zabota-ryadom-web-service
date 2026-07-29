@@ -252,8 +252,8 @@ export function ManagerDashboard() {
       )}
 
       {selectedUser && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <section className="modal-panel">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" data-user-modal-backdrop onClick={() => setSelectedUser(null)}>
+          <section className="modal-panel" data-user-modal-content onClick={(event) => event.stopPropagation()}>
             <div className="card__head">
               <h2>{selectedUser.user.displayName}</h2>
               <button className="secondary-button" type="button" onClick={() => setSelectedUser(null)}>Закрыть</button>
@@ -268,23 +268,25 @@ export function ManagerDashboard() {
               <span>Дата регистрации</span><strong>{selectedUser.user.createdAt ? formatDateTimeRu(selectedUser.user.createdAt) : "не указана"}</strong>
               <span>Источник регистрации</span><strong>{registrationSourceLabel(selectedUser.user.registrationSource)}</strong>
             </div>
-            <h3>Финансы</h3>
-            <div className="detail-grid">
-              <span>Основной баланс</span><strong>{selectedUser.finance.mainBalance} ₽</strong>
-              <span>Бонусный баланс</span><strong>{selectedUser.finance.bonusBalance} ₽</strong>
-              <span>Доступно</span><strong>{selectedUser.finance.availableBalance} ₽</strong>
-            </div>
-            <div className="data-table" data-audit-table>
-              {selectedUser.finance.balanceTransactions.length === 0 ? <p>Операций баланса пока нет.</p> : selectedUser.finance.balanceTransactions.map((row) => (
-                <div className="data-row" key={row.id}>
-                  <strong>{formatDateTimeRu(row.createdAt)}</strong>
-                  <span>{row.type}</span>
-                  <span>{row.amount > 0 ? "+" : ""}{row.amount} ₽</span>
-                  <span>{row.comment ? `${row.reason}: ${row.comment}` : row.reason}</span>
-                  <span>{formatBalanceChange(row.balanceBefore, row.balanceAfter)}</span>
-                </div>
-              ))}
-            </div>
+            {isUserBalanceRole(selectedUser.user.role) ? <>
+              <h3>Финансы</h3>
+              <div className="detail-grid">
+                <span>Основной баланс</span><strong>{selectedUser.finance.mainBalance} ₽</strong>
+                <span>Бонусный баланс</span><strong>{selectedUser.finance.bonusBalance} ₽</strong>
+                <span>Доступно</span><strong>{selectedUser.finance.availableBalance} ₽</strong>
+              </div>
+              <div className="data-table" data-audit-table>
+                {selectedUser.finance.balanceTransactions.length === 0 ? <p>Операций баланса пока нет.</p> : selectedUser.finance.balanceTransactions.map((row) => (
+                  <div className="data-row" key={row.id}>
+                    <strong>{formatDateTimeRu(row.createdAt)}</strong>
+                    <span>{row.type}</span>
+                    <span>{row.amount > 0 ? "+" : ""}{row.amount} ₽</span>
+                    <span>{row.comment ? `${row.reason}: ${row.comment}` : row.reason}</span>
+                    <span>{formatBalanceChange(row.balanceBefore, row.balanceAfter)}</span>
+                  </div>
+                ))}
+              </div>
+            </> : <p className="notice">Баланс не применяется к служебной роли.</p>}
             <h3>Активность</h3>
             <div className="detail-grid">
               <span>Заявки</span><strong>{selectedUser.activity.requestsCount}</strong>
@@ -461,6 +463,10 @@ function roleLabel(role: string) {
   if (role === "superadmin") return "Суперадминистратор";
   if (role === "admin") return "Администратор";
   return "Профиль не завершён";
+}
+
+function isUserBalanceRole(role: string) {
+  return role === "client" || role === "performer";
 }
 
 function summaryLabel(key: string) {

@@ -12,7 +12,7 @@ import { PublicHelpPage } from "./pages/PublicHelpPage";
 import { VisualAuditShowcasePage } from "./pages/VisualAuditShowcasePage";
 import { OAuthCompletePage } from "./pages/OAuthCompletePage";
 import { ManagerDashboard } from "./pages/ManagerDashboard";
-import { canRoleOpenPath, defaultPathForRole, isKnownPathForRole, legacyAppRedirectPath } from "./routes/navigation";
+import { canRoleOpenPath, defaultPathForRole, isKnownPathForRole, legacyAdminSectionRedirectPath, legacyAppRedirectPath } from "./routes/navigation";
 import type { UserRole } from "./types";
 import { effectiveRoleForUser } from "./utils/authRole";
 
@@ -75,6 +75,8 @@ export function App() {
       <Route path="/app/balance/payment-pending" element={<AuthGate><PaymentPendingPage /></AuthGate>} />
       <Route path="/app/client/*" element={<RoleGate allowed={["client"]}><ClientDashboard /></RoleGate>} />
       <Route path="/app/performer/*" element={<RoleGate allowed={["performer"]}><PerformerDashboard /></RoleGate>} />
+      <Route path="/app/admin/bonuses" element={<LegacyAdminSectionRedirect />} />
+      <Route path="/app/admin/bonuses/*" element={<LegacyAdminSectionRedirect />} />
       <Route path="/app/admin/*" element={<RoleGate allowed={["admin", "superadmin"]}><AdminDashboard /></RoleGate>} />
       <Route path="/app/manager/*" element={<RoleGate allowed={["manager"]}><ManagerDashboard /></RoleGate>} />
       <Route path="/client" element={<LegacyAppRedirect />} />
@@ -118,6 +120,20 @@ function RoleGate({ allowed, children }: { allowed: UserRole[]; children: React.
 function LegacyAppRedirect() {
   const location = useLocation();
   const targetPath = legacyAppRedirectPath(location.pathname) ?? "/app";
+  return <Navigate to={`${targetPath}${location.search}${location.hash}`} replace />;
+}
+
+function LegacyAdminSectionRedirect() {
+  const { user } = useAuth();
+  const location = useLocation();
+  const effectiveRole = effectiveRoleForUser(user);
+
+  if (!user || !effectiveRole) return <Navigate to="/app" replace />;
+  if (!["admin", "superadmin"].includes(effectiveRole)) {
+    return <Navigate to={defaultPathForRole(effectiveRole)} replace />;
+  }
+
+  const targetPath = legacyAdminSectionRedirectPath(location.pathname) ?? "/app/admin/balances";
   return <Navigate to={`${targetPath}${location.search}${location.hash}`} replace />;
 }
 

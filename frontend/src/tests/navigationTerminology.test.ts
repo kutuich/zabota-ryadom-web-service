@@ -14,6 +14,7 @@ import {
   clientNavigation,
   defaultPathForRole,
   isKnownPathForRole,
+  legacyAdminSectionRedirectPath,
   legacyAppRedirectPath,
   managerNavigation,
   performerNavigation,
@@ -21,8 +22,16 @@ import {
 } from "../routes/navigation";
 import { formatDateRu, formatTimeRu, parseDateRu } from "../utils/dateTime";
 import { effectiveRoleForUser } from "../utils/authRole";
+import {
+  adminPaymentDisplayStatus,
+  adminPaymentProviderLabel,
+  formatPaymentAge,
+  PENDING_PAYMENT_ACTIVE_WINDOW_MS,
+  paymentRefreshResultMessage
+} from "../utils/paymentDisplay";
 
 const sourceRoot = fileURLToPath(new URL("..", import.meta.url));
+const backendSourceRoot = fileURLToPath(new URL("../../../backend/src/", import.meta.url));
 
 function walkFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -35,6 +44,10 @@ function walkFiles(dir: string): string[] {
 
 function read(relativePath: string) {
   return readFileSync(join(sourceRoot, relativePath), "utf8");
+}
+
+function readBackend(relativePath: string) {
+  return readFileSync(join(backendSourceRoot, relativePath), "utf8");
 }
 
 const clientPaths = [
@@ -102,7 +115,6 @@ const adminPaths = [
   "/app/admin/balances",
   "/app/admin/payments",
   "/app/admin/npd-register",
-  "/app/admin/bonuses",
   "/app/admin/blocked",
   "/app/admin/categories",
   "/app/admin/legal",
@@ -131,6 +143,13 @@ assert.equal(defaultPathForRole("client"), "/app/client/requests");
 assert.equal(defaultPathForRole("performer"), "/app/performer/requests");
 assert.equal(defaultPathForRole("admin"), "/app/admin");
 assert.equal(defaultPathForRole("superadmin"), "/app/admin");
+
+const adminFinanceItems = adminNavigation.find((group) => group.label === "Финансы")?.items.map((item) => item.label);
+assert.deepEqual(adminFinanceItems, ["Балансы", "Платежи", "Мой налог"]);
+assert.equal(adminNavigation.flatMap((group) => group.items).some((item) => item.label === "Начисления"), false);
+assert.equal(isKnownPathForRole("admin", "/app/admin/bonuses"), false);
+assert.equal(legacyAdminSectionRedirectPath("/app/admin/bonuses"), "/app/admin/balances");
+assert.equal(legacyAdminSectionRedirectPath("/app/admin/bonuses/legacy"), "/app/admin/balances");
 
 assert.equal(canRoleOpenPath("client", "/app/admin"), false);
 assert.equal(canRoleOpenPath("client", "/app/performer/requests"), false);
@@ -460,6 +479,9 @@ assert.match(globalStyles, /\.span-full\s*\{[\s\S]*?grid-column:\s*1 \/ -1/);
 assert.match(globalStyles, /\.role-nav--user \.role-nav__group--more\s*\{[\s\S]*?margin-left:\s*auto/);
 assert.match(globalStyles, /\.checkbox-copy\s*\{[\s\S]*?display:\s*grid/);
 assert.match(globalStyles, /\.consent-document-link\s*\{[\s\S]*?font-weight:\s*700/);
+assert.match(globalStyles, /\.admin-user-actions\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2/);
+assert.match(globalStyles, /\.detail-grid__full\s*\{[\s\S]*?grid-column:\s*1 \/ -1/);
+assert.match(globalStyles, /\.legal-consent-row \[data-label\]::before/);
 
 const clientPricingUi = read("pages/ClientDashboard.tsx");
 for (const expectedPackage of [
@@ -542,6 +564,27 @@ assert.match(adminPaymentsPage, /Тестовый T-Bank/);
 assert.match(adminPaymentsPage, /payment\.terminalMode === "test"/);
 assert.match(adminPaymentsPage, /payment\.terminalMode === "live"/);
 assert.doesNotMatch(adminPaymentsPage, /комисси/i);
+assert.match(adminPaymentsPage, /Внутренний номер заказа в сервисе\. Формируется приложением и передаётся в T-Bank\./);
+assert.match(adminPaymentsPage, /Номер платежа в T-Bank\. Формируется банком и используется для сверки, статуса и возврата\./);
+assert.match(adminPaymentsPage, /Пользователь открыл форму оплаты, но платёж не был завершён\. Деньги не поступили, баланс не зачислен\./);
+assert.match(adminPaymentsPage, /Возраст платежа/);
+assert.match(adminPaymentsPage, /Режим терминала/);
+
+const paymentNow = new Date("2026-07-29T12:00:00.000Z");
+const recentPending = { status: "pending", createdAt: new Date(paymentNow.getTime() - PENDING_PAYMENT_ACTIVE_WINDOW_MS + 1).toISOString() };
+const stalePending = { status: "pending", createdAt: new Date(paymentNow.getTime() - PENDING_PAYMENT_ACTIVE_WINDOW_MS).toISOString() };
+assert.deepEqual(adminPaymentDisplayStatus(recentPending, paymentNow), { label: "Ожидает оплаты", tone: "warning", isStalePending: false });
+assert.deepEqual(adminPaymentDisplayStatus(stalePending, paymentNow), { label: "Не завершён", tone: "neutral", isStalePending: true });
+assert.equal(adminPaymentDisplayStatus({ ...stalePending, status: "waiting_payment" }, paymentNow).label, "Не завершён");
+assert.equal(adminPaymentDisplayStatus({ ...stalePending, status: "succeeded" }, paymentNow).label, "Успешно");
+assert.equal(adminPaymentDisplayStatus({ ...stalePending, status: "failed" }, paymentNow).label, "Не прошёл");
+assert.equal(adminPaymentProviderLabel("tbank", "test"), "Тестовый T-Bank");
+assert.equal(adminPaymentProviderLabel("tbank", "live"), "Т-Банк");
+assert.equal(formatPaymentAge(new Date(paymentNow.getTime() - 95 * 60_000).toISOString(), paymentNow), "1 ч 35 мин");
+assert.equal(paymentRefreshResultMessage("pending"), "Статус обновлён. Оплата не завершена.");
+assert.equal(paymentRefreshResultMessage("succeeded"), "Статус обновлён. Платёж успешно оплачен.");
+assert.equal(paymentRefreshResultMessage("failed"), "Статус обновлён. Платёж не прошёл.");
+assert.equal(paymentRefreshResultMessage("refunded"), "Обнаружен возврат в T-Bank.");
 
 const trialBalanceAdminDashboard = read("pages/AdminDashboard.tsx");
 assert.match(trialBalanceAdminDashboard, /Пробный период/);
@@ -554,9 +597,26 @@ assert.match(trialBalanceAdminDashboard, /Помощник<\/strong><span>50 ₽
 assert.match(trialBalanceAdminDashboard, /Изменение сервисного сбора временно недоступно/);
 assert.doesNotMatch(trialBalanceAdminDashboard, /Удалить пользователя/);
 assert.match(trialBalanceAdminDashboard, /Заблокировать/);
-assert.match(trialBalanceAdminDashboard, /Запросить архивирование/);
+assert.doesNotMatch(trialBalanceAdminDashboard, /Запросить архивирование/);
+assert.match(trialBalanceAdminDashboard, /Запланировать архивирование/);
+assert.match(trialBalanceAdminDashboard, /Архивировать пользователя/);
 assert.match(trialBalanceAdminDashboard, /Основной баланс/);
-assert.match(trialBalanceAdminDashboard, /Архивирование сейчас запрещено/);
+assert.doesNotMatch(trialBalanceAdminDashboard, /Архивирование сейчас запрещено/);
+assert.match(trialBalanceAdminDashboard, /Сейчас пользователя нельзя архивировать/);
+assert.doesNotMatch(trialBalanceAdminDashboard, /Баланс пользователей/);
+assert.match(trialBalanceAdminDashboard, /Менеджеры/);
+assert.match(trialBalanceAdminDashboard, /Активных:/);
+assert.match(trialBalanceAdminDashboard, /data-profile-field={testId}/);
+assert.match(trialBalanceAdminDashboard, /label="Телефон" value={user\.phone\?\.trim\(\) \|\| "не указан"}/);
+assert.match(trialBalanceAdminDashboard, /label="Email" value={user\.email\?\.trim\(\) \|\| "не указан"}/);
+assert.match(trialBalanceAdminDashboard, /label="Роль" value={userRoleLabel\(user\.role\)}/);
+assert.doesNotMatch(trialBalanceAdminDashboard, /<span>User-Agent<\/span>/);
+assert.match(trialBalanceAdminDashboard, /balanceUserRoles\.has\(selectedUser\.role\)/);
+assert.match(trialBalanceAdminDashboard, /Баланс не применяется к служебной роли/);
+assert.match(trialBalanceAdminDashboard, /Корректировка баланса доступна только для Заказчиков и Помощников/);
+assert.match(trialBalanceAdminDashboard, /data-modal-backdrop onClick={onClose}/);
+assert.match(trialBalanceAdminDashboard, /data-modal-content onClick=\{\(event\) => event\.stopPropagation\(\)\}/);
+assert.match(trialBalanceAdminDashboard, /type="button" onClick=\{onClose\}>Закрыть/);
 
 const legalPages = read("pages/LegalPages.tsx");
 assert.match(legalPages, /Назад к юридическим документам/);
@@ -627,6 +687,11 @@ assert.match(managerDashboard, /<select required value=\{value\.customerUserId\}
 assert.match(managerDashboard, /row\.role === "client" && row\.status === "active"/);
 assert.match(managerDashboard, /Основной баланс/);
 assert.match(managerDashboard, /Бонусный баланс/);
+assert.match(managerDashboard, /isUserBalanceRole\(selectedUser\.user\.role\)/);
+assert.match(managerDashboard, /Баланс не применяется к служебной роли/);
+assert.match(managerDashboard, /data-user-modal-backdrop onClick=\{\(\) => setSelectedUser\(null\)\}/);
+assert.match(managerDashboard, /data-user-modal-content onClick=\{\(event\) => event\.stopPropagation\(\)\}/);
+assert.match(managerDashboard, /type="button" onClick=\{\(\) => setSelectedUser\(null\)\}>Закрыть/);
 assert.match(managerDashboard, /Последняя активность/);
 assert.match(managerDashboard, /Создано менеджером/);
 assert.match(managerDashboard, /Отклик Помощника автоматически не создаётся/);
@@ -662,6 +727,12 @@ assert.match(adminDashboardManagerControls, /disabled=\{isSubmitting \|\| invali
 assert.match(adminDashboardManagerControls, /Корректировка баланса выполнена/);
 assert.match(adminDashboardManagerControls, /Последние операции баланса/);
 assert.match(adminDashboardManagerControls, /createdByAdmin\?\.displayName/);
+assert.match(adminDashboardManagerControls, /selectedBalanceUser/);
+assert.match(adminDashboardManagerControls, /Найти пользователя/);
+assert.match(adminDashboardManagerControls, /balanceUsers = useMemo/);
+
+const legalServiceSource = readBackend("services/legalService.ts");
+assert.match(legalServiceSource, /"userAgent"/);
 
 assert.match(appRoutes, /path="\/app\/manager\/\*"/);
 

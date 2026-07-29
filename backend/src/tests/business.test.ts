@@ -571,13 +571,22 @@ async function runAdminBalanceAdjustmentTests() {
   const manager = await prisma.user.create({
     data: { role: "manager", rolesJson: '["manager"]', displayName: `Balance manager ${suffix}`, status: "active" }
   });
+  const adminTarget = await prisma.user.create({
+    data: { role: "admin", rolesJson: '["admin"]', displayName: `Balance admin ${suffix}`, status: "active" }
+  });
+  const superadminTarget = await prisma.user.create({
+    data: { role: "superadmin", rolesJson: '["superadmin"]', displayName: `Balance superadmin ${suffix}`, status: "active" }
+  });
+  const performerTarget = await prisma.user.create({
+    data: { role: "performer", rolesJson: '["performer"]', displayName: `Balance helper ${suffix}`, status: "active" }
+  });
   const archived = await prisma.user.create({
     data: { role: "client", rolesJson: '["client"]', displayName: `Balance archived ${suffix}`, status: "archived" }
   });
   const pending = await prisma.user.create({
     data: { role: "oauth_pending", rolesJson: "[]", displayName: `Balance pending ${suffix}`, status: "active" }
   });
-  createdUserIds.push(target.id, manager.id, archived.id, pending.id);
+  createdUserIds.push(target.id, manager.id, adminTarget.id, superadminTarget.id, performerTarget.id, archived.id, pending.id);
   const managerToken = tokenFor(manager.id, "manager");
   const targetToken = tokenFor(target.id, "client");
   const endpoint = `/api/admin/users/${target.id}/balance-adjustment`;
@@ -592,9 +601,15 @@ async function runAdminBalanceAdjustmentTests() {
   });
 
   try {
+    let response = await apiRequest(app, "/api/admin/summary", { method: "GET", token: adminToken });
+    assert.equal(response.status, 200);
+    assert.ok(response.payload.managersTotal >= 1);
+    assert.ok(response.payload.managersActive >= 1);
+    assert.equal(Object.prototype.hasOwnProperty.call(response.payload, "balanceTotal"), false);
+
     const paymentCountBefore = await prisma.paymentTransaction.count({ where: { userId: target.id } });
     const creditBody = body({ clientRequestId: `credit-main-${suffix}` });
-    let response = await apiRequest(app, endpoint, { method: "POST", token: adminToken, body: creditBody });
+    response = await apiRequest(app, endpoint, { method: "POST", token: adminToken, body: creditBody });
     assert.equal(response.status, 200);
     assert.equal(response.payload.user.balance, 450);
     assert.equal(response.payload.user.bonusBalance, 200);
@@ -649,6 +664,22 @@ async function runAdminBalanceAdjustmentTests() {
     response = await apiRequest(app, `/api/admin/users/${pending.id}/balance-adjustment`, { method: "POST", token: adminToken, body: body() });
     assert.equal(response.status, 409);
     assert.equal(response.payload.code, "oauth_pending_balance_adjustment_forbidden");
+    for (const serviceTarget of [adminTarget, superadminTarget, manager]) {
+      response = await apiRequest(app, `/api/admin/users/${serviceTarget.id}/balance-adjustment`, {
+        method: "POST",
+        token: adminToken,
+        body: body()
+      });
+      assert.equal(response.status, 409);
+      assert.equal(response.payload.code, "balance_adjustment_target_forbidden");
+    }
+    response = await apiRequest(app, `/api/admin/users/${performerTarget.id}/balance-adjustment`, {
+      method: "POST",
+      token: adminToken,
+      body: body({ clientRequestId: `performer-credit-${suffix}` })
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.user.role, "performer");
 
     response = await apiRequest(app, endpoint, { method: "POST", token: managerToken, body: body() });
     assert.equal(response.status, 403);

@@ -27,9 +27,11 @@ const summaryLabels: Record<string, string> = {
   requestsTotal: "Заявок",
   chatsTotal: "Чатов",
   complaintsTotal: "Жалоб",
-  balanceTotal: "Баланс пользователей",
+  managersTotal: "Менеджеры",
   riskFlagsTotal: "Риски"
 };
+
+const balanceUserRoles = new Set(["client", "performer"]);
 
 const lockedServiceFeeSettingKeys = new Set([
   "clientServiceFeeAmount",
@@ -77,19 +79,14 @@ export function AdminDashboard() {
   const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<{ request: ClientRequest; response: any } | null>(null);
   const [expandedBalanceUserId, setExpandedBalanceUserId] = useState<string | null>(null);
+  const [selectedBalanceUserId, setSelectedBalanceUserId] = useState("");
+  const [balanceUserSearch, setBalanceUserSearch] = useState("");
   const [editingArticle, setEditingArticle] = useState<KnowledgeArticle | null>(null);
   const [orderingArticleId, setOrderingArticleId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [balanceAdjustmentForm, setBalanceAdjustmentForm] = useState<AdminBalanceAdjustmentInput>(() => createBalanceAdjustmentDraft());
   const [balanceAdjustmentError, setBalanceAdjustmentError] = useState("");
   const [isAdjustingBalance, setIsAdjustingBalance] = useState(false);
-  const [bonusForm, setBonusForm] = useState({
-    userId: "",
-    amount: 150,
-    reason: "Пробный бонус",
-    comment: "",
-    bonusExpiresAt: ""
-  });
   const categories = adminCategories;
 
   async function openActingCabinet(role: "customer" | "helper") {
@@ -133,7 +130,6 @@ export function AdminDashboard() {
     setLegalDocuments(legalDocumentRows);
     setLegalConsents(legalConsentRows as any);
     setLegalExportLogs(legalExportLogRows as any[]);
-    setBonusForm((current) => ({ ...current, userId: current.userId || userRows[0]?.id || "" }));
   }
 
   useEffect(() => {
@@ -148,6 +144,14 @@ export function AdminDashboard() {
   const performers = useMemo(() => users.filter((user) => user.role === "performer"), [users]);
   const activeUsers = useMemo(() => users.filter((user) => user.status !== "archived"), [users]);
   const archivedUsers = useMemo(() => users.filter((user) => user.status === "archived"), [users]);
+  const balanceUsers = useMemo(() => users.filter((user) => balanceUserRoles.has(user.role)), [users]);
+  const filteredBalanceUsers = useMemo(() => {
+    const query = balanceUserSearch.trim().toLowerCase();
+    if (!query) return balanceUsers;
+    return balanceUsers.filter((user) => [user.displayName, user.phone, user.email, user.city?.name]
+      .filter(Boolean).join(" ").toLowerCase().includes(query));
+  }, [balanceUserSearch, balanceUsers]);
+  const selectedBalanceUser = balanceUsers.find((user) => user.id === selectedBalanceUserId) ?? null;
   const selectedCity = adminCities.find((city) => city.id === cityInfoCityId) ?? null;
   const selectedCityRequests = cityInfoCityId ? requests.filter((request) => request.cityId === cityInfoCityId) : [];
   const selectedCityResponses = selectedCityRequests.flatMap((request) => (request.responses ?? []).map((response: any) => ({ request, response })));
@@ -192,12 +196,12 @@ export function AdminDashboard() {
   }
 
   async function requestArchive(user: User) {
-    const reason = window.prompt("Укажите причину запроса на архивирование:");
+    const reason = window.prompt("Укажите причину планирования архивирования:");
     if (!reason?.trim()) return;
     const result = await api.adminRequestUserArchive(user.id, reason.trim());
     setSelectedUser(result.user);
     setSelectedUserArchiveSafety(result.safety);
-    setNotice("Профиль помечен как ожидающий архивирования. Вся история сохранена.");
+    setNotice("Архивирование запланировано. Профиль будет архивирован после выполнения условий безопасности.");
     await load();
   }
 
@@ -271,8 +275,8 @@ export function AdminDashboard() {
     }
   }
 
-  async function submitBalanceAdjustment() {
-    if (!selectedUser) return;
+  async function submitBalanceAdjustment(targetUser = selectedUser) {
+    if (!targetUser) return;
     if (!Number.isSafeInteger(balanceAdjustmentForm.amount) || balanceAdjustmentForm.amount <= 0 || balanceAdjustmentForm.amount > 100_000) {
       setBalanceAdjustmentError("Укажите целую сумму от 1 до 100000 ₽.");
       return;
@@ -285,17 +289,17 @@ export function AdminDashboard() {
       ? `начислить ${balanceAdjustmentForm.amount} ₽ на ${balanceAdjustmentForm.wallet === "main" ? "основной баланс" : "бонусный баланс"}`
       : `списать ${balanceAdjustmentForm.amount} ₽ с ${balanceAdjustmentForm.wallet === "main" ? "основного баланса" : "бонусного баланса"}`;
     if (!window.confirm(
-      `Вы действительно хотите ${action} пользователя ${selectedUser.displayName}? Операция будет записана в историю и аудит.`
+      `Вы действительно хотите ${action} пользователя ${targetUser.displayName}? Операция будет записана в историю и аудит.`
     )) return;
 
     setIsAdjustingBalance(true);
     setBalanceAdjustmentError("");
     try {
-      const result = await api.adminAdjustBalance(selectedUser.id, {
+      const result = await api.adminAdjustBalance(targetUser.id, {
         ...balanceAdjustmentForm,
         comment: balanceAdjustmentForm.comment.trim()
       });
-      setSelectedUser((current) => current ? { ...current, ...result.user } : current);
+      setSelectedUser((current) => current?.id === targetUser.id ? { ...current, ...result.user } : current);
       setBalanceAdjustmentForm(createBalanceAdjustmentDraft());
       setNotice("Корректировка баланса выполнена.");
       await load();
@@ -339,22 +343,6 @@ export function AdminDashboard() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Не удалось снять роль менеджера.");
     }
-  }
-
-  async function grantBonus() {
-    if (bonusForm.comment.trim().length < 10) {
-      setNotice("Укажите комментарий не короче 10 символов.");
-      return;
-    }
-    await api.adminGrantBonus(
-      bonusForm.userId,
-      Number(bonusForm.amount),
-      bonusForm.reason,
-      bonusForm.comment,
-      bonusForm.bonusExpiresAt || undefined
-    );
-    setNotice("Бонус начислен и записан в журнал операций.");
-    await load();
   }
 
   async function verifyPerformer(user: User) {
@@ -690,11 +678,12 @@ export function AdminDashboard() {
             </div>
           </section>
           <section className="panel-grid">
-            {Object.entries(summary).map(([key, value]) => (
+            {Object.entries(summary).filter(([key]) => key !== "managersActive").map(([key, value]) => (
               <div className="metric" key={key}>
                 <ShieldAlert size={20} />
                 <span>{summaryLabels[key] ?? key}</span>
-                <strong>{value}</strong>
+                <strong>{key === "managersTotal" ? summary.managersActive ?? 0 : value}</strong>
+                {key === "managersTotal" && <small>Активных: {summary.managersActive ?? 0} · Всего: {value}</small>}
               </div>
             ))}
             <button className="secondary-button" type="button" onClick={load}>
@@ -999,12 +988,49 @@ export function AdminDashboard() {
       )}
 
       {activeTab === "Балансы" && (
-        <div className="data-table">
-          {users.map((user) => (
+        <div className="list admin-balances-page">
+          <section className="plain-section">
+            <div className="card__head">
+              <div>
+                <h2>Балансы пользователей</h2>
+                <p className="privacy-note">Корректировка баланса доступна только для Заказчиков и Помощников. Для администраторов, супер-администраторов и менеджеров баланс не используется.</p>
+              </div>
+            </div>
+            <div className="form-grid admin-balance-user-picker">
+              <label>
+                Найти пользователя
+                <input value={balanceUserSearch} onChange={(event) => setBalanceUserSearch(event.target.value)} placeholder="Имя, телефон, email или город" />
+              </label>
+              <label>
+                Выбрать пользователя
+                <select value={selectedBalanceUserId} onChange={(event) => {
+                  setSelectedBalanceUserId(event.target.value);
+                  setBalanceAdjustmentForm(createBalanceAdjustmentDraft());
+                  setBalanceAdjustmentError("");
+                }}>
+                  <option value="">Не выбран</option>
+                  {filteredBalanceUsers.map((user) => <option key={user.id} value={user.id}>{user.displayName} — {userRoleLabel(user.role)}</option>)}
+                </select>
+              </label>
+            </div>
+          </section>
+          {selectedBalanceUser && (
+            <BalanceAdjustmentPanel
+              user={selectedBalanceUser}
+              transactions={transactions.filter((transaction) => transaction.userId === selectedBalanceUser.id).slice(0, 20)}
+              form={balanceAdjustmentForm}
+              error={balanceAdjustmentError}
+              isSubmitting={isAdjustingBalance}
+              onChange={setBalanceAdjustmentForm}
+              onSubmit={() => void submitBalanceAdjustment(selectedBalanceUser)}
+            />
+          )}
+          <div className="data-table">
+          {filteredBalanceUsers.map((user) => (
             <div className="balance-group" key={user.id}>
               <button className="data-row data-row--button" type="button" onClick={() => setExpandedBalanceUserId(expandedBalanceUserId === user.id ? null : user.id)}>
                 <strong>{user.displayName}</strong>
-                <span>{user.role}</span>
+                  <span>{userRoleLabel(user.role)}</span>
                 <span>Основной: {user.balance} ₽</span>
                 <span>Бонусный: {user.bonusBalance} ₽</span>
                 <strong>Всего: {user.balance + user.bonusBalance} ₽</strong>
@@ -1027,62 +1053,14 @@ export function AdminDashboard() {
               )}
             </div>
           ))}
+          {filteredBalanceUsers.length === 0 && <p className="empty-text">Подходящие Заказчики и Помощники не найдены.</p>}
+          </div>
         </div>
       )}
 
       {activeTab === "Платежи" && <AdminPaymentsPage />}
 
       {activeTab === "Мой налог" && <AdminNpdRegisterPage />}
-
-      {activeTab === "Начисления" && (
-        <section className="form-grid">
-          <p className="span-2 notice">
-            Здесь можно начислить пользователю бонусный баланс для пробного периода, акции или компенсации.
-          </p>
-          <label>
-            Пользователь
-            <select value={bonusForm.userId} onChange={(event) => setBonusForm({ ...bonusForm, userId: event.target.value })}>
-              {users.map((user) => (
-                <option key={user.id} value={user.id}>
-                  {user.displayName} ({user.role})
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Сумма
-            <input
-              type="number"
-              value={bonusForm.amount}
-              onChange={(event) => setBonusForm({ ...bonusForm, amount: Number(event.target.value) })}
-            />
-          </label>
-          <label className="span-2">
-            Причина
-            <input value={bonusForm.reason} onChange={(event) => setBonusForm({ ...bonusForm, reason: event.target.value })} />
-          </label>
-          <label>
-            Срок действия бонуса
-            <input
-              type="date"
-              value={bonusForm.bonusExpiresAt}
-              onChange={(event) => setBonusForm({ ...bonusForm, bonusExpiresAt: event.target.value })}
-            />
-            <small>{bonusForm.bonusExpiresAt ? `Выбранная дата: ${formatDateRu(bonusForm.bonusExpiresAt)}` : "Формат даты: дд.мм.гггг"}</small>
-          </label>
-          <label className="span-2">
-            Комментарий
-            <textarea
-              value={bonusForm.comment}
-              onChange={(event) => setBonusForm({ ...bonusForm, comment: event.target.value })}
-            />
-          </label>
-          <button className="primary-button span-2" type="button" onClick={grantBonus} disabled={bonusForm.comment.trim().length < 10}>
-            <Coins size={18} />
-            Начислить бонус
-          </button>
-        </section>
-      )}
 
       {activeTab === "Блокировки" && (
         <UsersTable
@@ -1308,16 +1286,20 @@ export function AdminDashboard() {
               )}
             </section>
           )}
-          <BalanceAdjustmentPanel
-            user={selectedUser}
-            transactions={transactions.filter((transaction) => transaction.userId === selectedUser.id).slice(0, 20)}
-            form={balanceAdjustmentForm}
-            error={balanceAdjustmentError}
-            isSubmitting={isAdjustingBalance}
-            onChange={setBalanceAdjustmentForm}
-            onSubmit={() => void submitBalanceAdjustment()}
-          />
-          <div className="trust-row">
+          {balanceUserRoles.has(selectedUser.role) ? (
+            <BalanceAdjustmentPanel
+              user={selectedUser}
+              transactions={transactions.filter((transaction) => transaction.userId === selectedUser.id).slice(0, 20)}
+              form={balanceAdjustmentForm}
+              error={balanceAdjustmentError}
+              isSubmitting={isAdjustingBalance}
+              onChange={setBalanceAdjustmentForm}
+              onSubmit={() => void submitBalanceAdjustment(selectedUser)}
+            />
+          ) : (
+            <p className="notice service-role-balance-note">Баланс не применяется к служебной роли.</p>
+          )}
+          <div className="admin-user-actions">
             {selectedUser.status === "active" && ["client", "performer"].includes(selectedUser.role) && (
               <button className="primary-button" type="button" onClick={() => assignManager(selectedUser)}>
                 Назначить менеджером
@@ -1336,16 +1318,16 @@ export function AdminDashboard() {
               <Archive size={18} />
               Скачать полный legal-архив пользователя ZIP
             </button>
-            {selectedUser.status !== "archived" && selectedUser.status !== "pending_archive" && (
+            {selectedUser.status !== "archived" && selectedUser.status !== "pending_archive" && !selectedUserArchiveSafety?.canArchive && (
               <button className="secondary-button" type="button" onClick={() => requestArchive(selectedUser)}>
                 <Archive size={18} />
-                Запросить архивирование
+                Запланировать архивирование
               </button>
             )}
-            {selectedUser.status === "pending_archive" && (
-              <button className="secondary-button" type="button" disabled={!selectedUserArchiveSafety?.canArchive} onClick={() => archiveUser(selectedUser)}>
+            {selectedUser.status !== "archived" && selectedUserArchiveSafety?.canArchive && (
+              <button className="secondary-button" type="button" onClick={() => archiveUser(selectedUser)}>
                 <Archive size={18} />
-                Архивировать
+                Архивировать пользователя
               </button>
             )}
             {isIncompleteVkRegistration(selectedUser) && (
@@ -1572,21 +1554,20 @@ function LegalAdminSection({
             Отсутствует обязательное согласие
           </label>
         </div>
-        <div className="data-table data-table--wide">
+        <div className="data-table data-table--wide legal-consent-overview">
           <div className="data-row data-row--header">
-            <span>Пользователь</span><span>Роль</span><span>Документ</span><span>Версия</span><span>Статус</span><span>Дата принятия</span><span>IP</span><span>User-Agent</span><span>Источник</span>
+            <span>Пользователь</span><span>Роль</span><span>Документ</span><span>Версия</span><span>Статус</span><span>Дата принятия</span><span>IP</span><span>Источник</span>
           </div>
           {filteredConsents.slice(0, 100).map((consent: any) => (
-            <div className="data-row" key={consent.id}>
-              <strong>{consent.user?.displayName ?? consent.userId}</strong>
-              <span>{userRoleLabel(consent.user?.role ?? "")}</span>
-              <span>{consent.documentTitle}</span>
-              <span>{consent.documentVersion}</span>
-              <StatusBadge tone={consent.revokedAt ? "neutral" : "success"}>{consent.revokedAt ? "Отозвано" : "Принято"}</StatusBadge>
-              <span>{formatDateTimeRu(consent.acceptedAt)}</span>
-              <span>{consent.ipAddress ?? "не записан"}</span>
-              <small>{consent.userAgent ?? "не записан"}</small>
-              <span>{consent.source}</span>
+            <div className="data-row legal-consent-row" key={consent.id}>
+              <strong data-label="Пользователь">{consent.user?.displayName ?? consent.userId}</strong>
+              <span data-label="Роль">{userRoleLabel(consent.user?.role ?? "")}</span>
+              <span data-label="Документ">{consent.documentTitle}</span>
+              <span data-label="Версия">{consent.documentVersion}</span>
+              <span data-label="Статус"><StatusBadge tone={consent.revokedAt ? "neutral" : "success"}>{consent.revokedAt ? "Отозвано" : "Принято"}</StatusBadge></span>
+              <span data-label="Дата принятия">{formatDateTimeRu(consent.acceptedAt)}</span>
+              <span data-label="IP">{consent.ipAddress ?? "не записан"}</span>
+              <span data-label="Источник">{consent.source}</span>
             </div>
           ))}
           {filteredConsents.length === 0 && <p className="empty-text">{filters.missingRequired ? "Проверка отсутствующих обязательных согласий доступна в выгрузке всех согласий." : "Согласий пока нет."}</p>}
@@ -1657,7 +1638,7 @@ function UsersTable({
           </button>
           <span>{userRoleLabel(user.role)}</span>
           <span>{user.city?.name ?? "город не выбран"}</span>
-          <span>{user.balance + user.bonusBalance} ₽</span>
+          <span>{balanceUserRoles.has(user.role) ? `${user.balance + user.bonusBalance} ₽` : "Баланс не применяется"}</span>
           <StatusBadge tone={isIncompleteVkRegistration(user) ? "warning" : statusTone(user.status)}>
             {isIncompleteVkRegistration(user) ? "Незавершённая VK-регистрация" : labelStatus(user.status)}
           </StatusBadge>
@@ -1678,12 +1659,12 @@ function UsersTable({
           {!isIncompleteVkRegistration(user) && user.status === "pending_archive" ? (
             <button className="secondary-button" type="button" onClick={() => onArchive(user)}>
               <Archive size={18} />
-              Проверить архив
+              Архивировать пользователя
             </button>
           ) : !isIncompleteVkRegistration(user) && user.status !== "archived" ? (
             <button className="secondary-button" type="button" onClick={() => onRequestArchive(user)}>
               <Archive size={18} />
-              В ожидание архива
+              Запланировать архивирование
             </button>
           ) : null}
         </div>
@@ -1694,8 +1675,8 @@ function UsersTable({
 
 function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <section className="modal-panel">
+    <div className="modal-backdrop" role="dialog" aria-modal="true" data-modal-backdrop onClick={onClose}>
+      <section className="modal-panel" data-modal-content onClick={(event) => event.stopPropagation()}>
         <div className="card__head">
           <h2>{title}</h2>
           <button className="secondary-button" type="button" onClick={onClose}>Закрыть</button>
@@ -1847,6 +1828,15 @@ function balanceTransactionTypeLabel(type: string) {
   return labels[type] ?? labelStatus(type);
 }
 
+function ProfileRow({ label, value, testId }: { label: string; value: ReactNode; testId?: "role" | "phone" | "email" }) {
+  return (
+    <div className="detail-grid__row" data-profile-field={testId}>
+      <span>{label}</span>
+      <strong data-contact-field={testId === "phone" || testId === "email" ? testId : undefined}>{value}</strong>
+    </div>
+  );
+}
+
 function UserProfile({ user, legalStatuses, archiveSafety }: { user: User; legalStatuses: UserConsentStatus[]; archiveSafety: UserArchiveSafety | null }) {
   return (
     <div className="list">
@@ -1855,47 +1845,49 @@ function UserProfile({ user, legalStatuses, archiveSafety }: { user: User; legal
           <strong>Незавершённая VK-регистрация.</strong> Вход через VK начат, профиль не завершён.
         </p>
       )}
-      <div className="detail-grid">
+      <div className="detail-grid user-profile-details">
         <div className="detail-grid__full"><h3>Роль и доступ</h3></div>
-        <span>Роль</span><strong>{userRoleLabel(user.role)}</strong>
-        <span>Предыдущая роль</span><strong>{user.roleBeforeManager ? userRoleLabel(user.roleBeforeManager) : "не указана"}</strong>
-        <span>Назначен менеджером</span><strong>{user.managerAssignedAt ? formatDateTimeRu(user.managerAssignedAt) : "нет"}</strong>
-        <span>Кем назначен</span><strong>{user.managerAssignedByAdminId ?? "не указано"}</strong>
-        <span>Телефон</span><strong data-contact-field="phone">{user.phone?.trim() || "не указан"}</strong>
-        <span>Email</span><strong data-contact-field="email">{user.email?.trim() || "не указан"}</strong>
-        <span>Город</span><strong>{user.city?.name ?? "не выбран"}</strong>
-        <span>Статус</span><strong>{labelStatus(user.status)}</strong>
-        <span>Основной баланс</span><strong>{user.balance} ₽</strong>
-        <span>Бонусный баланс</span><strong>{user.bonusBalance} ₽</strong>
-        <span>Заблокирован</span><strong>{user.blockedAt ? formatDateTimeRu(user.blockedAt) : "нет"}</strong>
-        <span>Кем заблокирован</span><strong>{user.blockedByRole ? userRoleLabel(user.blockedByRole) : "не указано"}</strong>
-        <span>Причина блокировки</span><strong>{user.blockReason ?? "нет"}</strong>
-        <span>Запрос архива</span><strong>{user.archiveRequestedAt ? formatDateTimeRu(user.archiveRequestedAt) : "нет"}</strong>
-        <span>Архивирован</span><strong>{user.archivedAt ? formatDateTimeRu(user.archivedAt) : "нет"}</strong>
-        <span>Способ входа</span><strong>{user.identities?.some((identity) => identity.provider === "vk") ? "VK" : "Телефон или email"}</strong>
+        <ProfileRow label="Роль" value={userRoleLabel(user.role)} testId="role" />
+        <ProfileRow label="Предыдущая роль" value={user.roleBeforeManager ? userRoleLabel(user.roleBeforeManager) : "не указана"} />
+        <ProfileRow label="Назначен менеджером" value={user.managerAssignedAt ? `да, ${formatDateTimeRu(user.managerAssignedAt)}` : "нет"} />
+        <ProfileRow label="Кем назначен" value={user.managerAssignedByAdminId ?? "не указано"} />
+        <ProfileRow label="Телефон" value={user.phone?.trim() || "не указан"} testId="phone" />
+        <ProfileRow label="Email" value={user.email?.trim() || "не указан"} testId="email" />
+        <ProfileRow label="Город" value={user.city?.name ?? "не выбран"} />
+        <ProfileRow label="Статус" value={labelStatus(user.status)} />
+        {balanceUserRoles.has(user.role) && <>
+          <ProfileRow label="Основной баланс" value={`${user.balance} ₽`} />
+          <ProfileRow label="Бонусный баланс" value={`${user.bonusBalance} ₽`} />
+        </>}
+        {!balanceUserRoles.has(user.role) && <ProfileRow label="Баланс" value="Не применяется к служебной роли" />}
+        <ProfileRow label="Заблокирован" value={user.blockedAt ? `да, ${formatDateTimeRu(user.blockedAt)}` : "нет"} />
+        <ProfileRow label="Кем заблокирован" value={user.blockedByRole ? userRoleLabel(user.blockedByRole) : "не указано"} />
+        <ProfileRow label="Причина блокировки" value={user.blockReason ?? "не указано"} />
+        <ProfileRow label="Запланировано архивирование" value={user.archiveRequestedAt ? `да, ${formatDateTimeRu(user.archiveRequestedAt)}` : "нет"} />
+        <ProfileRow label="Архивирован" value={user.archivedAt ? `да, ${formatDateTimeRu(user.archivedAt)}` : "нет"} />
+        <ProfileRow label="Способ входа" value={user.identities?.some((identity) => identity.provider === "vk") ? "VK" : "Телефон или email"} />
         {user.identities?.filter((identity) => identity.provider === "vk").map((identity) => (
-          <div className="detail-grid__full" key={identity.id}>
-            <span>VK: {identity.displayName ?? "имя не указано"}; привязан {formatDateTimeRu(identity.createdAt)}</span>
-          </div>
+          <ProfileRow key={identity.id} label="VK" value={`${identity.displayName ?? "имя не указано"}; привязан ${formatDateTimeRu(identity.createdAt)}`} />
         ))}
         {user.clientProfile && <>
-          <span>Рейтинг заказчика</span><strong>{user.clientProfile.rating}</strong>
-          <span>Выполненных заявок</span><strong>{user.clientProfile.completedRequestsCount}</strong>
+          <ProfileRow label="Рейтинг заказчика" value={user.clientProfile.rating} />
+          <ProfileRow label="Выполненных заявок" value={user.clientProfile.completedRequestsCount} />
         </>}
         {user.performerProfile && <>
-          <span>Рейтинг помощника</span><strong>{user.performerProfile.rating}</strong>
-          <span>Статус профиля</span><strong>{labelTrust(user.performerProfile.trustLevel)}</strong>
-          <span>Самозанятость</span><strong>{labelSelfEmployed(user.performerProfile.selfEmployedStatus)}</strong>
-          <span>Справка</span><strong>{labelCriminalRecord(user.performerProfile.criminalRecordCertificateStatus)}</strong>
-          <span>Услуги</span><strong>{formatJsonList(user.performerProfile.services)}</strong>
-          <span>Навыки</span><strong>{formatJsonList(user.performerProfile.skills)}</strong>
+          <ProfileRow label="Рейтинг помощника" value={user.performerProfile.rating} />
+          <ProfileRow label="Статус профиля" value={labelTrust(user.performerProfile.trustLevel)} />
+          <ProfileRow label="Самозанятость" value={labelSelfEmployed(user.performerProfile.selfEmployedStatus)} />
+          <ProfileRow label="Справка" value={labelCriminalRecord(user.performerProfile.criminalRecordCertificateStatus)} />
+          <ProfileRow label="Услуги" value={formatJsonList(user.performerProfile.services)} />
+          <ProfileRow label="Навыки" value={formatJsonList(user.performerProfile.skills)} />
         </>}
       </div>
       {archiveSafety && (
         <section className="plain-section">
           <h3>Проверка архивирования</h3>
-          <p>{archiveSafety.canArchive ? "Архивирование разрешено." : "Архивирование сейчас запрещено."}</p>
-          <p>Основной баланс: {archiveSafety.balance} ₽. Бонусный: {archiveSafety.bonusBalance} ₽.</p>
+          <p>{archiveSafety.canArchive ? "Пользователя можно архивировать." : "Сейчас пользователя нельзя архивировать."}</p>
+          {balanceUserRoles.has(user.role) && <p>Основной баланс: {archiveSafety.balance} ₽. Бонусный: {archiveSafety.bonusBalance} ₽.</p>}
+          {!archiveSafety.canArchive && <p className="privacy-note">Пользователь будет архивирован после выполнения условий безопасности: отсутствие активных заявок, открытых платежей, споров и истечение контрольного срока.</p>}
           {archiveSafety.reasons.length > 0 && (
             <ul>{archiveSafety.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
           )}
@@ -1904,21 +1896,20 @@ function UserProfile({ user, legalStatuses, archiveSafety }: { user: User; legal
       <section className="plain-section">
         <h3>Юридические согласия</h3>
         <p className="privacy-note">Возможные статусы: Принято, Требуется, Требуется новая версия.</p>
-        <div className="data-table data-table--wide">
+        <div className="data-table legal-consent-table">
           <div className="data-row data-row--header">
-            <span>Документ</span><span>Статус</span><span>Обязательный</span><span>Версия</span><span>Дата принятия</span><span>IP</span><span>User-Agent</span>
+            <span>Документ</span><span>Статус</span><span>Обязательный</span><span>Версия</span><span>Дата принятия</span><span>IP</span>
           </div>
           {legalStatuses.map((row) => (
-            <div className="data-row" key={row.document.id}>
-              <strong>{row.document.title}</strong>
-              <StatusBadge tone={row.status === "accepted" ? "success" : row.status === "needs_new_version" ? "warning" : "neutral"}>
+            <div className="data-row legal-consent-row" key={row.document.id}>
+              <strong data-label="Документ">{row.document.title}</strong>
+              <span data-label="Статус"><StatusBadge tone={row.status === "accepted" ? "success" : row.status === "needs_new_version" ? "warning" : "neutral"}>
                 {legalStatusLabel(row.status)}
-              </StatusBadge>
-              <span>{row.document.isRequired ? "Да" : "Нет"}</span>
-              <span>{row.document.version}</span>
-              <span>{row.consent?.acceptedAt ? formatDateTimeRu(row.consent.acceptedAt) : "не принято"}</span>
-              <span>{row.consent?.ipAddress ?? "не записан"}</span>
-              <small>{row.consent?.userAgent ?? "не записан"}</small>
+              </StatusBadge></span>
+              <span data-label="Обязательный">{row.document.isRequired ? "Да" : "Нет"}</span>
+              <span data-label="Версия">{row.document.version}</span>
+              <span data-label="Дата принятия">{row.consent?.acceptedAt ? formatDateTimeRu(row.consent.acceptedAt) : "не принято"}</span>
+              <span data-label="IP">{row.consent?.ipAddress ?? "не записан"}</span>
             </div>
           ))}
           {legalStatuses.length === 0 && <p className="empty-text">Юридические согласия загружаются или пока не найдены.</p>}
@@ -2145,7 +2136,6 @@ function adminTabFromPath(pathname: string) {
   if (pathname.startsWith("/app/admin/balances")) return "Балансы";
   if (pathname.startsWith("/app/admin/npd-register")) return "Мой налог";
   if (pathname.startsWith("/app/admin/payments")) return "Платежи";
-  if (pathname.startsWith("/app/admin/bonuses")) return "Начисления";
   if (pathname.startsWith("/app/admin/blocked")) return "Блокировки";
   if (pathname.startsWith("/app/admin/categories")) return "Категории";
   if (pathname.startsWith("/app/admin/legal")) return "Юридические документы";

@@ -5,6 +5,12 @@ import { EmptyState } from "../components/EmptyState";
 import { StatusBadge } from "../components/StatusBadge";
 import type { AdminPaymentDetails, AdminPaymentFilters, AdminPaymentListItem } from "../types";
 import { formatDateTimeRu } from "../utils/dateTime";
+import {
+  adminPaymentDisplayStatus,
+  adminPaymentProviderLabel,
+  formatPaymentAge,
+  paymentRefreshResultMessage
+} from "../utils/paymentDisplay";
 
 const emptyFilters: AdminPaymentFilters = {
   status: "",
@@ -64,8 +70,13 @@ export function AdminPaymentsPage() {
     setDetailsError("");
     try {
       const result = await api.refreshPaymentStatus(id);
+      let message = paymentRefreshResultMessage(result.status);
+      if (result.status === "refunded") {
+        const syncResult = await api.syncAdminTbankPayment(id);
+        message = syncResult.message;
+      }
       await Promise.all([openPayment(id), loadPayments()]);
-      setDetailsError(result.message);
+      setDetailsError(message);
     } catch {
       setDetailsError("Не удалось проверить статус платежа.");
     } finally {
@@ -218,8 +229,9 @@ export function AdminPaymentsPage() {
               <span>Provider Payment ID</span>
               <span>Действия</span>
             </div>
-            {payments.map((payment) => (
-              <div className="data-row" key={payment.id}>
+            {payments.map((payment) => {
+              const displayStatus = adminPaymentDisplayStatus(payment);
+              return <div className="data-row" key={payment.id}>
                 <span>{formatDateTimeRu(payment.createdAt)}</span>
                 <strong>{payment.user?.displayName ?? payment.userId}</strong>
                 <span>{userRoleLabel(payment.user?.role ?? payment.userRole ?? "")}</span>
@@ -227,16 +239,16 @@ export function AdminPaymentsPage() {
                 <span>
                   {payment.provider === "tbank" && payment.terminalMode === "test"
                     ? <StatusBadge tone="warning">Тестовый T-Bank</StatusBadge>
-                    : paymentProviderLabel(payment.provider, payment.terminalMode)}
+                    : adminPaymentProviderLabel(payment.provider, payment.terminalMode)}
                 </span>
-                <StatusBadge tone={paymentStatusTone(payment.status)}>{paymentStatusLabel(payment.status)}</StatusBadge>
-                <small>{payment.orderId}</small>
-                <small>{payment.providerPaymentId ?? "не указан"}</small>
+                <StatusBadge tone={displayStatus.tone}>{displayStatus.label}</StatusBadge>
+                <small className="payment-identifier-value">{payment.orderId}</small>
+                <small className="payment-identifier-value">{payment.providerPaymentId ?? "не указан"}</small>
                 <button className="secondary-button" type="button" onClick={() => openPayment(payment.id)}>
                   Открыть
                 </button>
-              </div>
-            ))}
+              </div>;
+            })}
           </div>
         )}
       </section>
@@ -371,22 +383,33 @@ function PaymentDetails({
 }) {
   const payment = details.payment;
   const user = details.user ?? payment.user;
+  const displayStatus = adminPaymentDisplayStatus(payment);
   return (
     <div className="list">
       <div className="detail-grid">
         <span>Внутренний ID</span><strong>{payment.id}</strong>
-        <span>Order ID</span><strong>{payment.orderId}</strong>
-        <span>Provider Payment ID</span><strong>{payment.providerPaymentId ?? "не указан"}</strong>
+        <span>Order ID</span>
+        <strong className="payment-identifier-value">
+          {payment.orderId}
+          <small className="payment-detail-hint">Внутренний номер заказа в сервисе. Формируется приложением и передаётся в T-Bank.</small>
+        </strong>
+        <span>Provider Payment ID</span>
+        <strong className="payment-identifier-value">
+          {payment.providerPaymentId ?? "не указан"}
+          <small className="payment-detail-hint">Номер платежа в T-Bank. Формируется банком и используется для сверки, статуса и возврата.</small>
+        </strong>
         <span>Пользователь</span><strong>{user?.displayName ?? payment.userId}</strong>
         <span>Роль пользователя</span><strong>{userRoleLabel(user?.role ?? "")}</strong>
         <span>Сумма</span><strong>{payment.amount} {payment.currency}</strong>
         <span>Валюта</span><strong>{payment.currency}</strong>
-        <span>Провайдер</span><strong>{paymentProviderLabel(payment.provider, payment.terminalMode)}</strong>
-        <span>Статус</span><strong>{paymentStatusLabel(payment.status)}</strong>
+        <span>Провайдер</span><strong>{adminPaymentProviderLabel(payment.provider, payment.terminalMode)}</strong>
+        <span>Режим терминала</span><strong>{payment.terminalMode ?? "не указан"}</strong>
+        <span>Статус</span><strong><StatusBadge tone={displayStatus.tone}>{displayStatus.label}</StatusBadge></strong>
         <span>Статус T-Bank</span><strong>{payment.providerStatus ?? "не синхронизирован"}</strong>
         <span>Последняя сверка</span><strong>{payment.lastSyncedAt ? formatDateTimeRu(payment.lastSyncedAt) : "не выполнялась"}</strong>
         <span>Назначение</span><strong>{paymentPurposeLabel(payment.purpose)}</strong>
         <span>Дата создания</span><strong>{formatDateTimeRu(payment.createdAt)}</strong>
+        <span>Возраст платежа</span><strong>{formatPaymentAge(payment.createdAt)}</strong>
         <span>Дата оплаты</span><strong>{payment.paidAt ? formatDateTimeRu(payment.paidAt) : "не оплачено"}</strong>
         <span>Дата зачисления</span><strong>{payment.creditedAt ? formatDateTimeRu(payment.creditedAt) : "не зачислено"}</strong>
         <span>Связанная операция баланса</span>
@@ -397,7 +420,10 @@ function PaymentDetails({
         </strong>
         <span>ID операции баланса</span><strong>{payment.balanceTransactionId ?? "нет"}</strong>
       </div>
-      {payment.provider === "tbank" && ["pending", "manual_review"].includes(payment.status) && (
+      {displayStatus.isStalePending && (
+        <p className="notice notice--neutral">Пользователь открыл форму оплаты, но платёж не был завершён. Деньги не поступили, баланс не зачислен.</p>
+      )}
+      {payment.provider === "tbank" && ["pending", "waiting_payment", "manual_review"].includes(payment.status.toLowerCase()) && (
         <button className="secondary-button" type="button" onClick={onRefresh} disabled={isRefreshing}>
           <RefreshCcw size={18} />
           {isRefreshing ? "Проверяем" : "Обновить статус"}
@@ -469,34 +495,6 @@ function prettyJson(value: string) {
   } catch {
     return value;
   }
-}
-
-function paymentStatusLabel(status: string) {
-  const labels: Record<string, string> = {
-    created: "Создан",
-    pending: "Ожидает оплаты",
-    succeeded: "Успешно",
-    failed: "Не прошёл",
-    cancelled: "Отменён",
-    expired: "Истёк срок",
-    refunded: "Возврат",
-    manual_review: "На проверке"
-  };
-  return labels[status] ?? status;
-}
-
-function paymentStatusTone(status: string) {
-  if (status === "succeeded") return "success";
-  if (["failed", "cancelled", "expired"].includes(status)) return "danger";
-  if (["pending", "created", "manual_review"].includes(status)) return "warning";
-  return "neutral";
-}
-
-function paymentProviderLabel(provider: string, terminalMode?: string | null) {
-  if (provider === "mock") return "Тестовая форма";
-  if (provider === "tbank" && terminalMode === "test") return "Тестовый T-Bank";
-  if (provider === "tbank") return "Т-Банк";
-  return provider;
 }
 
 function userRoleLabel(role: string) {

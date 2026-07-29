@@ -1211,6 +1211,12 @@ textarea {
   color: #204f82;
 }
 
+.notice--neutral {
+  background: #f4f6f5;
+  border-color: #d8dedb;
+  color: #46534c;
+}
+
 .error-text {
   background: #fff0ee;
   border: 1px solid #ffd0cb;
@@ -1717,6 +1723,81 @@ textarea {
 
 .admin-balance-history .transaction-row {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.detail-grid__full {
+  grid-column: 1 / -1;
+}
+
+.user-profile-details .detail-grid__row > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-user-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-user-actions > button {
+  width: 100%;
+  min-width: 0;
+  justify-content: center;
+}
+
+.legal-consent-table .data-row {
+  grid-template-columns: minmax(220px, 1.5fr) minmax(120px, .8fr) minmax(100px, .6fr) minmax(110px, .7fr) minmax(170px, 1fr) minmax(130px, .8fr);
+}
+
+.legal-consent-overview .data-row {
+  grid-template-columns: minmax(180px, 1.1fr) minmax(100px, .7fr) minmax(220px, 1.5fr) minmax(100px, .7fr) minmax(110px, .7fr) minmax(170px, 1fr) minmax(130px, .8fr) minmax(110px, .7fr);
+}
+
+.legal-consent-row > * {
+  align-self: center;
+}
+
+@media (max-width: 700px) {
+  .admin-user-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .legal-consent-table,
+  .legal-consent-overview {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    gap: 12px;
+  }
+
+  .legal-consent-table .data-row--header,
+  .legal-consent-overview .data-row--header {
+    display: none;
+  }
+
+  .legal-consent-table .legal-consent-row,
+  .legal-consent-overview .legal-consent-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+
+  .legal-consent-row [data-label] {
+    display: grid;
+    grid-template-columns: minmax(110px, .7fr) minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .legal-consent-row [data-label]::before {
+    content: attr(data-label);
+    color: var(--text-soft);
+    font-weight: 500;
+  }
 }
 
 .trial-balance-settings {
@@ -2275,6 +2356,21 @@ summary:focus-visible {
 .data-row > * {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.payment-identifier-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.payment-detail-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
 }
 
 .public-help {

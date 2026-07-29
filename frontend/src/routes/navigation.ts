@@ -84,8 +84,7 @@ export const adminNavigation: NavGroup[] = [
     items: [
       { label: "Балансы", path: `${APP_ADMIN_PREFIX}/balances` },
       { label: "Платежи", path: `${APP_ADMIN_PREFIX}/payments` },
-      { label: "Мой налог", path: `${APP_ADMIN_PREFIX}/npd-register` },
-      { label: "Начисления", path: `${APP_ADMIN_PREFIX}/bonuses` }
+      { label: "Мой налог", path: `${APP_ADMIN_PREFIX}/npd-register` }
     ]
   },
   {
@@ -184,6 +183,13 @@ export function legacyAppRedirectPath(pathname: string) {
   if (pathname.startsWith("/performer/")) return `${APP_PERFORMER_PREFIX}${pathname.slice("/performer".length)}`;
   if (pathname === "/performer") return APP_PERFORMER_PREFIX;
   if (pathname.startsWith("/admin/")) return `${APP_ADMIN_PREFIX}${pathname.slice("/admin".length)}`;
+  return null;
+}
+
+export function legacyAdminSectionRedirectPath(pathname: string) {
+  if (pathname === `${APP_ADMIN_PREFIX}/bonuses` || pathname.startsWith(`${APP_ADMIN_PREFIX}/bonuses/`)) {
+    return `${APP_ADMIN_PREFIX}/balances`;
+  }
   return null;
 }
 

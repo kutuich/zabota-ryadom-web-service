@@ -103,7 +103,8 @@ adminRouter.get(
       requestsTotal,
       chatsTotal,
       complaintsTotal,
-      balanceRows,
+      managersTotal,
+      managersActive,
       riskFlagsTotal
     ] = await Promise.all([
       prisma.user.count(),
@@ -112,10 +113,10 @@ adminRouter.get(
       prisma.clientRequest.count(),
       prisma.chat.count(),
       prisma.complaint.count(),
-      prisma.user.aggregate({ _sum: { balance: true, bonusBalance: true } }),
+      prisma.user.count({ where: { role: "manager" } }),
+      prisma.user.count({ where: { role: "manager", status: "active" } }),
       prisma.userRiskFlag.count({ where: { resolvedAt: null } })
     ]);
-    const balanceTotal = (balanceRows._sum.balance ?? 0) + (balanceRows._sum.bonusBalance ?? 0);
 
     res.json({
       usersTotal,
@@ -124,7 +125,8 @@ adminRouter.get(
       requestsTotal,
       chatsTotal,
       complaintsTotal,
-      balanceTotal,
+      managersTotal,
+      managersActive,
       riskFlagsTotal
     });
   })
