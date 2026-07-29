@@ -12,12 +12,13 @@ import { PriceSummary } from "../components/PriceSummary";
 import { Shell } from "../components/Shell";
 import { StatusBadge } from "../components/StatusBadge";
 import { useAuth } from "../context/AuthContext";
-import type { Chat, ClientRequest, KnowledgeArticle, PricingQuote } from "../types";
+import type { CategoriesForCity, Chat, ClientRequest, KnowledgeArticle, PricingQuote } from "../types";
 import { labelCriminalRecord, labelStatus, requestDisplayTitle } from "../utils/labels";
 import { chatPathForRole, clientNavigation, sectionTitleForPath } from "../routes/navigation";
 import { formatDateRu, formatTimeRu } from "../utils/dateTime";
 import { CityCombobox } from "../components/CityCombobox";
 import { UserCitiesPanel } from "../components/UserCitiesPanel";
+import { ServiceMessagesPanel } from "../components/ServiceMessagesPanel";
 
 export function ClientDashboard() {
   const { bootstrap, user } = useAuth();
@@ -64,6 +65,9 @@ export function ClientDashboard() {
     addressComment: "",
     district: "",
     categoryId: "",
+    structuredCategoryId: "",
+    structuredSubcategoryId: "",
+    categoryTaskTemplateId: "",
     cityId: user?.cityId ?? "",
     date: "",
     timeFrom: "",
@@ -104,6 +108,9 @@ export function ClientDashboard() {
     addressComment: "",
     district: "",
     categoryId: "",
+    structuredCategoryId: "",
+    structuredSubcategoryId: "",
+    categoryTaskTemplateId: "",
     cityId: user?.cityId ?? "",
     date: "",
     timeFrom: "",
@@ -124,6 +131,7 @@ export function ClientDashboard() {
   });
   const [quote, setQuote] = useState<PricingQuote | null>(null);
   const [editQuote, setEditQuote] = useState<PricingQuote | null>(null);
+  const [structuredCategories, setStructuredCategories] = useState<CategoriesForCity | null>(null);
 
   async function load() {
     const [requestRows, chatRows, complaintRows, articleRows] = await Promise.all([
@@ -145,6 +153,12 @@ export function ClientDashboard() {
   useEffect(() => {
     setActiveChatId(routeChatId);
   }, [routeChatId]);
+
+  useEffect(() => {
+    const cityId = form.cityId || user?.cityId;
+    if (!cityId) return setStructuredCategories(null);
+    api.categoriesForRequest(cityId).then(setStructuredCategories).catch(() => setStructuredCategories(null));
+  }, [form.cityId, user?.cityId]);
 
   useEffect(() => {
     const categoryId = form.categoryId;
@@ -222,6 +236,9 @@ export function ClientDashboard() {
         ...form,
         additionalActions: buildSavedActions(form),
         categoryId: form.categoryId,
+        structuredCategoryId: form.structuredCategoryId || undefined,
+        structuredSubcategoryId: form.structuredSubcategoryId || undefined,
+        categoryTaskTemplateId: form.categoryTaskTemplateId || undefined,
         cityId: form.cityId || user?.cityId,
         helpFor: form.helpFor || undefined,
         dependentAge: form.dependentAge ? Number(form.dependentAge) : undefined,
@@ -319,6 +336,9 @@ export function ClientDashboard() {
       addressComment,
       district: request.district ?? "",
       categoryId: request.categoryId,
+      structuredCategoryId: request.categorySnapshot?.snapshot?.category?.id ?? "",
+      structuredSubcategoryId: request.categorySnapshot?.snapshot?.subcategory?.id ?? "",
+      categoryTaskTemplateId: "",
       cityId: request.cityId,
       date: request.date ? request.date.slice(0, 10) : "",
       timeFrom: request.timeFrom ?? "",
@@ -354,6 +374,9 @@ export function ClientDashboard() {
       ...editForm,
       additionalActions: buildSavedActions(editForm),
       categoryId: editForm.categoryId,
+      structuredCategoryId: editForm.structuredCategoryId || undefined,
+      structuredSubcategoryId: editForm.structuredSubcategoryId || undefined,
+      categoryTaskTemplateId: editForm.categoryTaskTemplateId || undefined,
       cityId: editForm.cityId || user?.cityId,
       helpFor: editForm.helpFor || undefined,
       dependentAge: editForm.dependentAge ? Number(editForm.dependentAge) : undefined,
@@ -583,7 +606,7 @@ export function ClientDashboard() {
               </ul>
             </div>
           )}
-          <CityCombobox cities={bootstrap?.cities ?? []} value={form.cityId} onChange={(cityId) => setForm({ ...form, cityId })} label="Город Подопечного" />
+          <CityCombobox cities={bootstrap?.cities ?? []} value={form.cityId} onChange={(cityId) => setForm({ ...form, cityId, structuredCategoryId: "", structuredSubcategoryId: "", categoryTaskTemplateId: "" })} label="Город Подопечного" />
           {form.cityId && bootstrap?.cities.find((city) => city.id === form.cityId)?.serviceStatus !== "active" && (
             <p className="notice">В этом городе пока может быть мало Помощников. Заявка будет доступна тем, кто зарегистрируется в этом городе.</p>
           )}
@@ -596,12 +619,27 @@ export function ClientDashboard() {
             <input value={form.contactPhone} onChange={(event) => setForm({ ...form, contactPhone: event.target.value })} />
           </label>
           <label>
-            Категория
+            Направление помощи
+            <select value={form.structuredCategoryId} onChange={(event) => setForm({ ...form, structuredCategoryId: event.target.value, structuredSubcategoryId: "", categoryTaskTemplateId: "" })}>
+              <option value="">Выберите направление</option>
+              {structuredCategories?.categories.map((category) => <option key={category.id} value={category.id}>{category.title}</option>)}
+            </select>
+          </label>
+          <label>
+            Типовая задача
+            <select value={form.structuredSubcategoryId} onChange={(event) => setForm({ ...form, structuredSubcategoryId: event.target.value, categoryTaskTemplateId: "" })} disabled={!form.structuredCategoryId}>
+              <option value="">Выберите задачу</option>
+              {structuredCategories?.categories.find((category) => category.id === form.structuredCategoryId)?.children?.map((category) => <option key={category.id} value={category.id}>{category.title}</option>)}
+            </select>
+          </label>
+          {form.structuredCategoryId && <CategoryGuidance categories={structuredCategories} categoryId={form.structuredCategoryId} />}
+          <label>
+            Формат расчёта
             <select
               value={form.categoryId}
               onChange={(event) => setForm({ ...form, categoryId: event.target.value })}
             >
-              <option value="">Выберите категорию</option>
+              <option value="">Выберите формат</option>
               {bootstrap?.categories.map((category) => (
                 <option key={category.id} value={category.id}>
                   {category.name}
@@ -946,6 +984,7 @@ export function ClientDashboard() {
           {activeChatId ? <ChatPanel chatId={activeChatId} /> : <p className="empty-text">Нет открытых чатов.</p>}
         </div>
       )}
+      {activeTab === "Сообщения от сервиса" && <ServiceMessagesPanel />}
 
       {activeTab === "Мои обращения" && (
         <div className="list">
@@ -1336,6 +1375,26 @@ const dependentStateOptions = [
   { value: "child", label: "Ребёнок" }
 ];
 
+function CategoryGuidance({ categories, categoryId }: { categories: CategoriesForCity | null; categoryId: string }) {
+  const category = categories?.categories.find((item) => item.id === categoryId);
+  if (!category) return null;
+  const pricing = category.pricingRules?.[0];
+  const range = pricing?.recommendedMinPrice != null
+    ? pricing.recommendedMaxPrice != null
+      ? `${pricing.recommendedMinPrice.toLocaleString("ru-RU")}–${pricing.recommendedMaxPrice.toLocaleString("ru-RU")} ₽`
+      : `от ${pricing.recommendedMinPrice.toLocaleString("ru-RU")} ₽`
+    : "по согласованию";
+  return (
+    <div className="notice span-2 category-guidance">
+      <strong>{category.title}</strong>
+      {category.descriptionForCustomer && <p>{category.descriptionForCustomer}</p>}
+      <p>Ориентир по похожим задачам: {range}. Итоговая сумма согласуется в чате.</p>
+      {category.safetyRules?.map((rule) => <p key={rule.id}>{rule.isBlocking ? "Не принимается: " : "Важно: "}{rule.description}</p>)}
+      {category.slug === "other" && <p>Опишите задачу. Сервис не принимает задачи с медицинскими процедурами, опасными работами, ремонтом, передачей паролей, оформлением кредитов и покупкой запрещённых товаров.</p>}
+    </div>
+  );
+}
+
 function toggleValue(values: string[], value: string) {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
 }
@@ -1492,6 +1551,7 @@ function clientTabFromPath(pathname: string) {
   if (pathname.startsWith("/app/client/requests/new")) return "Создать заявку";
   if (pathname.startsWith("/app/client/balance")) return "Мой баланс";
   if (pathname.startsWith("/app/client/chats")) return "Чаты";
+  if (pathname.startsWith("/app/client/messages")) return "Сообщения от сервиса";
   if (pathname.startsWith("/app/client/profile")) return "Мой профиль";
   if (pathname.startsWith("/app/client/support")) return "Мои обращения";
   if (pathname.startsWith("/app/client/help")) return "Помощь / FAQ";

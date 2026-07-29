@@ -10,6 +10,8 @@ import { managerNavigation, sectionTitleForPath } from "../routes/navigation";
 import type { Chat, City, ClientRequest, ManagerCreateRequestInput, ManagerUserDetails, ServiceCategory, User } from "../types";
 import { formatDateTimeRu } from "../utils/dateTime";
 import { labelStatus } from "../utils/labels";
+import { ServiceCommunicationsPage } from "./ServiceCommunicationsPage";
+import { UserServiceCommunicationPanel } from "../components/UserServiceCommunicationPanel";
 
 type ManagerRecord = Record<string, any>;
 
@@ -234,7 +236,7 @@ export function ManagerDashboard() {
           <ReadOnlyRows title="Заявки" rows={requests} render={(row) => requestRow(row, () => void openDetail("request", row.id))} />
         </div>
       )}
-      {activeTab === "Чаты" && <ReadOnlyRows title="Чаты" rows={chats} render={(row) => chatRow(row, () => void openDetail("chat", row.id))} />}
+      {activeTab === "Чаты" && <ServiceCommunicationsPage canBroadcast={false} requestChats={<ReadOnlyRows title="Чаты" rows={chats} render={(row) => chatRow(row, () => void openDetail("chat", row.id))} />} />}
       {activeTab === "Обращения" && <ReadOnlyRows title="Обращения" rows={complaints} render={(row) => complaintRow(row, () => void openDetail("complaint", row.id))} />}
       {activeTab === "Платежи" && <ReadOnlyRows title="Платежи" rows={payments} render={paymentRow} />}
       {activeTab === "Операции баланса" && <ReadOnlyRows title="Операции баланса" rows={transactions} render={transactionRow} />}
@@ -259,6 +261,7 @@ export function ManagerDashboard() {
               <button className="secondary-button" type="button" onClick={() => setSelectedUser(null)}>Закрыть</button>
             </div>
             <h3>Основные данные</h3>
+            <UserServiceCommunicationPanel userId={selectedUser.user.id} />
             <div className="detail-grid">
               <span>Роль</span><strong>{roleLabel(selectedUser.user.role)}</strong>
               <span>Статус</span><strong>{labelStatus(selectedUser.user.status)}</strong>

@@ -62,6 +62,29 @@ import {
   requiredDocumentTypesForRegistration,
   roleToLegalScope
 } from "../services/legalService";
+import {
+  buildCityTemplateExport,
+  categoriesForCity,
+  createDraftFromImport,
+  createRequestCategorySnapshotTx,
+  createStructureFromParent,
+  ensureFederalCategoryStructure,
+  getEffectiveCategoryStructure,
+  publishCategoryStructure,
+  saveHelperCategoryPreferences,
+  validateCategoryImport
+} from "../services/categoryStructureService";
+import {
+  createBroadcast,
+  assertServiceAttachmentDownloadAccess,
+  getMyServiceMessage,
+  hasCurrentMarketingConsent,
+  markServiceMessageRead,
+  previewBroadcast,
+  sendBroadcast,
+  sendServiceMessage
+} from "../services/serviceCommunicationService";
+import { prepareServiceAttachments, removeSavedServiceAttachments } from "../services/serviceMessageStorage";
 
 async function run() {
   assert.equal(resolveTbankTerminalMode({}), "test");
@@ -555,8 +578,203 @@ async function run() {
   await runManagerRoleTests();
   await runUserLifecycleTests();
   await runUploadStorageTests();
+  await runCategoryStructureTests();
+  await runServiceCommunicationTests();
 
   console.log("Business tests passed");
+}
+
+async function runServiceCommunicationTests() {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const app = createApp();
+  const city = await prisma.city.create({ data: { name: `Город сообщений ${suffix}`, normalizedName: `город сообщений ${suffix}`, slug: `messages-${suffix}`, region: "Тестовый регион", status: "active", serviceStatus: "active", isActive: true, mapCenterLat: 60, mapCenterLng: 60 } });
+  const admin = await prisma.user.create({ data: { role: "admin", rolesJson: '["admin"]', displayName: `Администратор сообщений ${suffix}`, status: "active" } });
+  const manager = await prisma.user.create({ data: { role: "manager", rolesJson: '["manager"]', displayName: `Менеджер сообщений ${suffix}`, status: "active" } });
+  const customer = await prisma.user.create({ data: { role: "client", rolesJson: '["client"]', displayName: `Заказчик сообщений ${suffix}`, status: "active", cityId: city.id } });
+  const customerWithoutConsent = await prisma.user.create({ data: { role: "client", rolesJson: '["client"]', displayName: `Заказчик без согласия ${suffix}`, status: "active", cityId: city.id } });
+  const helper = await prisma.user.create({ data: { role: "performer", rolesJson: '["performer"]', displayName: `Помощник сообщений ${suffix}`, status: "active", cityId: city.id } });
+  const archived = await prisma.user.create({ data: { role: "client", rolesJson: '["client"]', displayName: `Архив сообщений ${suffix}`, status: "archived", cityId: city.id } });
+  const userIds = [admin.id, manager.id, customer.id, customerWithoutConsent.id, helper.id, archived.id];
+  const storagePaths: string[] = [];
+  try {
+    const marketingDocument = await prisma.legalDocument.findFirstOrThrow({ where: { type: "marketing_notifications_consent", isActive: true, isPublished: true }, orderBy: { publishedAt: "desc" } });
+    await prisma.userConsent.create({ data: { userId: customer.id, documentId: marketingDocument.id, documentType: marketingDocument.type, documentVersion: marketingDocument.version, documentTitle: marketingDocument.title, documentContentHash: marketingDocument.contentHash, isRequired: false, source: "test" } });
+    assert.equal(await hasCurrentMarketingConsent(customer.id), true);
+    assert.equal(await hasCurrentMarketingConsent(customerWithoutConsent.id), false);
+
+    const pdf = Buffer.from("%PDF-1.4\nservice-message-test").toString("base64");
+    const sent = await sendServiceMessage({ id: admin.id, realRole: "admin" }, customer.id, { title: "Информация по оплате", body: "Сервисный платёж сохранён.", messageType: "service_message", clientRequestId: `message-${suffix}`, files: [{ fileName: "../../receipt.pdf", mimeType: "application/pdf", fileData: pdf, attachmentType: "npd_receipt" }] });
+    assert.equal(sent.idempotent, false);
+    assert.equal(sent.message.attachments.length, 1);
+    assert.equal(sent.message.attachments[0].originalFileName, "receipt.pdf");
+    assert.doesNotMatch(sent.message.attachments[0].fileName, /\.\./);
+    assert.equal(sent.message.attachments[0].userId, customer.id);
+    storagePaths.push(sent.message.attachments[0].storagePath);
+    const payment = await prisma.paymentTransaction.create({ data: { userId: customer.id, provider: "mock", orderId: `message-payment-${suffix}`, amount: 150, status: "succeeded" } });
+    const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]).toString("base64");
+    const imageMessage = await sendServiceMessage({ id: admin.id, realRole: "admin" }, customer.id, { body: "Документ по сервисному платежу.", title: "Информация по оплате", messageType: "service_message", relatedPaymentTransactionId: payment.id, files: [{ fileName: "payment.png", mimeType: "image/png", fileData: png, attachmentType: "payment_receipt" }] });
+    assert.equal(imageMessage.message.relatedPaymentTransactionId, payment.id);
+    assert.equal(imageMessage.message.attachments[0].relatedPaymentTransactionId, payment.id);
+    storagePaths.push(imageMessage.message.attachments[0].storagePath);
+    const repeated = await sendServiceMessage({ id: admin.id, realRole: "admin" }, customer.id, { title: "Повтор", body: "Повтор", messageType: "service_message", clientRequestId: `message-${suffix}` });
+    assert.equal(repeated.idempotent, true);
+
+    const second = await sendServiceMessage({ id: manager.id, realRole: "manager" }, customer.id, { title: "Уточнение", body: "Проверьте данные профиля.", messageType: "service_message" });
+    assert.equal(second.message.conversationId, sent.message.conversationId);
+    await assert.rejects(() => sendServiceMessage({ id: manager.id, realRole: "manager" }, admin.id, { body: "Недоступно", messageType: "service_message" }), /Менеджер не может/);
+    await assert.rejects(() => sendServiceMessage({ id: admin.id, realRole: "admin" }, customer.id, { body: "Файл", messageType: "service_message", files: [{ fileName: "bad.exe", mimeType: "application/octet-stream", fileData: "AA==" }] }), /Разрешены PDF/);
+    await assert.rejects(() => sendServiceMessage({ id: admin.id, realRole: "admin" }, customer.id, { body: "Много файлов", messageType: "service_message", files: Array.from({ length: 6 }, (_, index) => ({ fileName: `${index}.pdf`, mimeType: "application/pdf", fileData: pdf })) }), /не более 5/);
+    assert.throws(() => prepareServiceAttachments([{ fileName: "large.pdf", mimeType: "application/pdf", fileData: Buffer.concat([Buffer.from("%PDF-"), Buffer.alloc(10 * 1024 * 1024)]).toString("base64") }]), /не более 10 МБ/);
+
+    const own = await getMyServiceMessage(customer.id, sent.message.id);
+    assert.equal(own.userId, customer.id);
+    await assert.rejects(() => getMyServiceMessage(helper.id, sent.message.id), /Сообщение не найдено/);
+    const beforeRead = await prisma.serviceConversation.findUniqueOrThrow({ where: { userId: customer.id } });
+    await markServiceMessageRead(customer.id, sent.message.id);
+    const afterRead = await prisma.serviceConversation.findUniqueOrThrow({ where: { userId: customer.id } });
+    assert.equal(afterRead.unreadForUserCount, beforeRead.unreadForUserCount - 1);
+
+    const servicePreview = await previewBroadcast({ id: admin.id, realRole: "admin" }, { title: "Объявление", body: "Важная информация.", campaignType: "service_announcement", targetRole: "customer", targetCityId: city.id });
+    assert.equal(servicePreview.willReceive, 2);
+    assert.equal(servicePreview.skippedInactive, 1);
+    const marketingPreview = await previewBroadcast({ id: admin.id, realRole: "admin" }, { title: "Новость", body: "Маркетинговое объявление.", campaignType: "marketing_announcement", targetRole: "customer", targetCityId: city.id });
+    assert.equal(marketingPreview.willReceive, 1);
+    assert.equal(marketingPreview.skippedNoConsent, 1);
+    await assert.rejects(() => previewBroadcast({ id: manager.id, realRole: "manager" }, { title: "Нет", body: "Нет", campaignType: "service_announcement", targetRole: "all" }), /Менеджер не может/);
+
+    const created = await createBroadcast({ id: admin.id, realRole: "admin" }, { title: "Новость", body: "Маркетинговое объявление.", campaignType: "marketing_announcement", targetRole: "customer", targetCityId: city.id, clientRequestId: `broadcast-${suffix}` });
+    const delivery = await sendBroadcast({ id: admin.id, realRole: "admin" }, created.campaign.id, true);
+    assert.equal(delivery.campaign.deliveredCount, 1);
+    const deliveredMessages = await prisma.serviceMessage.count({ where: { broadcastId: created.campaign.id } });
+    await sendBroadcast({ id: admin.id, realRole: "admin" }, created.campaign.id, true);
+    assert.equal(await prisma.serviceMessage.count({ where: { broadcastId: created.campaign.id } }), deliveredMessages);
+    assert.ok(await prisma.auditLog.findFirst({ where: { actorUserId: admin.id, action: "admin.broadcast.send", entityId: created.campaign.id } }));
+    assert.ok(await prisma.auditLog.findFirst({ where: { actorUserId: customer.id, action: "user.service_message.read", entityId: sent.message.id } }));
+
+    let response = await apiRequest(app, `/api/admin/service-conversations/${customer.id}/messages`, { method: "POST", token: tokenFor(customer.id, "client"), body: { body: "Запрещено", messageType: "service_message" } });
+    assert.equal(response.status, 403);
+    response = await apiRequest(app, `/api/me/service-messages/${sent.message.id}`, { method: "GET", token: tokenFor(helper.id, "performer") });
+    assert.equal(response.status, 404);
+    assert.doesNotThrow(() => assertServiceAttachmentDownloadAccess({ id: customer.id, realRole: "client" }, { id: customer.id, role: "client" }));
+    assert.doesNotThrow(() => assertServiceAttachmentDownloadAccess({ id: manager.id, realRole: "manager" }, { id: customer.id, role: "client" }));
+    assert.throws(() => assertServiceAttachmentDownloadAccess({ id: helper.id, realRole: "performer" }, { id: customer.id, role: "client" }), /Нет доступа/);
+    assert.throws(() => assertServiceAttachmentDownloadAccess({ id: manager.id, realRole: "manager" }, { id: admin.id, role: "admin" }), /Нет доступа/);
+  } finally {
+    const attachments = await prisma.serviceMessageAttachment.findMany({ where: { userId: { in: userIds } }, select: { storagePath: true } });
+    await removeSavedServiceAttachments([...storagePaths, ...attachments.map((row) => row.storagePath)]);
+    const campaignIds = (await prisma.broadcastCampaign.findMany({ where: { createdByAdminId: admin.id }, select: { id: true } })).map((row) => row.id);
+    await prisma.broadcastRecipient.deleteMany({ where: { campaignId: { in: campaignIds } } });
+    await prisma.serviceMessageAttachment.deleteMany({ where: { userId: { in: userIds } } });
+    await prisma.serviceMessage.deleteMany({ where: { userId: { in: userIds } } });
+    await prisma.paymentTransaction.deleteMany({ where: { userId: { in: userIds } } });
+    await prisma.broadcastCampaign.deleteMany({ where: { id: { in: campaignIds } } });
+    await prisma.serviceConversation.deleteMany({ where: { userId: { in: userIds } } });
+    await prisma.userConsent.deleteMany({ where: { userId: { in: userIds } } });
+    await prisma.auditLog.deleteMany({ where: { actorUserId: { in: userIds } } });
+    await prisma.user.deleteMany({ where: { id: { in: userIds } } });
+    await prisma.city.delete({ where: { id: city.id } });
+  }
+}
+
+async function runCategoryStructureTests() {
+  const suffix = Date.now().toString(36);
+  const admin = await prisma.user.findFirstOrThrow({ where: { role: { in: ["admin", "superadmin"] } } });
+  const helper = await prisma.user.findFirstOrThrow({ where: { role: "performer" } });
+  const customer = await prisma.user.findFirstOrThrow({ where: { role: "client" } });
+  const legacyCategory = await prisma.serviceCategory.findFirstOrThrow();
+  const federalBefore = await ensureFederalCategoryStructure();
+  const federalAgain = await ensureFederalCategoryStructure();
+  assert.equal(federalAgain.id, federalBefore.id);
+  assert.equal(await prisma.categoryStructure.count({ where: { scopeKey: "federal", versionNumber: "1.0" } }), 1);
+
+  const region = await prisma.region.create({ data: { name: `Тестовый регион ${suffix}`, slug: `test-region-${suffix}` } });
+  const city = await prisma.city.create({ data: {
+    name: `Тестовый город ${suffix}`,
+    slug: `test-city-${suffix}`,
+    normalizedName: `тестовый город ${suffix}`,
+    region: region.name,
+    regionId: region.id,
+    status: "active",
+    serviceStatus: "active",
+    isActive: true,
+    mapCenterLat: 60,
+    mapCenterLng: 60
+  } });
+  const createdStructureIds: string[] = [];
+  const requestIds: string[] = [];
+  try {
+    assert.equal((await getEffectiveCategoryStructure(city.id)).status, "uses_federal_fallback");
+    const regionDraft = await createStructureFromParent({ scopeType: "region", regionId: region.id }, admin.id);
+    createdStructureIds.push(regionDraft.id);
+    assert.equal(regionDraft.status, "draft");
+    await publishCategoryStructure(regionDraft.id, admin.id);
+    assert.equal((await getEffectiveCategoryStructure(city.id)).status, "uses_region_fallback");
+
+    const cityDraft = await createStructureFromParent({ scopeType: "city", cityId: city.id }, admin.id);
+    createdStructureIds.push(cityDraft.id);
+    assert.equal(cityDraft.parentStructureId, regionDraft.id);
+    await publishCategoryStructure(cityDraft.id, admin.id);
+    assert.equal((await getEffectiveCategoryStructure(city.id)).status, "local_ready");
+
+    const customerCategories = await categoriesForCity(city.id, "customer");
+    assert.ok(customerCategories.categories.length > 0);
+    assert.equal(Object.prototype.hasOwnProperty.call(customerCategories.categories[0], "descriptionForAdmin"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(customerCategories.categories[0], "isVisibleForAdmin"), false);
+
+    const exported = await buildCityTemplateExport(city.id, admin.id);
+    assert.match(exported.fileName, new RegExp(`testovyy-region-${suffix}_test-city-${suffix}`));
+    assert.equal(exported.sheets.length, 6);
+
+    const invalidSlug = validateCategoryImport({ scope: { type: "city", cityId: city.id }, categories: [{ slug: "Плохой slug", title: "Проверка" }] });
+    assert.equal(invalidSlug.valid, false);
+    assert.ok(invalidSlug.errors.some((error) => error.includes("Некорректный slug")));
+    assert.equal(validateCategoryImport({ scope: { type: "city", cityId: city.id }, categories: [{ slug: "unsafe", title: "Медицинские услуги" }] }).valid, false);
+    assert.equal(validateCategoryImport({ scope: { type: "city", cityId: city.id }, categories: [{ slug: "safe", title: "Помощь" }], pricingRules: [{ categorySlug: "safe", recommendedMinPrice: 900, recommendedMaxPrice: 500 }] }).valid, false);
+
+    const structure = await prisma.categoryStructure.findUniqueOrThrow({ where: { id: cityDraft.id }, include: { categories: true } });
+    const rootCategory = structure.categories.find((category) => !category.parentId)!;
+    const childCategory = structure.categories.find((category) => category.parentId === rootCategory.id)!;
+    const request = await prisma.clientRequest.create({ data: {
+      clientId: customer.id,
+      cityId: city.id,
+      categoryId: legacyCategory.id,
+      title: "Тест snapshot категории",
+      description: "Проверка сохранения выбранной категории в истории заявки.",
+      addressText: city.name,
+      approximateAddressText: city.name
+    } });
+    requestIds.push(request.id);
+    const snapshot = await prisma.$transaction((tx) => createRequestCategorySnapshotTx(tx, { requestId: request.id, cityId: city.id, categoryId: rootCategory.id, subcategoryId: childCategory.id }));
+    assert.ok(snapshot);
+    assert.equal(JSON.parse(snapshot!.snapshotJson).category.slug, rootCategory.slug);
+    await prisma.category.update({ where: { id: rootCategory.id }, data: { title: "Временно переименовано" } });
+    assert.equal(JSON.parse((await prisma.requestCategorySnapshot.findUniqueOrThrow({ where: { id: snapshot!.id } })).snapshotJson).category.title, rootCategory.title);
+
+    const preferences = await saveHelperCategoryPreferences(helper.id, { cityId: city.id, categoryIds: [rootCategory.id] });
+    assert.equal(preferences.filter((item) => item.isEnabled).length, 1);
+    assert.equal(preferences[0].categorySlug, rootCategory.slug);
+    assert.equal(Object.prototype.hasOwnProperty.call(preferences[0].category, "descriptionForAdmin"), false);
+
+    const importedDraft = await createDraftFromImport(exported.payload, admin.id, exported.fileName);
+    createdStructureIds.push(importedDraft.id);
+    assert.equal(importedDraft.status, "draft");
+    await publishCategoryStructure(importedDraft.id, admin.id);
+    assert.equal((await prisma.categoryStructure.findUniqueOrThrow({ where: { id: cityDraft.id } })).status, "archived");
+    assert.equal((await getEffectiveCategoryStructure(city.id)).structure?.id, importedDraft.id);
+
+    const manager = await prisma.user.findFirst({ where: { role: "manager" } });
+    if (manager) {
+      const denied = await apiRequest(createApp(), "/api/admin/category-structures/create-from-parent", { method: "POST", token: tokenFor(manager.id, "manager"), body: { scopeType: "city", cityId: city.id } });
+      assert.equal(denied.status, 403);
+    }
+  } finally {
+    await prisma.requestCategorySnapshot.deleteMany({ where: { requestId: { in: requestIds } } });
+    await prisma.clientRequest.deleteMany({ where: { id: { in: requestIds } } });
+    await prisma.helperCategoryPreference.deleteMany({ where: { cityId: city.id } });
+    await prisma.categoryStructure.deleteMany({ where: { id: { in: createdStructureIds } } });
+    await prisma.city.delete({ where: { id: city.id } });
+    await prisma.region.delete({ where: { id: region.id } });
+  }
 }
 
 async function runAdminBalanceAdjustmentTests() {
@@ -4153,7 +4371,7 @@ async function runVkOAuthTests() {
     });
     assert.equal(response.status, 400);
 
-    const admin = await prisma.user.findFirstOrThrow({ where: { role: { in: ["admin", "superadmin"] } } });
+    const admin = await prisma.user.findFirstOrThrow({ where: { role: { in: ["admin", "superadmin"] }, email: { not: null } } });
     await assert.rejects(
       () => resolveVkUser({
         providerUserId: `${providerUserId}-admin`,

@@ -148,7 +148,7 @@ export const LEGAL_DOCUMENT_DEFINITIONS: LegalDocumentDefinition[] = [
     title: "Согласие на получение информационных сообщений",
     slug: "marketing-notifications-consent",
     version: "1.0",
-    isRequired: true,
+    isRequired: false,
     contentMarkdown: `# Согласие на получение информационных сообщений
 
 Редакция 1.0. Пользователь может добровольно согласиться получать новости сервиса, полезные материалы, акции, предложения и информационные сообщения.
@@ -266,7 +266,12 @@ export async function ensureLegalDocuments(client: DbClient = prisma, createdByA
       where: { type: definition.type, isActive: true, isPublished: true },
       orderBy: { publishedAt: "desc" }
     });
-    if (published) continue;
+    if (published) {
+      if (published.isRequired !== definition.isRequired) {
+        await client.legalDocument.update({ where: { id: published.id }, data: { isRequired: definition.isRequired } });
+      }
+      continue;
+    }
 
     const contentHash = calculateLegalDocumentHash(definition);
     const existing = await client.legalDocument.findUnique({

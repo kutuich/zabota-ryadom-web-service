@@ -5,6 +5,9 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { AdminPaymentsPage } from "./AdminPaymentsPage";
 import { AdminNpdRegisterPage } from "./AdminNpdRegisterPage";
+import { AdminCategoryStructuresPage } from "./AdminCategoryStructuresPage";
+import { ServiceCommunicationsPage } from "./ServiceCommunicationsPage";
+import { UserServiceCommunicationPanel } from "../components/UserServiceCommunicationPanel";
 import { Shell } from "../components/Shell";
 import { StatusBadge, statusTone } from "../components/StatusBadge";
 import { ChatPanel } from "../components/ChatPanel";
@@ -377,11 +380,6 @@ export function AdminDashboard() {
 
   async function updateDocumentStatus(documentId: string, status: string) {
     await api.adminUpdatePerformerDocumentStatus(documentId, status, status === "verified" ? "Подтверждено администратором" : "Отклонено администратором");
-    await load();
-  }
-
-  async function toggleCategory(category: ServiceCategory) {
-    await api.adminUpdateCategory(category.id, { isActive: !category.isActive });
     await load();
   }
 
@@ -941,7 +939,7 @@ export function AdminDashboard() {
       )}
 
       {activeTab === "Чаты" && (
-        <div className="admin-chat-layout">
+        <ServiceCommunicationsPage canBroadcast requestChats={<div className="admin-chat-layout">
           <label className="search-field">
             <Search size={18} />
             <input
@@ -965,7 +963,7 @@ export function AdminDashboard() {
             ))}
           </aside>
           {activeChatId ? <ChatPanel chatId={activeChatId} /> : <EmptyState title="Выберите чат из списка." />}
-        </div>
+        </div>} />
       )}
 
       {activeTab === "Обращения" && (
@@ -1074,25 +1072,7 @@ export function AdminDashboard() {
         />
       )}
 
-      {activeTab === "Категории" && (
-        <div className="data-table">
-          {categories.map((category) => (
-            <div className="data-row" key={category.id}>
-              <strong>{category.name}</strong>
-              <span>{category.description ?? "Описание не заполнено"}</span>
-              <span>{category.basePrice} ₽</span>
-              <span>{category.calculationUnit === "hour" ? "час" : category.calculationUnit === "visit" ? "визит" : "заявка"}</span>
-              <StatusBadge tone={category.isActive ? "success" : "neutral"}>{category.isActive ? "Активна" : "Выключена"}</StatusBadge>
-              <StatusBadge tone={category.requiresCriminalRecord ? "warning" : "neutral"}>
-                {category.requiresCriminalRecord ? "справка важна" : "обычная"}
-              </StatusBadge>
-              <button className="secondary-button" type="button" onClick={() => toggleCategory(category)}>
-                {category.isActive ? "Выключить" : "Включить"}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      {activeTab === "Структуры категорий" && <AdminCategoryStructuresPage />}
 
       {activeTab === "Архив" && (
         <section className="plain-section">
@@ -1273,6 +1253,7 @@ export function AdminDashboard() {
       {selectedUser && (
         <Modal title={`Профиль пользователя: ${selectedUser.displayName}`} onClose={() => setSelectedUser(null)}>
           <UserProfile user={selectedUser} legalStatuses={selectedUserLegalStatuses} archiveSafety={selectedUserArchiveSafety} />
+          <UserServiceCommunicationPanel userId={selectedUser.id} />
           {isArchivedIncompleteVkRegistration(selectedUser) && selectedOAuthRestoreSafety && (
             <section className="plain-section">
               <h3>Незавершённая VK-регистрация</h3>
@@ -2137,7 +2118,7 @@ function adminTabFromPath(pathname: string) {
   if (pathname.startsWith("/app/admin/npd-register")) return "Мой налог";
   if (pathname.startsWith("/app/admin/payments")) return "Платежи";
   if (pathname.startsWith("/app/admin/blocked")) return "Блокировки";
-  if (pathname.startsWith("/app/admin/categories")) return "Категории";
+  if (pathname.startsWith("/app/admin/categories")) return "Структуры категорий";
   if (pathname.startsWith("/app/admin/legal")) return "Юридические документы";
   if (pathname.startsWith("/app/admin/archive")) return "Архив";
   if (pathname.startsWith("/app/admin/settings")) return "Настройки сервиса";

@@ -85,6 +85,176 @@ export type ServiceCategory = {
   requiresCriminalRecord: boolean;
 };
 
+export type CategoryTaskTemplate = {
+  id: string;
+  slug: string;
+  title: string;
+  description?: string | null;
+  customerHint?: string | null;
+  helperHint?: string | null;
+  safetyNote?: string | null;
+};
+
+export type StructuredCategory = {
+  id: string;
+  structureId: string;
+  parentId?: string | null;
+  slug: string;
+  title: string;
+  descriptionForCustomer?: string | null;
+  descriptionForHelper?: string | null;
+  level: number;
+  sortOrder: number;
+  status: string;
+  children?: StructuredCategory[];
+  taskTemplates?: CategoryTaskTemplate[];
+  safetyRules?: Array<{ id: string; title: string; description: string; severity: string; isBlocking: boolean }>;
+  pricingRules?: Array<{ id: string; recommendedMinPrice?: number | null; recommendedMaxPrice?: number | null; priceComment?: string | null }>;
+};
+
+export type CategoryStructure = {
+  id: string;
+  scopeType: "federal" | "region" | "city";
+  scopeRegionId?: string | null;
+  scopeCityId?: string | null;
+  scopeKey: string;
+  parentStructureId?: string | null;
+  versionNumber: string;
+  title: string;
+  description?: string | null;
+  status: "draft" | "active" | "archived";
+  qualityStatus: "draft" | "estimated" | "reviewed" | "tested" | "approved";
+  source: string;
+  comment?: string | null;
+  publishedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  scopeRegion?: { id: string; name: string; slug: string } | null;
+  scopeCity?: City | null;
+  parentStructure?: Pick<CategoryStructure, "id" | "title" | "versionNumber" | "scopeType"> | null;
+  categories?: StructuredCategory[];
+  _count?: { categories: number; requestSnapshots: number };
+};
+
+export type CategoryCityStatus = {
+  city: Pick<City, "id" | "name" | "slug" | "region"> & { regionId?: string | null };
+  region?: { id: string; name: string; slug: string } | null;
+  status: "local_ready" | "uses_region_fallback" | "uses_federal_fallback" | "missing_structure";
+  statusLabel: string;
+  effectiveStructure?: CategoryStructure | null;
+  message: string;
+};
+
+export type CategoriesForCity = {
+  status: CategoryCityStatus["status"];
+  statusLabel: string;
+  structure: Pick<CategoryStructure, "id" | "scopeType" | "versionNumber" | "title" | "qualityStatus"> | null;
+  categories: StructuredCategory[];
+};
+
+export type HelperCategoryPreference = {
+  id: string;
+  helperUserId: string;
+  cityId?: string | null;
+  categoryId: string;
+  categorySlug: string;
+  isEnabled: boolean;
+  comment?: string | null;
+  category: StructuredCategory;
+  city?: City | null;
+};
+
+export type ServiceMessageAttachment = {
+  id: string;
+  messageId: string;
+  userId: string;
+  uploadedByUserId: string;
+  fileName: string;
+  originalFileName: string;
+  mimeType: string;
+  fileSize: number;
+  attachmentType: string;
+  relatedPaymentTransactionId?: string | null;
+  relatedRefundTransactionId?: string | null;
+  relatedRequestId?: string | null;
+  createdAt: string;
+  message?: { id: string; title?: string | null; createdAt: string };
+  uploadedBy?: { id: string; displayName: string; role: UserRole };
+};
+
+export type ServiceMessage = {
+  id: string;
+  conversationId?: string | null;
+  userId: string;
+  senderUserId?: string | null;
+  senderRole: string;
+  messageType: "service_message" | "system_notice" | "announcement" | "marketing_announcement";
+  channel: "in_app";
+  title?: string | null;
+  body: string;
+  relatedPaymentTransactionId?: string | null;
+  relatedRefundTransactionId?: string | null;
+  relatedRequestId?: string | null;
+  broadcastId?: string | null;
+  isReadByUser: boolean;
+  readByUserAt?: string | null;
+  createdAt: string;
+  attachments: ServiceMessageAttachment[];
+  relatedPayment?: Pick<PaymentTransaction, "id" | "orderId" | "amount" | "status" | "provider" | "terminalMode"> | null;
+  relatedRefund?: Pick<RefundTransaction, "id" | "amount" | "status" | "paymentTransactionId"> | null;
+  relatedRequest?: Pick<ClientRequest, "id" | "publicNumber" | "title"> | null;
+};
+
+export type ServiceConversation = {
+  id: string;
+  userId: string;
+  lastMessageAt?: string | null;
+  unreadForUserCount: number;
+  unreadForAdminCount: number;
+  status: string;
+  user?: Pick<User, "id" | "displayName" | "role" | "phone" | "email" | "status">;
+  messages?: ServiceMessage[];
+};
+
+export type BroadcastPreview = {
+  totalFound: number;
+  willReceive: number;
+  skippedNoConsent: number;
+  skippedInactive: number;
+  roles: Record<string, number>;
+  cities: Record<string, number>;
+};
+
+export type BroadcastCampaign = {
+  id: string;
+  title: string;
+  body: string;
+  campaignType: "service_announcement" | "marketing_announcement" | "system_notice";
+  targetRole: "all" | "customer" | "performer" | "manager";
+  status: string;
+  requireMarketingConsent: boolean;
+  recipientsCount: number;
+  deliveredCount: number;
+  skippedCount: number;
+  failedCount: number;
+  createdAt: string;
+  sentAt?: string | null;
+};
+
+export type CategoryExportPayload = {
+  fileName: string;
+  jsonFileName?: string;
+  payload: Record<string, unknown>;
+  sheets?: Array<{ name: string; rows: Array<Array<string | number | boolean | null | undefined>> }>;
+};
+
+export type CategoryImportPreview = {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  summary: Record<string, string | number | undefined>;
+};
+
 export type User = {
   id: string;
   role: UserRole;
@@ -221,6 +391,16 @@ export type ClientRequest = {
   createdByManagerId?: string | null;
   cityId: string;
   categoryId: string;
+  categorySnapshot?: {
+    id: string;
+    structureId: string;
+    snapshot: {
+      category?: { id: string; slug: string; title: string } | null;
+      subcategory?: { id: string; slug: string; title: string } | null;
+      recommendedPrice?: { min?: number | null; max?: number | null; comment?: string | null } | null;
+      safetyRules?: Array<{ title: string; description: string; severity: string; isBlocking: boolean }>;
+    } | null;
+  } | null;
   contactName?: string | null;
   contactPhone?: string | null;
   helpFor?: string | null;

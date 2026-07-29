@@ -35,6 +35,14 @@ import type {
   UserConsent,
   UserConsentStatus
 } from "../types";
+import type {
+  CategoriesForCity,
+  CategoryCityStatus,
+  CategoryExportPayload,
+  CategoryImportPreview,
+  CategoryStructure,
+  HelperCategoryPreference
+} from "../types";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
 const TOKEN_KEY = "zabota_ryadom_token";
@@ -233,6 +241,45 @@ export const api = {
   performerDocuments: () => apiFetch<PerformerDocument[]>("/performer-documents"),
   updatePerformerProfile: (body: Record<string, unknown>) =>
     apiFetch("/performer-profile/me", { method: "PATCH", body: JSON.stringify(body) }),
+  categoriesForRequest: (cityId: string) => apiFetch<CategoriesForCity>(`/categories/for-request?cityId=${encodeURIComponent(cityId)}`),
+  categoriesForHelper: (cityId: string) => apiFetch<CategoriesForCity>(`/categories/for-helper?cityId=${encodeURIComponent(cityId)}`),
+  helperCategoryPreferences: (cityId?: string) =>
+    apiFetch<HelperCategoryPreference[]>(`/helper/category-preferences${cityId ? `?cityId=${encodeURIComponent(cityId)}` : ""}`),
+  saveHelperCategoryPreferences: (body: { cityId: string; categoryIds: string[]; comment?: string }) =>
+    apiFetch<HelperCategoryPreference[]>("/helper/category-preferences", { method: "PUT", body: JSON.stringify(body) }),
+  myServiceMessages: () => apiFetch<{ unreadCount: number; messages: import("../types").ServiceMessage[] }>("/me/service-messages"),
+  myServiceMessage: (id: string) => apiFetch<import("../types").ServiceMessage>(`/me/service-messages/${id}`),
+  readServiceMessage: (id: string) => apiFetch<import("../types").ServiceMessage>(`/me/service-messages/${id}/read`, { method: "POST" }),
+  serviceConversations: (search = "") => apiFetch<import("../types").ServiceConversation[]>(`/admin/service-conversations${search ? `?search=${encodeURIComponent(search)}` : ""}`),
+  serviceConversation: (userId: string) => apiFetch<{ user: User; conversation: import("../types").ServiceConversation | null; attachments: import("../types").ServiceMessageAttachment[] }>(`/admin/service-conversations/${userId}`),
+  sendServiceMessage: (userId: string, body: {
+    title?: string;
+    body: string;
+    messageType: "service_message" | "system_notice";
+    clientRequestId?: string;
+    relatedPaymentTransactionId?: string;
+    relatedRefundTransactionId?: string;
+    relatedRequestId?: string;
+    files?: Array<{ fileName: string; mimeType: string; fileData: string; attachmentType: string }>;
+  }) => apiFetch<{ message: import("../types").ServiceMessage; idempotent: boolean }>(`/admin/service-conversations/${userId}/messages`, { method: "POST", body: JSON.stringify(body) }),
+  broadcastPreview: (body: Record<string, unknown>) => apiFetch<import("../types").BroadcastPreview>("/admin/broadcasts/preview", { method: "POST", body: JSON.stringify(body) }),
+  broadcasts: () => apiFetch<import("../types").BroadcastCampaign[]>("/admin/broadcasts"),
+  createBroadcast: (body: Record<string, unknown>) => apiFetch<{ campaign: import("../types").BroadcastCampaign; idempotent: boolean }>("/admin/broadcasts", { method: "POST", body: JSON.stringify(body) }),
+  sendBroadcast: (id: string) => apiFetch<{ campaign: import("../types").BroadcastCampaign; idempotent: boolean }>(`/admin/broadcasts/${id}/send`, { method: "POST", body: JSON.stringify({ confirmed: true }) }),
+  cancelBroadcast: (id: string) => apiFetch<import("../types").BroadcastCampaign>(`/admin/broadcasts/${id}/cancel`, { method: "POST" }),
+  messagePaymentUser: (paymentId: string, body: Record<string, unknown>) => apiFetch(`/admin/payments/${paymentId}/message-user`, { method: "POST", body: JSON.stringify(body) }),
+  downloadServiceAttachment: async (id: string, originalFileName: string) => {
+    const response = await fetch(`${API_BASE}/service-message-attachments/${id}/download`, { headers: { Authorization: `Bearer ${getStoredToken() ?? ""}` } });
+    if (!response.ok) throw new ApiError(response.status, "Не удалось скачать вложение");
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = originalFileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  },
   uploadPerformerDocument: (body: { type: "self_employed" | "criminal_record"; fileName: string; fileData: string }) =>
     apiFetch<PerformerDocument>("/performer-documents", { method: "POST", body: JSON.stringify(body) }),
   adminSummary: () => apiFetch<Record<string, number>>("/admin/summary"),
@@ -244,6 +291,27 @@ export const api = {
   adminUpdateCity: (cityId: string, body: Partial<City>) =>
     apiFetch<City>(`/admin/cities/${cityId}`, { method: "PATCH", body: JSON.stringify(body) }),
   adminCategories: () => apiFetch<ServiceCategory[]>("/admin/categories"),
+  adminCategoryStructures: () => apiFetch<CategoryStructure[]>("/admin/category-structures"),
+  adminCategoryStructure: (id: string) => apiFetch<CategoryStructure>(`/admin/category-structures/${id}`),
+  adminCategoryCityStatuses: () => apiFetch<CategoryCityStatus[]>("/admin/category-structures/city-status"),
+  adminCreateCategoryStructure: (body: { scopeType: "region" | "city"; regionId?: string; cityId?: string; title?: string; comment?: string }) =>
+    apiFetch<CategoryStructure>("/admin/category-structures/create-from-parent", { method: "POST", body: JSON.stringify(body) }),
+  adminCreateCategoryStructureVersion: (id: string, comment?: string) =>
+    apiFetch<CategoryStructure>(`/admin/category-structures/${id}/new-version`, { method: "POST", body: JSON.stringify({ comment }) }),
+  adminUpdateCategoryStructure: (id: string, body: Partial<Pick<CategoryStructure, "title" | "description" | "qualityStatus" | "comment">>) =>
+    apiFetch<CategoryStructure>(`/admin/category-structures/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  adminPublishCategoryStructure: (id: string) => apiFetch<CategoryStructure>(`/admin/category-structures/${id}/publish`, { method: "POST" }),
+  adminArchiveCategoryStructure: (id: string) => apiFetch<CategoryStructure>(`/admin/category-structures/${id}/archive`, { method: "POST" }),
+  adminExportCategoryStructure: (id: string, format: "xlsx" | "json") =>
+    apiFetch<CategoryExportPayload>(`/admin/category-structures/${id}/export.${format}`),
+  adminExportCategoryCityTemplate: (cityId: string) =>
+    apiFetch<CategoryExportPayload>(`/admin/category-structures/city-template/export.xlsx?cityId=${encodeURIComponent(cityId)}`),
+  adminExportCategoryRegionTemplate: (regionId: string) =>
+    apiFetch<CategoryExportPayload>(`/admin/category-structures/region-template/export.xlsx?regionId=${encodeURIComponent(regionId)}`),
+  adminPreviewCategoryImport: (body: { payload: unknown; fileName: string; fileSize: number }) =>
+    apiFetch<CategoryImportPreview>("/admin/category-structures/import/preview", { method: "POST", body: JSON.stringify(body) }),
+  adminCreateCategoryImportDraft: (body: { payload: unknown; fileName: string; fileSize: number }) =>
+    apiFetch<CategoryStructure>("/admin/category-structures/import/create-draft", { method: "POST", body: JSON.stringify(body) }),
   adminTransactions: () => apiFetch<AdminBalanceTransaction[]>("/admin/balance-transactions"),
   adminAdjustBalance: (userId: string, body: AdminBalanceAdjustmentInput) =>
     apiFetch<AdminBalanceAdjustmentResult>(`/admin/users/${userId}/balance-adjustment`, {

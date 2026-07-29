@@ -16,6 +16,7 @@ import {
   buildYandexPublicMapAddress,
   normalizeAddressParts
 } from "../services/addressService";
+import { createRequestCategorySnapshotTx } from "../services/categoryStructureService";
 
 export const managerRouter = Router();
 
@@ -25,6 +26,9 @@ const managerCreateRequestSchema = z.object({
   customerUserId: z.string().min(1),
   cityId: z.string().min(1),
   categoryId: z.string().min(1),
+  structuredCategoryId: z.string().min(1).optional(),
+  structuredSubcategoryId: z.string().min(1).optional(),
+  categoryTaskTemplateId: z.string().min(1).optional(),
   contactName: z.string().max(120).optional(),
   contactPhone: z.string().max(40).optional(),
   helpFor: z.enum(["elderly", "child", "limited_mobility", "home_family", "other"]).optional(),
@@ -336,6 +340,13 @@ managerRouter.post(
           createdByManager: { select: { id: true, displayName: true } }
         }
       });
+      await createRequestCategorySnapshotTx(tx, {
+        requestId: request.id,
+        cityId: city.id,
+        categoryId: input.structuredCategoryId,
+        subcategoryId: input.structuredSubcategoryId,
+        taskTemplateId: input.categoryTaskTemplateId
+      });
       await writeAudit(req.user!.id, "manager.request.create_for_customer", "request", request.id, {
         managerUserId: req.user!.id,
         customerUserId: customer.id,
@@ -368,6 +379,23 @@ managerRouter.get(
     if (!request) throw new HttpError(404, "Заявка не найдена", "request_not_found");
     await managerViewAudit(req.user!.id, "manager.request.view", "request", request.id);
     res.json(request);
+  })
+);
+
+managerRouter.patch(
+  "/requests/:id/category",
+  asyncHandler(async (req, res) => {
+    const input = z.object({ categoryId: z.string().min(1), subcategoryId: z.string().optional(), taskTemplateId: z.string().optional() }).parse(req.body);
+    const request = await prisma.clientRequest.findUnique({ where: { id: req.params.id } });
+    if (!request) throw new HttpError(404, "Заявка не найдена", "request_not_found");
+    if (["completed", "cancelled", "archived", "blocked"].includes(request.status)) throw new HttpError(409, "Категорию закрытой заявки изменить нельзя", "request_category_locked");
+    const snapshot = await prisma.$transaction(async (tx) => {
+      const created = await createRequestCategorySnapshotTx(tx, { requestId: request.id, cityId: request.cityId, categoryId: input.categoryId, subcategoryId: input.subcategoryId, taskTemplateId: input.taskTemplateId });
+      if (!created) throw new HttpError(409, "Структура категорий города не настроена", "category_structure_missing");
+      await writeAudit(req.user!.id, "manager.request.category.update", "request", request.id, { categoryId: input.categoryId, subcategoryId: input.subcategoryId, snapshotId: created.id }, tx);
+      return created;
+    });
+    res.json(snapshot);
   })
 );
 

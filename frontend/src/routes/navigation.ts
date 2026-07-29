@@ -24,6 +24,7 @@ export const clientNavigation: NavGroup[] = [
       { label: "Заявки", path: `${APP_CLIENT_PREFIX}/requests`, primary: true, end: true },
       { label: "Создать заявку", path: `${APP_CLIENT_PREFIX}/requests/new`, primary: true },
       { label: "Чаты", path: `${APP_CLIENT_PREFIX}/chats`, primary: true },
+      { label: "Сообщения от сервиса", path: `${APP_CLIENT_PREFIX}/messages`, primary: true },
       { label: "Мой баланс", path: `${APP_CLIENT_PREFIX}/balance`, primary: true }
     ]
   },
@@ -46,6 +47,7 @@ export const performerNavigation: NavGroup[] = [
       { label: "Заявки", path: `${APP_PERFORMER_PREFIX}/requests`, primary: true, end: true },
       { label: "Отклики", path: `${APP_PERFORMER_PREFIX}/responses`, primary: true },
       { label: "Чаты", path: `${APP_PERFORMER_PREFIX}/chats`, primary: true },
+      { label: "Сообщения от сервиса", path: `${APP_PERFORMER_PREFIX}/messages`, primary: true },
       { label: "Баланс", path: `${APP_PERFORMER_PREFIX}/balance`, primary: true }
     ]
   },
@@ -91,7 +93,7 @@ export const adminNavigation: NavGroup[] = [
     label: "Справочники",
     items: [
       { label: "Города", path: `${APP_ADMIN_PREFIX}/cities` },
-      { label: "Категории", path: `${APP_ADMIN_PREFIX}/categories` },
+      { label: "Структуры категорий", path: `${APP_ADMIN_PREFIX}/categories` },
       { label: "База знаний", path: `${APP_ADMIN_PREFIX}/knowledge` }
     ]
   },

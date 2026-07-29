@@ -14,13 +14,14 @@ import { RequestCard } from "../components/RequestCard";
 import { Shell } from "../components/Shell";
 import { StatusBadge, statusTone } from "../components/StatusBadge";
 import { useAuth } from "../context/AuthContext";
-import type { Chat, ClientRequest, KnowledgeArticle, PerformerDocument } from "../types";
+import type { CategoriesForCity, Chat, ClientRequest, KnowledgeArticle, PerformerDocument } from "../types";
 import { labelChildcare, labelCriminalRecord, labelSelfEmployed, labelStatus, labelTrust, requestDisplayTitle } from "../utils/labels";
 import { chatPathForRole, performerNavigation, sectionTitleForPath } from "../routes/navigation";
 import { buildPublicAddressFromRequest, buildYandexExactAddressFromRequest, buildYandexMapsSearchUrl } from "../utils/address";
 import { formatDateRu, formatTimeRu } from "../utils/dateTime";
 import { CityCombobox } from "../components/CityCombobox";
 import { UserCitiesPanel } from "../components/UserCitiesPanel";
+import { ServiceMessagesPanel } from "../components/ServiceMessagesPanel";
 
 export function PerformerDashboard() {
   const { bootstrap, user, refreshMe } = useAuth();
@@ -39,6 +40,8 @@ export function PerformerDashboard() {
   const [complaints, setComplaints] = useState<any[]>([]);
   const [articles, setArticles] = useState<KnowledgeArticle[]>([]);
   const [notice, setNotice] = useState("");
+  const [preferenceCategories, setPreferenceCategories] = useState<CategoriesForCity | null>(null);
+  const [selectedPreferenceIds, setSelectedPreferenceIds] = useState<string[]>([]);
   const [filters, setFilters] = useState({
     categoryId: searchParams.get("category") ?? "",
     district: searchParams.get("district") ?? "",
@@ -95,6 +98,17 @@ export function PerformerDashboard() {
   }, [routeChatId]);
 
   useEffect(() => {
+    const cityId = profileForm.cityId || user?.cityId;
+    if (!cityId) return;
+    Promise.all([api.categoriesForHelper(cityId), api.helperCategoryPreferences(cityId)])
+      .then(([categoryRows, preferenceRows]) => {
+        setPreferenceCategories(categoryRows);
+        setSelectedPreferenceIds(preferenceRows.filter((item) => item.isEnabled).map((item) => item.categoryId));
+      })
+      .catch((error) => setNotice(error instanceof Error ? error.message : "Не удалось загрузить категории."));
+  }, [profileForm.cityId, user?.cityId]);
+
+  useEffect(() => {
     const next = new URLSearchParams();
     if (filters.categoryId) next.set("category", filters.categoryId);
     if (filters.district) next.set("district", filters.district);
@@ -112,8 +126,8 @@ export function PerformerDashboard() {
       if (filters.maxBudget && (request.budgetAmount ?? 0) > Number(filters.maxBudget)) return false;
       if (matchFilter !== "all" && request.match?.status !== matchFilter) return false;
       return true;
-    });
-  }, [available, filters, matchFilter]);
+    }).sort((left, right) => Number(requestMatchesPreferences(right, selectedPreferenceIds)) - Number(requestMatchesPreferences(left, selectedPreferenceIds)));
+  }, [available, filters, matchFilter, selectedPreferenceIds]);
   const latestSelfEmployedDocument = latestDocument(documents, "self_employed");
   const latestCriminalRecordDocument = latestDocument(documents, "criminal_record");
   const filteredChats = useMemo(() => {
@@ -199,6 +213,39 @@ export function PerformerDashboard() {
     await load();
   }
 
+  async function saveCategoryPreferences() {
+    const cityId = profileForm.cityId || user?.cityId;
+    if (!cityId) return setNotice("Сначала выберите город.");
+    await api.saveHelperCategoryPreferences({ cityId, categoryIds: selectedPreferenceIds });
+    setNotice("Выбранные категории сохранены. Подходящие заявки будут показаны выше.");
+    await load();
+  }
+
+  async function applyCategoryPreferencesToAllCities() {
+    const currentCityId = profileForm.cityId || user?.cityId;
+    if (!currentCityId || !preferenceCategories) return setNotice("Сначала выберите категории для основного города.");
+    const selectedSlugs = new Set(
+      preferenceCategories.categories
+        .filter((category) => selectedPreferenceIds.includes(category.id))
+        .map((category) => category.slug)
+    );
+    const cityIds = Array.from(new Set([
+      currentCityId,
+      ...(user?.userCities ?? [])
+        .filter((item) => item.isActive && (item.roleScope === "helper" || item.roleScope === "both"))
+        .map((item) => item.cityId)
+    ]));
+    await Promise.all(cityIds.map(async (cityId) => {
+      const availableForCity = cityId === currentCityId ? preferenceCategories : await api.categoriesForHelper(cityId);
+      const categoryIds = availableForCity.categories
+        .filter((category) => selectedSlugs.has(category.slug))
+        .map((category) => category.id);
+      await api.saveHelperCategoryPreferences({ cityId, categoryIds });
+    }));
+    setNotice(`Выбранные категории применены для городов: ${cityIds.length}.`);
+    await load();
+  }
+
   async function sendSupport(event: FormEvent) {
     event.preventDefault();
     if (!supportForm.reason.trim()) {
@@ -275,6 +322,9 @@ export function PerformerDashboard() {
           <div className="list">
             {filtered.map((request) => (
               <RequestCard key={request.id} request={request} priceRole="performer">
+                <StatusBadge tone={requestMatchesPreferences(request, selectedPreferenceIds) ? "success" : "neutral"}>
+                  {requestMatchesPreferences(request, selectedPreferenceIds) ? "Подходит по вашим категориям" : "Категория не выбрана в вашем профиле"}
+                </StatusBadge>
                 {request.match && (
                   <div className="notice">
                     <strong>{request.match.label}</strong>
@@ -365,6 +415,7 @@ export function PerformerDashboard() {
           {activeChatId ? <ChatPanel chatId={activeChatId} /> : <p className="empty-text">Нет открытых чатов.</p>}
         </div>
       )}
+      {activeTab === "Сообщения от сервиса" && <ServiceMessagesPanel />}
 
       {activeTab === "Профиль" && (
         <section className="panel-grid">
@@ -419,6 +470,22 @@ export function PerformerDashboard() {
                 </label>
               ))}
             </fieldset>
+            <fieldset className="span-2 checkbox-grid helper-category-preferences">
+              <legend>Какие задачи вы готовы выполнять</legend>
+              <p className="privacy-note span-2">Выберите задачи, которые готовы выполнять. Заявки по выбранным категориям будут показываться выше.</p>
+              {preferenceCategories?.categories.map((category) => (
+                <label className="checkbox-row" key={category.id}>
+                  <input type="checkbox" checked={selectedPreferenceIds.includes(category.id)} onChange={() => setSelectedPreferenceIds(toggleValue(selectedPreferenceIds, category.id))} />
+                  <span><strong>{category.title}</strong>{category.descriptionForHelper && <small>{category.descriptionForHelper}</small>}</span>
+                </label>
+              ))}
+              {!preferenceCategories?.categories.length && <p className="privacy-note">Для выбранного города категории пока не настроены.</p>}
+              <p className="warning-text span-2">Помощник не выполняет медицинские процедуры и не принимает задачи, требующие специальных разрешений или создающие опасность.</p>
+              <button className="secondary-button span-2" type="button" onClick={saveCategoryPreferences}>Сохранить выбранные категории</button>
+              {(user?.userCities ?? []).filter((item) => item.isActive && (item.roleScope === "helper" || item.roleScope === "both")).length > 1 && (
+                <button className="ghost-button span-2" type="button" onClick={applyCategoryPreferencesToAllCities}>Применить ко всем моим городам</button>
+              )}
+            </fieldset>
             <label className="span-2">
               Дополнительные навыки помощника
               <input value={profileForm.skills} onChange={(event) => setProfileForm({ ...profileForm, skills: event.target.value })} placeholder="Например: готовка, аккуратная уборка, спокойное общение" />
@@ -428,8 +495,8 @@ export function PerformerDashboard() {
               {[
                 ["readyForHygieneHelp", "Готовность к гигиенической помощи"],
                 ["readyForPhysicalHelp", "Готовность к физической помощи"],
-                ["readyForLimitedMobility", "Готовность работать с маломобильными"],
-                ["readyForChildren", "Готовность работать с детьми / няня"],
+                ["readyForLimitedMobility", "Готовность помогать маломобильным людям"],
+                ["readyForChildren", "Готовность помогать с присмотром за детьми"],
                 ["readyForUrgentRequests", "Готовность к срочным заявкам"],
                 ["canTravelOutsideCity", "Готовность выезжать в другой город"],
                 ["readyToProvideDocuments", "Готовность предоставить документы"]
@@ -775,6 +842,11 @@ function toggleValue(values: string[], value: string) {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
 }
 
+function requestMatchesPreferences(request: ClientRequest, categoryIds: string[]) {
+  const categoryId = request.categorySnapshot?.snapshot?.category?.id;
+  return Boolean(categoryId && categoryIds.includes(categoryId));
+}
+
 function latestDocument(documents: PerformerDocument[], type: string) {
   return documents
     .filter((document) => document.type === type)
@@ -817,6 +889,7 @@ function performerTabFromPath(pathname: string) {
   if (pathname.startsWith("/app/performer/responses")) return "Мои отклики";
   if (pathname.startsWith("/app/performer/balance")) return "Баланс";
   if (pathname.startsWith("/app/performer/chats")) return "Чаты";
+  if (pathname.startsWith("/app/performer/messages")) return "Сообщения от сервиса";
   if (pathname.startsWith("/app/performer/profile")) return "Профиль";
   if (pathname.startsWith("/app/performer/support")) return "Связь с администратором";
   if (pathname.startsWith("/app/performer/help")) return "Помощь / FAQ";

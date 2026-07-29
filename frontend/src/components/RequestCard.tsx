@@ -37,11 +37,12 @@ export function RequestCard({
     ? exactAddress
     : request.yandexPublicMapAddress ?? publicAddress;
   const mapUrl = (request.exactAddressVisible ? request.yandexExactMapUrl : request.yandexPublicMapUrl) || buildYandexMapsSearchUrl(mapAddress);
+  const categorySnapshot = request.categorySnapshot?.snapshot;
   return (
     <article className="card request-card">
       <div className="card__head">
         <div>
-          <p className="eyebrow">{request.category?.name ?? "категория"}</p>
+          <p className="eyebrow">{categorySnapshot?.category?.title ?? request.category?.name ?? "категория"}</p>
           <h3>
             {onTitleClick ? (
               <button className="link-button" type="button" onClick={onTitleClick}>
@@ -58,6 +59,8 @@ export function RequestCard({
         <p className="notice manager-request-origin">Заявка создана при помощи менеджера сервиса.</p>
       )}
       <p>{request.description}</p>
+      {categorySnapshot?.subcategory?.title && <p className="privacy-note">Типовая задача: {categorySnapshot.subcategory.title}</p>}
+      {categorySnapshot?.recommendedPrice && <p className="privacy-note">Ориентир по похожим задачам: {formatRecommendedRange(categorySnapshot.recommendedPrice.min, categorySnapshot.recommendedPrice.max)}. Итоговая сумма согласуется в чате.</p>}
       <div className="meta-row">
         <span>
           <MapPin size={16} />
@@ -124,6 +127,12 @@ export function RequestCard({
       )}
     </article>
   );
+}
+
+function formatRecommendedRange(min?: number | null, max?: number | null) {
+  if (min != null && max != null) return `${min.toLocaleString("ru-RU")}–${max.toLocaleString("ru-RU")} ₽`;
+  if (min != null) return `от ${min.toLocaleString("ru-RU")} ₽`;
+  return "по согласованию";
 }
 
 function formatAddressDetails(request: ClientRequest) {

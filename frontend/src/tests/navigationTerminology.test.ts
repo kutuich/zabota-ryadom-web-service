@@ -767,6 +767,64 @@ assert.match(adminPaymentsBankRefundPage, /Возврат уже был учтё
 const managerDashboardPayments = read("pages/ManagerDashboard.tsx");
 assert.doesNotMatch(managerDashboardPayments, /syncAdminTbankPayment|Сверить с T-Bank/);
 
+const categoryStructuresPage = read("pages/AdminCategoryStructuresPage.tsx");
+assert.equal(adminNavigation.flatMap((group) => group.items).some((item) => item.label === "Структуры категорий"), true);
+assert.match(categoryStructuresPage, /Структуры категорий/);
+assert.match(categoryStructuresPage, /Города без локальной структуры/);
+assert.match(categoryStructuresPage, /Требуется локальная структура|statusLabel/);
+assert.match(categoryStructuresPage, /adminExportCategoryCityTemplate/);
+assert.match(categoryStructuresPage, /adminExportCategoryRegionTemplate/);
+assert.match(categoryStructuresPage, /Создать черновик/);
+assert.match(categoryStructuresPage, /Импорт никогда не публикует структуру автоматически/);
+
+const customerCategoryUi = read("pages/ClientDashboard.tsx");
+assert.match(customerCategoryUi, /categoriesForRequest/);
+assert.match(customerCategoryUi, /Направление помощи/);
+assert.match(customerCategoryUi, /Ориентир по похожим задачам/);
+assert.doesNotMatch(customerCategoryUi, /Тариф по категории/);
+
+const helperCategoryUi = read("pages/PerformerDashboard.tsx");
+assert.match(helperCategoryUi, /Какие задачи вы готовы выполнять/);
+assert.match(helperCategoryUi, /saveHelperCategoryPreferences/);
+assert.match(helperCategoryUi, /Подходит по вашим категориям/);
+
+const categoryApi = read("api/client.ts");
+assert.match(categoryApi, /\/admin\/category-structures/);
+assert.match(categoryApi, /\/categories\/for-request/);
+assert.match(categoryApi, /\/helper\/category-preferences/);
+
+const categoryServiceSource = readBackend("services/categoryStructureService.ts");
+assert.match(categoryServiceSource, /uses_region_fallback/);
+assert.match(categoryServiceSource, /uses_federal_fallback/);
+assert.match(categoryServiceSource, /Ремонтные, технические и опасные работы не принимаются/);
+
+const serviceMessagesPanel = read("components/ServiceMessagesPanel.tsx");
+const serviceMessageComposer = read("components/ServiceMessageComposer.tsx");
+const serviceCommunicationPage = read("pages/ServiceCommunicationsPage.tsx");
+const userServiceCommunication = read("components/UserServiceCommunicationPanel.tsx");
+assert.equal(clientNavigation.flatMap((group) => group.items).some((item) => item.label === "Сообщения от сервиса"), true);
+assert.equal(performerNavigation.flatMap((group) => group.items).some((item) => item.label === "Сообщения от сервиса"), true);
+assert.match(serviceMessagesPanel, /Сообщения от сервиса/);
+assert.match(serviceMessagesPanel, /readServiceMessage/);
+assert.match(serviceMessagesPanel, /downloadServiceAttachment/);
+assert.match(serviceMessageComposer, /Прикрепить файл/);
+assert.match(serviceMessageComposer, /До 5 файлов, до 10 МБ/);
+assert.match(serviceMessageComposer, /Чек «Мой налог»/);
+assert.match(serviceMessageComposer, /setFiles\(files\.filter/);
+assert.match(serviceCommunicationPage, /Чаты по заявкам/);
+assert.match(serviceCommunicationPage, /Сервисные сообщения/);
+assert.match(serviceCommunicationPage, /Рассылки/);
+assert.match(serviceCommunicationPage, /Маркетинговые объявления отправляются только/);
+assert.match(serviceCommunicationPage, /data-broadcast-preview/);
+assert.match(serviceCommunicationPage, /Вложения в массовых рассылках пока не поддерживаются/);
+assert.match(serviceCommunicationPage, /Сохранить черновик/);
+assert.match(serviceCommunicationPage, /Отменить рассылку/);
+assert.match(userServiceCommunication, /Документы и вложения/);
+assert.match(adminPaymentsBankRefundPage, /Написать по платежу/);
+assert.match(adminPaymentsBankRefundPage, /Написать по возврату/);
+assert.match(adminPaymentsBankRefundPage, /relatedRefundTransactionId/);
+assert.doesNotMatch(managerDashboardPayments, /canBroadcast=\{true\}/);
+
 const forbiddenUserLabels = [
   "Предлагаемая оплата",
   "предлагаемая оплата",

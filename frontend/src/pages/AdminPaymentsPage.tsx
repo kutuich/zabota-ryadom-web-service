@@ -1,9 +1,10 @@
-import { RefreshCcw, Search, Undo2 } from "lucide-react";
+import { MessageCircle, RefreshCcw, Search, Undo2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { EmptyState } from "../components/EmptyState";
 import { StatusBadge } from "../components/StatusBadge";
-import type { AdminPaymentDetails, AdminPaymentFilters, AdminPaymentListItem } from "../types";
+import { ServiceMessageComposer } from "../components/ServiceMessageComposer";
+import type { AdminPaymentDetails, AdminPaymentFilters, AdminPaymentListItem, RefundTransaction } from "../types";
 import { formatDateTimeRu } from "../utils/dateTime";
 import {
   adminPaymentDisplayStatus,
@@ -34,6 +35,8 @@ export function AdminPaymentsPage() {
   const [refundReason, setRefundReason] = useState("");
   const [isRefunding, setIsRefunding] = useState(false);
   const [manualBankRefundPayment, setManualBankRefundPayment] = useState<AdminPaymentDetails | null>(null);
+  const [messagePayment, setMessagePayment] = useState<AdminPaymentDetails | null>(null);
+  const [messageRefund, setMessageRefund] = useState<{ payment: AdminPaymentDetails["payment"]; refund: RefundTransaction } | null>(null);
   const [manualBankRefundDate, setManualBankRefundDate] = useState(todayDateKey());
   const [manualBankRefundReason, setManualBankRefundReason] = useState<"customer_request" | "test_refund" | "service_cancelled" | "duplicate_payment" | "other">("customer_request");
   const [manualBankReference, setManualBankReference] = useState("");
@@ -284,6 +287,8 @@ export function AdminPaymentsPage() {
                 setManualBankComment("");
                 setManualBankRefundPayment(selectedPayment);
               }}
+              onMessage={() => setMessagePayment(selectedPayment)}
+              onMessageRefund={(refund) => setMessageRefund({ payment: selectedPayment.payment, refund })}
             />
           )}
         </section>
@@ -360,6 +365,22 @@ export function AdminPaymentsPage() {
           </section>
         </div>
       )}
+      {messagePayment && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setMessagePayment(null)}>
+          <section className="modal-panel" onClick={(event) => event.stopPropagation()}>
+            <div className="card__head"><h2>Написать по платежу</h2><button className="secondary-button" type="button" onClick={() => setMessagePayment(null)}>Закрыть</button></div>
+            <ServiceMessageComposer userId={messagePayment.payment.userId} relatedPaymentTransactionId={messagePayment.payment.id} initialTitle="Информация по оплате" initialBody={`Здравствуйте. По вашему сервисному платежу в «Забота Рядом» подготовлена информация. Сервисный платёж: ${messagePayment.payment.amount} ₽. Номер платежа: ${messagePayment.payment.id}.`} initialAttachmentType="payment_receipt" onSent={() => setMessagePayment(null)} />
+          </section>
+        </div>
+      )}
+      {messageRefund && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setMessageRefund(null)}>
+          <section className="modal-panel" onClick={(event) => event.stopPropagation()}>
+            <div className="card__head"><h2>Написать по возврату</h2><button className="secondary-button" type="button" onClick={() => setMessageRefund(null)}>Закрыть</button></div>
+            <ServiceMessageComposer userId={messageRefund.payment.userId} relatedPaymentTransactionId={messageRefund.payment.id} relatedRefundTransactionId={messageRefund.refund.id} initialTitle="Информация по возврату" initialBody="Здравствуйте. По вашему сервисному платежу оформлен возврат. Информация по возврату сохранена в сервисе." initialAttachmentType="refund_receipt" onSent={() => setMessageRefund(null)} />
+          </section>
+        </div>
+      )}
     </div>
   );
 }
@@ -371,7 +392,9 @@ function PaymentDetails({
   onRefresh,
   onSyncTbank,
   onRefund,
-  onManualBankRefund
+  onManualBankRefund,
+  onMessage,
+  onMessageRefund
 }: {
   details: AdminPaymentDetails;
   isRefreshing: boolean;
@@ -380,6 +403,8 @@ function PaymentDetails({
   onSyncTbank: () => void;
   onRefund: () => void;
   onManualBankRefund: () => void;
+  onMessage: () => void;
+  onMessageRefund: (refund: RefundTransaction) => void;
 }) {
   const payment = details.payment;
   const user = details.user ?? payment.user;
@@ -435,6 +460,7 @@ function PaymentDetails({
           {isSyncingTbank ? "Сверяем" : "Сверить с T-Bank"}
         </button>
       )}
+      <button className="secondary-button" type="button" onClick={onMessage}><MessageCircle size={18} /> Написать по платежу</button>
       {payment.provider === "tbank" && payment.status === "succeeded" && payment.creditedAt && !(details.refunds?.length) && (
         <div className="trust-row">
           <button className="secondary-button" type="button" onClick={onRefund}>
@@ -464,6 +490,7 @@ function PaymentDetails({
               <span>Выполнил</span><strong>{refund.createdByAdmin?.displayName ?? refund.createdByAdminId}</strong>
               <span>Дата</span><strong>{formatDateTimeRu(refund.createdAt)}</strong>
               <span>ID возврата провайдера</span><strong>{refund.providerRefundId ?? "не указан"}</strong>
+              <button className="secondary-button" type="button" onClick={() => onMessageRefund(refund)}><MessageCircle size={18} /> Написать по возврату</button>
             </div>
           ))}
         </section>

@@ -19,6 +19,7 @@ import {
 } from "../services/addressService";
 import { asyncHandler, HttpError } from "../utils/http";
 import { activateSettlementTx } from "../services/settlementService";
+import { createRequestCategorySnapshotTx } from "../services/categoryStructureService";
 
 export const requestsRouter = Router();
 
@@ -68,12 +69,16 @@ const requestInclude = {
       archivedAt: true
     },
     orderBy: { createdAt: "desc" as const }
-  }
+  },
+  categorySnapshots: { orderBy: { createdAt: "desc" as const }, take: 1 }
 };
 
 const createRequestSchema = z.object({
   cityId: z.string().min(1),
   categoryId: z.string().min(1),
+  structuredCategoryId: z.string().min(1).optional(),
+  structuredSubcategoryId: z.string().min(1).optional(),
+  categoryTaskTemplateId: z.string().min(1).optional(),
   contactName: z.string().max(120).optional(),
   contactPhone: z.string().max(40).optional(),
   helpFor: z.enum(["elderly", "child", "limited_mobility", "home_family", "other"]).optional(),
@@ -316,11 +321,18 @@ requestsRouter.post(
         },
         include: requestInclude
       });
+      await createRequestCategorySnapshotTx(tx, {
+        requestId: created.id,
+        cityId: input.cityId,
+        categoryId: input.structuredCategoryId,
+        subcategoryId: input.structuredSubcategoryId,
+        taskTemplateId: input.categoryTaskTemplateId
+      });
       await writeAudit(req.user!.id, "request.create", "request", created.id, {
         publicNumber,
         pricing
       }, tx);
-      return created;
+      return tx.clientRequest.findUniqueOrThrow({ where: { id: created.id }, include: requestInclude });
     });
 
     res.status(201).json(serializeRequestForUser(request, req.user!));
@@ -473,6 +485,16 @@ requestsRouter.patch(
         include: requestInclude
       });
 
+      if (input.cityId || input.structuredCategoryId || input.structuredSubcategoryId || input.categoryTaskTemplateId) {
+        await createRequestCategorySnapshotTx(tx, {
+          requestId: request.id,
+          cityId: input.cityId ?? request.cityId,
+          categoryId: input.structuredCategoryId,
+          subcategoryId: input.structuredSubcategoryId,
+          taskTemplateId: input.categoryTaskTemplateId
+        });
+      }
+
       const activeChats = await tx.chat.findMany({
         where: { requestId: request.id, status: { in: ["open", "waiting_client_confirmation", "waiting_performer_confirmation"] } },
         select: { id: true }
@@ -488,7 +510,7 @@ requestsRouter.patch(
         });
       }
       await writeAudit(req.user!.id, "request.update", "request", request.id, { changedFields }, tx);
-      return saved;
+      return tx.clientRequest.findUniqueOrThrow({ where: { id: saved.id }, include: requestInclude });
     });
 
     res.json(serializeRequestForUser(updated, req.user!));

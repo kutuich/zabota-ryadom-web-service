@@ -7,6 +7,7 @@ import {
   canShowExactAddressToHelper
 } from "./addressService";
 import { serializeAgreedTerms, type AgreementTermsSource } from "./agreementTermsService";
+import { serializeRequestCategorySnapshot } from "./categoryStructureService";
 
 type RequestChatSummary = AgreementTermsSource & {
   id: string;
@@ -48,6 +49,15 @@ type RequestWithRelations = ClientRequest & {
     displayName: string;
   } | null;
   chats?: RequestChatSummary[];
+  categorySnapshots?: Array<{
+    id: string;
+    structureId: string;
+    categoryId: string | null;
+    subcategoryId: string | null;
+    taskTemplateId: string | null;
+    snapshotJson: string;
+    createdAt: Date;
+  }>;
 };
 
 export function serializeRequestForUser(
@@ -150,6 +160,7 @@ export function serializeRequestForUser(
     } : null,
     city: request.city,
     category: request.category,
+    categorySnapshot: serializeRequestCategorySnapshot(request.categorySnapshots?.[0]),
     client: request.client ? { id: request.client.id, displayName: request.client.displayName } : undefined,
     selectedPerformer: request.selectedPerformer
       ? { id: request.selectedPerformer.id, displayName: request.selectedPerformer.displayName }

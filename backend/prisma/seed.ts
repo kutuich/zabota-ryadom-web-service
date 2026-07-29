@@ -13,6 +13,7 @@ import { acceptLatestLegalDocuments, requiredDocumentTypesForRegistration, seedL
 import { normalizeRussianPhone } from "../src/services/phoneService";
 import { CITY_DIRECTORY } from "../src/services/cityDirectory";
 import { ensureSettlementDirectory } from "../src/services/settlementService";
+import { ensureFederalCategoryStructure } from "../src/services/categoryStructureService";
 
 const prisma = new PrismaClient();
 
@@ -732,6 +733,7 @@ async function main() {
     categories: categoryRecords
   });
   await ensureSettlementDirectory();
+  await ensureFederalCategoryStructure();
 
   console.log("Seed completed");
   if (process.env.SEED_DEMO_DATA === "true" && (process.env.NODE_ENV !== "production" || process.env.DEMO_MODE === "true")) {

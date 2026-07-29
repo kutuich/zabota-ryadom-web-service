@@ -37,6 +37,7 @@ import {
 } from "../services/userLifecycleService";
 import { signUserToken, type ActingRole } from "../services/authTokenService";
 import { assignManagerRole, blockUser, revokeManagerRole, unblockUser } from "../services/userAccessService";
+import { createRequestCategorySnapshotTx } from "../services/categoryStructureService";
 
 export const adminRouter = Router();
 
@@ -90,6 +91,23 @@ adminRouter.post(
       isActingAsRole: false,
       nextPath: "/app/admin"
     });
+  })
+);
+
+adminRouter.patch(
+  "/requests/:id/category",
+  asyncHandler(async (req, res) => {
+    const input = z.object({ categoryId: z.string().min(1), subcategoryId: z.string().optional(), taskTemplateId: z.string().optional() }).parse(req.body);
+    const request = await prisma.clientRequest.findUnique({ where: { id: req.params.id } });
+    if (!request) throw new HttpError(404, "Заявка не найдена", "request_not_found");
+    if (["completed", "cancelled", "archived", "blocked"].includes(request.status)) throw new HttpError(409, "Категорию закрытой заявки изменить нельзя", "request_category_locked");
+    const snapshot = await prisma.$transaction(async (tx) => {
+      const created = await createRequestCategorySnapshotTx(tx, { requestId: request.id, cityId: request.cityId, categoryId: input.categoryId, subcategoryId: input.subcategoryId, taskTemplateId: input.taskTemplateId });
+      if (!created) throw new HttpError(409, "Структура категорий города не настроена", "category_structure_missing");
+      await writeAudit(req.user!.id, "admin.request.category.update", "request", request.id, { categoryId: input.categoryId, subcategoryId: input.subcategoryId, snapshotId: created.id }, tx);
+      return created;
+    });
+    res.json(snapshot);
   })
 );
 

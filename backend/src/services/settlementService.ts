@@ -25,6 +25,20 @@ export function normalizeSettlementName(value: string) {
     .replace(/\s+/g, " ");
 }
 
+export function regionSlug(value: string) {
+  const transliteration: Record<string, string> = {
+    а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y",
+    к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f",
+    х: "h", ц: "ts", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya"
+  };
+  return normalizeSettlementName(value)
+    .split("")
+    .map((character) => transliteration[character] ?? character)
+    .join("")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "region";
+}
+
 export function sanitizeSettlementText(value: string, maxLength: number) {
   const result = value.trim().replace(/\s+/g, " ");
   if (!result || result.length > maxLength || /[<>]/.test(result)) {
@@ -108,7 +122,16 @@ export async function linkUserCityTx(
 }
 
 export async function ensureSettlementDirectory() {
+  const regionNames = [...new Set(CITY_DIRECTORY.map((city) => city.region))];
+  const regionRows = await Promise.all(regionNames.map((name) => prisma.region.upsert({
+    where: { name },
+    update: { slug: regionSlug(name), status: "active" },
+    create: { name, slug: regionSlug(name), status: "active" }
+  })));
+  const regionsByName = new Map(regionRows.map((region) => [region.name, region]));
+
   for (const city of CITY_DIRECTORY) {
+    const regionId = regionsByName.get(city.region)?.id;
     await prisma.city.upsert({
       where: { slug: city.slug },
       update: {
@@ -116,6 +139,7 @@ export async function ensureSettlementDirectory() {
         normalizedName: city.normalizedName,
         type: city.type,
         region: city.region,
+        regionId,
         source: city.source,
         directoryStatus: city.directoryStatus,
         isActive: true,
@@ -127,6 +151,7 @@ export async function ensureSettlementDirectory() {
       },
       create: {
         ...city,
+        regionId,
         status: "inactive",
         defaultCommissionAmount: 50,
         minTopUpAmount: 150
@@ -136,8 +161,13 @@ export async function ensureSettlementDirectory() {
   const cities = await prisma.city.findMany();
   for (const city of cities) {
     const normalizedName = normalizeSettlementName(city.name);
-    if (city.normalizedName !== normalizedName) {
-      await prisma.city.update({ where: { id: city.id }, data: { normalizedName } });
+    const region = await prisma.region.upsert({
+      where: { name: city.region },
+      update: { status: "active" },
+      create: { name: city.region, slug: regionSlug(city.region), status: "active" }
+    });
+    if (city.normalizedName !== normalizedName || city.regionId !== region.id) {
+      await prisma.city.update({ where: { id: city.id }, data: { normalizedName, regionId: region.id } });
     }
   }
 

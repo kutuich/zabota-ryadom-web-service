@@ -4,10 +4,12 @@ import { ensureLegalDocuments } from "./services/legalService";
 import { ensureSettlementDirectory } from "./services/settlementService";
 import { ensureFixedServiceFeeSettings } from "./services/balanceService";
 import { ensureUploadsRoot } from "./services/uploadStorage";
+import { ensureFederalCategoryStructure } from "./services/categoryStructureService";
 
 async function start() {
   await ensureLegalDocuments();
   await ensureSettlementDirectory();
+  await ensureFederalCategoryStructure();
   await ensureFixedServiceFeeSettings();
   await ensureUploadsRoot();
   const app = createApp();
