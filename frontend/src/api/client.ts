@@ -189,6 +189,8 @@ export const api = {
     apiFetch<ClientRequest>(`/requests/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   priceQuote: (body: Record<string, unknown>) =>
     apiFetch<PricingQuote>("/pricing/quote", { method: "POST", body: JSON.stringify(body) }),
+  calculateRequestPrice: (body: Record<string, unknown>) =>
+    apiFetch<import("../types").StructuredRequestPriceQuote>("/requests/calculate-price", { method: "POST", body: JSON.stringify(body) }),
   publishRequest: (id: string) => apiFetch<ClientRequest>(`/requests/${id}/publish`, { method: "POST" }),
   respondToRequest: (id: string, message: string) =>
     apiFetch<{ warning?: string | null }>(`/requests/${id}/respond`, {
@@ -251,7 +253,8 @@ export const api = {
   myServiceMessage: (id: string) => apiFetch<import("../types").ServiceMessage>(`/me/service-messages/${id}`),
   readServiceMessage: (id: string) => apiFetch<import("../types").ServiceMessage>(`/me/service-messages/${id}/read`, { method: "POST" }),
   serviceConversations: (search = "") => apiFetch<import("../types").ServiceConversation[]>(`/admin/service-conversations${search ? `?search=${encodeURIComponent(search)}` : ""}`),
-  serviceConversation: (userId: string) => apiFetch<{ user: User; conversation: import("../types").ServiceConversation | null; attachments: import("../types").ServiceMessageAttachment[] }>(`/admin/service-conversations/${userId}`),
+  searchServiceMessageUsers: (query: string) => apiFetch<import("../types").ServiceMessageUserSearchResult[]>(`/admin/service-conversations/users/search?q=${encodeURIComponent(query)}`),
+  serviceConversation: (userId: string) => apiFetch<{ user: import("../types").ServiceConversationUser; conversation: import("../types").ServiceConversation | null; attachments: import("../types").ServiceMessageAttachment[] }>(`/admin/service-conversations/${userId}`),
   sendServiceMessage: (userId: string, body: {
     title?: string;
     body: string;
@@ -291,7 +294,7 @@ export const api = {
   adminUpdateCity: (cityId: string, body: Partial<City>) =>
     apiFetch<City>(`/admin/cities/${cityId}`, { method: "PATCH", body: JSON.stringify(body) }),
   adminCategories: () => apiFetch<ServiceCategory[]>("/admin/categories"),
-  adminCategoryStructures: () => apiFetch<CategoryStructure[]>("/admin/category-structures"),
+  adminCategoryStructures: (status: "working" | "active" | "draft" | "archived" | "all" = "working") => apiFetch<CategoryStructure[]>(`/admin/category-structures?status=${status}`),
   adminCategoryStructure: (id: string) => apiFetch<CategoryStructure>(`/admin/category-structures/${id}`),
   adminCategoryCityStatuses: () => apiFetch<CategoryCityStatus[]>("/admin/category-structures/city-status"),
   adminCreateCategoryStructure: (body: { scopeType: "region" | "city"; regionId?: string; cityId?: string; title?: string; comment?: string }) =>

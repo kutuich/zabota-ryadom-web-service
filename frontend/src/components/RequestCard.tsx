@@ -60,7 +60,18 @@ export function RequestCard({
       )}
       <p>{request.description}</p>
       {categorySnapshot?.subcategory?.title && <p className="privacy-note">Типовая задача: {categorySnapshot.subcategory.title}</p>}
-      {categorySnapshot?.recommendedPrice && <p className="privacy-note">Ориентир по похожим задачам: {formatRecommendedRange(categorySnapshot.recommendedPrice.min, categorySnapshot.recommendedPrice.max)}. Итоговая сумма согласуется в чате.</p>}
+      {categorySnapshot?.finalCalculatedRecommendedPrice != null ? (
+        <div className="details-box request-calculation-snapshot">
+          <strong>Расчёт по структуре категорий</strong>
+          <p>{categorySnapshot.cityTitle}: {categorySnapshot.structureTitle} {categorySnapshot.structureVersion}</p>
+          {categorySnapshot.frequencyTitle && <p>Как часто нужна помощь: {categorySnapshot.frequencyTitle}</p>}
+          {categorySnapshot.calculationBreakdownJson?.map((line) => (
+            <p key={`${line.kind}-${line.categoryTitle}`}>{line.kind === "main" ? "Основная задача" : "Дополнительная задача"}: {line.subcategoryTitle ?? line.categoryTitle} — {line.calculatedRecommendedPrice == null ? "по согласованию" : `${line.calculatedRecommendedPrice.toLocaleString("ru-RU")} ₽`}</p>
+          ))}
+          <p><strong>Ориентировочная сумма: {categorySnapshot.finalCalculatedRecommendedPrice.toLocaleString("ru-RU")} ₽</strong></p>
+          <p>Итоговая сумма подтверждается Заказчиком и Помощником в чате.</p>
+        </div>
+      ) : categorySnapshot?.recommendedPrice && <p className="privacy-note">Ориентир по похожим задачам: {formatRecommendedRange(categorySnapshot.recommendedPrice.min, categorySnapshot.recommendedPrice.max)}. Итоговая сумма согласуется в чате.</p>}
       <div className="meta-row">
         <span>
           <MapPin size={16} />
@@ -78,7 +89,7 @@ export function RequestCard({
             : "Рекомендуемая стоимость визита будет рассчитана"}
         </span>
       </div>
-      {agreedTerms ? <AgreedTermsSummary terms={agreedTerms} /> : (pricing || performerPayment > 0) && (
+      {agreedTerms ? <AgreedTermsSummary terms={agreedTerms} /> : !categorySnapshot?.calculatedAt && (pricing || performerPayment > 0) && (
         <PriceSummary
           pricing={pricing}
           fallbackPayment={performerPayment}

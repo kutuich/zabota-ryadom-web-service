@@ -29,8 +29,20 @@ settlementsRouter.get(
       },
       take: 100
     });
+    const hasUsableRegion = (city: (typeof candidates)[number]) => {
+      const region = normalizeSettlementName(city.region ?? "");
+      return Boolean(city.regionId) && region !== "регион не указан" && region !== "не указан";
+    };
+    const publicCandidates = candidates.filter(hasUsableRegion);
+    const deduplicated = new Map<string, (typeof candidates)[number]>();
+    for (const city of publicCandidates) {
+      const key = `${normalizeSettlementName(city.name)}:${city.regionId}`;
+      const current = deduplicated.get(key);
+      if (!current || ["verified", "directory"].includes(city.directoryStatus)) deduplicated.set(key, city);
+    }
+    const visibleCandidates = [...deduplicated.values()];
     const rankStatus = (status: string) => ["verified", "directory"].includes(status) ? 0 : 1;
-    candidates.sort((left, right) => {
+    visibleCandidates.sort((left, right) => {
       const leftName = normalizeSettlementName(left.name);
       const rightName = normalizeSettlementName(right.name);
       const rank = (name: string) => name === normalizedQuery ? 0 : name.startsWith(normalizedQuery) ? 1 : 2;
@@ -38,7 +50,7 @@ settlementsRouter.get(
         || rankStatus(left.directoryStatus) - rankStatus(right.directoryStatus)
         || left.name.localeCompare(right.name, "ru");
     });
-    res.json(candidates.slice(0, 20).map(settlementDto));
+    res.json(visibleCandidates.slice(0, 20).map(settlementDto));
   })
 );
 

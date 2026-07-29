@@ -56,7 +56,7 @@ export function ServiceMessageComposer({ userId, relatedPaymentTransactionId, re
     setFiles([...files, ...next.map((file) => ({ file, attachmentType: initialAttachmentType }))]);
   }
 
-  return <section className="plain-section service-message-composer">
+  return <section className="plain-section service-message-composer service-message-compose-card">
     <h3>Написать пользователю</h3>
     {notice && <p className="notice">{notice}</p>}
     <div className="form-grid">

@@ -12,7 +12,7 @@ import { PriceSummary } from "../components/PriceSummary";
 import { Shell } from "../components/Shell";
 import { StatusBadge } from "../components/StatusBadge";
 import { useAuth } from "../context/AuthContext";
-import type { CategoriesForCity, Chat, ClientRequest, KnowledgeArticle, PricingQuote } from "../types";
+import type { CategoriesForCity, Chat, ClientRequest, KnowledgeArticle, PricingQuote, StructuredRequestPriceQuote } from "../types";
 import { labelCriminalRecord, labelStatus, requestDisplayTitle } from "../utils/labels";
 import { chatPathForRole, clientNavigation, sectionTitleForPath } from "../routes/navigation";
 import { formatDateRu, formatTimeRu } from "../utils/dateTime";
@@ -111,6 +111,12 @@ export function ClientDashboard() {
     structuredCategoryId: "",
     structuredSubcategoryId: "",
     categoryTaskTemplateId: "",
+    frequencyCode: "once",
+    categorySpecificFormatCode: "",
+    hasAdditionalTask: false,
+    additionalCategoryId: "",
+    additionalSubcategoryId: "",
+    additionalTaskTemplateId: "",
     cityId: user?.cityId ?? "",
     date: "",
     timeFrom: "",
@@ -129,7 +135,7 @@ export function ClientDashboard() {
     paymentComment: "",
     comment: ""
   });
-  const [quote, setQuote] = useState<PricingQuote | null>(null);
+  const [structuredQuote, setStructuredQuote] = useState<StructuredRequestPriceQuote | null>(null);
   const [editQuote, setEditQuote] = useState<PricingQuote | null>(null);
   const [structuredCategories, setStructuredCategories] = useState<CategoriesForCity | null>(null);
 
@@ -161,30 +167,50 @@ export function ClientDashboard() {
   }, [form.cityId, user?.cityId]);
 
   useEffect(() => {
-    const categoryId = form.categoryId;
-    if (!categoryId) return;
+    if (!form.cityId || !form.structuredCategoryId || !form.structuredSubcategoryId) {
+      setStructuredQuote(null);
+      return;
+    }
+    const selectedSubcategory = structuredCategories?.categories
+      .find((category) => category.id === form.structuredCategoryId)
+      ?.children?.find((category) => category.id === form.structuredSubcategoryId);
+    if (selectedSubcategory?.taskTemplates?.length && !form.categoryTaskTemplateId) {
+      setStructuredQuote(null);
+      return;
+    }
     const handle = window.setTimeout(() => {
-      api.priceQuote(buildPricingPayload(form)).then(setQuote).catch(() => setQuote(null));
+      api.calculateRequestPrice({
+        cityId: form.cityId,
+        categoryId: form.structuredCategoryId,
+        subcategoryId: form.structuredSubcategoryId,
+        taskTemplateId: form.categoryTaskTemplateId || undefined,
+        frequencyCode: form.frequencyCode,
+        categorySpecificFormatCode: form.categorySpecificFormatCode || undefined,
+        durationMinutes: Math.round(Number(form.expectedDurationHours) * 60),
+        queryText: `${form.title} ${form.description}`,
+        additionalTask: form.hasAdditionalTask && form.additionalCategoryId && form.additionalSubcategoryId ? {
+          categoryId: form.additionalCategoryId,
+          subcategoryId: form.additionalSubcategoryId,
+          taskTemplateId: form.additionalTaskTemplateId || undefined
+        } : undefined
+      }).then(setStructuredQuote).catch(() => setStructuredQuote(null));
     }, 250);
     return () => window.clearTimeout(handle);
   }, [
-    bootstrap?.categories,
-    form.categoryId,
-    form.packageId,
-    form.selectedAddonIds,
+    form.cityId,
+    form.structuredCategoryId,
+    form.structuredSubcategoryId,
+    form.categoryTaskTemplateId,
+    form.frequencyCode,
+    form.categorySpecificFormatCode,
     form.expectedDurationHours,
-    form.scheduleType,
-    form.additionalActions,
-    form.dependentState,
-    form.helpFor,
-    form.hygieneLevel,
-    form.physicalLoadLevel,
-    form.taskVolumeLevel,
-    form.urgencyFlags,
-    form.transportOption,
-    form.date,
-    form.timeFrom,
-    form.hasPets
+    form.title,
+    form.description,
+    form.hasAdditionalTask,
+    form.additionalCategoryId,
+    form.additionalSubcategoryId,
+    form.additionalTaskTemplateId,
+    structuredCategories
   ]);
 
   useEffect(() => {
@@ -235,10 +261,17 @@ export function ClientDashboard() {
       const request = await api.createRequest({
         ...form,
         additionalActions: buildSavedActions(form),
-        categoryId: form.categoryId,
+        categoryId: form.categoryId || undefined,
         structuredCategoryId: form.structuredCategoryId || undefined,
         structuredSubcategoryId: form.structuredSubcategoryId || undefined,
         categoryTaskTemplateId: form.categoryTaskTemplateId || undefined,
+        frequencyCode: form.frequencyCode,
+        categorySpecificFormatCode: form.categorySpecificFormatCode || undefined,
+        additionalTask: form.hasAdditionalTask && form.additionalCategoryId && form.additionalSubcategoryId ? {
+          categoryId: form.additionalCategoryId,
+          subcategoryId: form.additionalSubcategoryId,
+          taskTemplateId: form.additionalTaskTemplateId || undefined
+        } : undefined,
         cityId: form.cityId || user?.cityId,
         helpFor: form.helpFor || undefined,
         dependentAge: form.dependentAge ? Number(form.dependentAge) : undefined,
@@ -465,7 +498,8 @@ export function ClientDashboard() {
   function validateRequestForm() {
     const errors: string[] = [];
     if (!form.cityId && !user?.cityId) errors.push("Укажите город.");
-    if (!form.categoryId) errors.push("Выберите категорию услуги");
+    if (!form.structuredCategoryId) errors.push("Выберите категорию.");
+    if (!form.structuredSubcategoryId) errors.push("Выберите задачу внутри категории.");
     if (!form.title.trim()) errors.push("Коротко опишите, какая помощь нужна");
     if (!form.description.trim()) errors.push("Опишите задачу");
     if (!form.addressStreet.trim()) errors.push("Укажите улицу.");
@@ -606,7 +640,7 @@ export function ClientDashboard() {
               </ul>
             </div>
           )}
-          <CityCombobox cities={bootstrap?.cities ?? []} value={form.cityId} onChange={(cityId) => setForm({ ...form, cityId, structuredCategoryId: "", structuredSubcategoryId: "", categoryTaskTemplateId: "" })} label="Город Подопечного" />
+          <CityCombobox cities={bootstrap?.cities ?? []} value={form.cityId} onChange={(cityId) => setForm({ ...form, cityId, structuredCategoryId: "", structuredSubcategoryId: "", categoryTaskTemplateId: "", additionalCategoryId: "", additionalSubcategoryId: "", additionalTaskTemplateId: "" })} label="Город Подопечного" />
           {form.cityId && bootstrap?.cities.find((city) => city.id === form.cityId)?.serviceStatus !== "active" && (
             <p className="notice">В этом городе пока может быть мало Помощников. Заявка будет доступна тем, кто зарегистрируется в этом городе.</p>
           )}
@@ -619,44 +653,76 @@ export function ClientDashboard() {
             <input value={form.contactPhone} onChange={(event) => setForm({ ...form, contactPhone: event.target.value })} />
           </label>
           <label>
-            Направление помощи
-            <select value={form.structuredCategoryId} onChange={(event) => setForm({ ...form, structuredCategoryId: event.target.value, structuredSubcategoryId: "", categoryTaskTemplateId: "" })}>
+            Категория
+            <select value={form.structuredCategoryId} onChange={(event) => setForm({ ...form, structuredCategoryId: event.target.value, structuredSubcategoryId: "", categoryTaskTemplateId: "", categorySpecificFormatCode: "" })} disabled={!form.cityId}>
               <option value="">Выберите направление</option>
               {structuredCategories?.categories.map((category) => <option key={category.id} value={category.id}>{category.title}</option>)}
             </select>
           </label>
           <label>
-            Типовая задача
+            Подкатегория / задача
             <select value={form.structuredSubcategoryId} onChange={(event) => setForm({ ...form, structuredSubcategoryId: event.target.value, categoryTaskTemplateId: "" })} disabled={!form.structuredCategoryId}>
               <option value="">Выберите задачу</option>
               {structuredCategories?.categories.find((category) => category.id === form.structuredCategoryId)?.children?.map((category) => <option key={category.id} value={category.id}>{category.title}</option>)}
             </select>
           </label>
+          {form.structuredSubcategoryId && (structuredCategories?.categories
+            .find((category) => category.id === form.structuredCategoryId)
+            ?.children?.find((category) => category.id === form.structuredSubcategoryId)?.taskTemplates?.length ?? 0) > 0 && (
+            <label>
+              Типовая задача
+              <select value={form.categoryTaskTemplateId} onChange={(event) => setForm({ ...form, categoryTaskTemplateId: event.target.value })}>
+                <option value="">Выберите типовую задачу</option>
+                {structuredCategories?.categories
+                  .find((category) => category.id === form.structuredCategoryId)
+                  ?.children?.find((category) => category.id === form.structuredSubcategoryId)?.taskTemplates?.map((task) => (
+                    <option key={task.id} value={task.id}>{task.title}</option>
+                  ))}
+              </select>
+            </label>
+          )}
           {form.structuredCategoryId && <CategoryGuidance categories={structuredCategories} categoryId={form.structuredCategoryId} />}
           <label>
-            Формат расчёта
-            <select
-              value={form.categoryId}
-              onChange={(event) => setForm({ ...form, categoryId: event.target.value })}
-            >
-              <option value="">Выберите формат</option>
-              {bootstrap?.categories.map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.name}
-                </option>
-              ))}
+            Как часто нужна помощь?
+            <select value={form.frequencyCode} onChange={(event) => setForm({ ...form, frequencyCode: event.target.value })}>
+              {requestFrequencyOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
-          <label className="span-2">
-            Пакет помощи
-            <select value={form.packageId} onChange={(event) => setForm({ ...form, packageId: event.target.value })}>
-              <option value="">Подобрать по заявке</option>
-              {pricingPackageOptions.map((option) => (
-                <option key={option.value} value={option.value}>{option.label} — {option.price}</option>
-              ))}
-            </select>
-            <small>Действия, которые входят в пакет и укладываются в согласованное время, отдельно не оплачиваются.</small>
-          </label>
+          {form.structuredCategoryId && (
+            <label>
+              {categorySpecificQuestion(structuredCategories?.categories.find((category) => category.id === form.structuredCategoryId)?.slug)}
+              <select value={form.categorySpecificFormatCode} onChange={(event) => setForm({ ...form, categorySpecificFormatCode: event.target.value })}>
+                <option value="">По согласованию</option>
+                {categorySpecificOptions(structuredCategories?.categories.find((category) => category.id === form.structuredCategoryId)?.slug).map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <section className="span-2 details-box request-additional-task">
+            <h3>Нужно что-то ещё?</h3>
+            {!form.hasAdditionalTask ? (
+              <button className="secondary-button" type="button" onClick={() => setForm({ ...form, hasAdditionalTask: true })}>Добавить дополнительную задачу</button>
+            ) : (
+              <div className="form-grid">
+                <label>
+                  Дополнительная категория
+                  <select value={form.additionalCategoryId} onChange={(event) => setForm({ ...form, additionalCategoryId: event.target.value, additionalSubcategoryId: "", additionalTaskTemplateId: "" })}>
+                    <option value="">Выберите категорию</option>
+                    {structuredCategories?.categories.filter((category) => category.id !== form.structuredCategoryId).map((category) => <option key={category.id} value={category.id}>{category.title}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Дополнительная задача
+                  <select value={form.additionalSubcategoryId} onChange={(event) => setForm({ ...form, additionalSubcategoryId: event.target.value, additionalTaskTemplateId: "" })} disabled={!form.additionalCategoryId}>
+                    <option value="">Выберите задачу</option>
+                    {structuredCategories?.categories.find((category) => category.id === form.additionalCategoryId)?.children?.map((category) => <option key={category.id} value={category.id}>{category.title}</option>)}
+                  </select>
+                </label>
+                <button className="link-button span-2" type="button" onClick={() => setForm({ ...form, hasAdditionalTask: false, additionalCategoryId: "", additionalSubcategoryId: "", additionalTaskTemplateId: "" })}>Убрать дополнительную задачу</button>
+              </div>
+            )}
+          </section>
           <label>
             Кому нужна помощь
             <select value={form.helpFor} onChange={(event) => setForm({ ...form, helpFor: event.target.value })}>
@@ -728,6 +794,12 @@ export function ClientDashboard() {
               onChange={(event) => setForm({ ...form, description: event.target.value })}
             />
           </label>
+          {containsMedicalProcedure(`${form.title} ${form.description}`) && (
+            <p className="notice span-2">Сервис не принимает задачи с медицинскими процедурами. При угрозе жизни или здоровью обращайтесь в экстренные службы.</p>
+          )}
+          {containsDiaperTask(`${form.title} ${form.description}`) && structuredCategories?.categories.find((category) => category.id === form.structuredCategoryId)?.slug.includes("home-help") && (
+            <p className="notice span-2">Задача «Смена подгузника» относится к категории «Уход на дому без медицинских процедур». Вы можете добавить её как дополнительную задачу.</p>
+          )}
           <fieldset className="span-2 checkbox-grid">
             <legend>Дополнительные действия</legend>
             {additionalActionOptions.map((option) => (
@@ -872,29 +944,30 @@ export function ClientDashboard() {
             ))}
           </fieldset>
           <h2 className="form-section-title span-2">Рекомендуемая стоимость</h2>
-          <section className="span-2">
-            <PriceSummary pricing={quote} role="client" />
-            {quote && (
-              <details className="details-box">
-                <summary>Подробности расчёта</summary>
-                <ul>
-                  <li>Пакет помощи: {quote.packageTitle ?? quote.packageName}</li>
-                  <li>Описание: {quote.packageDescription}</li>
-                  <li>Диапазон стоимости помощи: {formatQuoteRange(quote.packagePriceMin, quote.packagePriceMax)}</li>
-                  <li>Сервисный сбор заказчика: {quote.clientServiceFeeAmount} ₽</li>
-                  <li>Итого расходы Заказчика: {formatQuoteRange(quote.customerTotalMin, quote.customerTotalMax)}</li>
-                  <li>Расчётная длительность: {quote.billableHours} ч</li>
-                  {quote.included.length > 0 && <li>Что входит: {quote.included.slice(0, 6).join(", ")}</li>}
-                  {quote.excluded.length > 0 && <li>Что не входит: {quote.excluded.slice(0, 6).join(", ")}</li>}
-                  {quote.increaseFactors.length > 0 && <li>Что может изменить стоимость: {quote.increaseFactors.join(", ")}</li>}
-                  {quote.additions.map((item) => (
-                    <li key={item.label}>
-                      {item.label}: {item.amount > 0 ? `+${item.amount} ₽` : "без надбавки"}
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            )}
+          <section className="span-2 structured-price-summary" aria-live="polite">
+            {!form.cityId ? <p>Выберите город Подопечного, чтобы увидеть доступные направления помощи.</p>
+              : !form.structuredCategoryId ? <p>Выберите категорию, чтобы увидеть ориентировочную сумму.</p>
+                : !form.structuredSubcategoryId ? <p>Выберите задачу внутри категории, чтобы уточнить ориентир.</p>
+                  : !structuredQuote ? <p>Для этой задачи ориентир пока не задан. Итоговая сумма согласуется в чате.</p>
+                    : (
+                      <>
+                        {structuredQuote.finalCalculatedRecommendedPrice !== null ? (
+                          <p className="structured-price-summary__amount">Ориентировочная сумма: <strong>{structuredQuote.finalCalculatedRecommendedPrice.toLocaleString("ru-RU")} ₽</strong></p>
+                        ) : <p>Для этой задачи ориентир пока не задан. Итоговая сумма согласуется в чате.</p>}
+                        {structuredQuote.breakdown.map((line) => (
+                          <p key={`${line.kind}-${line.categoryTitle}`}>
+                            {line.kind === "main" ? "Основная задача" : "Дополнительная задача"}: {line.subcategoryTitle ?? line.taskTemplateTitle ?? line.categoryTitle} — {line.calculatedRecommendedPrice === null ? "по согласованию" : `${line.calculatedRecommendedPrice.toLocaleString("ru-RU")} ₽`}
+                          </p>
+                        ))}
+                        {structuredQuote.baseRange?.min !== null && structuredQuote.baseRange && (
+                          <p>База ориентиров: {formatStructuredRange(structuredQuote.baseRange.min, structuredQuote.baseRange.max)}.</p>
+                        )}
+                        {structuredQuote.sourceMessage && <p>{structuredQuote.sourceMessage}</p>}
+                        <p>{structuredQuote.userMessage}</p>
+                        {structuredQuote.frequencyCode === "several_weekly" && <p>При регулярной помощи условия можно согласовать в чате.</p>}
+                        {structuredQuote.warnings.map((warning) => <p className="notice" key={warning}>{warning}</p>)}
+                      </>
+                    )}
           </section>
           <label className="span-2">
             Комментарий по оплате
@@ -1322,6 +1395,54 @@ const additionalActionOptions = [
   { value: "hygiene", label: "бытовая гигиеническая помощь", description: "Объём должен быть безопасным и заранее согласованным." }
 ];
 
+const requestFrequencyOptions = [
+  { value: "once", label: "Разово" },
+  { value: "several_weekly", label: "Несколько раз в неделю" },
+  { value: "daily", label: "Ежедневно" },
+  { value: "regular_schedule", label: "Регулярно по графику" },
+  { value: "urgent_today", label: "Срочно / сегодня" },
+  { value: "unknown", label: "Пока не знаю, обсудить в чате" }
+];
+
+function categorySpecificQuestion(slug?: string) {
+  if (slug?.includes("accompan")) return "Какой формат сопровождения?";
+  if (slug?.includes("supervision") || slug?.includes("care")) return "Какая помощь нужна?";
+  if (slug?.includes("shopping") || slug?.includes("delivery")) return "Что нужно сделать?";
+  return "Дополнительное уточнение";
+}
+
+function categorySpecificOptions(slug?: string) {
+  if (slug?.includes("accompan")) return [
+    { value: "one_way", label: "В одну сторону" },
+    { value: "round_trip", label: "Туда и обратно" },
+    { value: "with_waiting", label: "С ожиданием" }
+  ];
+  if (slug?.includes("supervision") || slug?.includes("care")) return [
+    { value: "companionship", label: "Побыть рядом" },
+    { value: "hygiene_help", label: "Помощь с гигиеной" },
+    { value: "diaper_change", label: "Смена подгузника" },
+    { value: "dressing_help", label: "Помощь переодеться" },
+    { value: "meal_help", label: "Помощь с приёмом пищи" },
+    { value: "walk_supervision", label: "Прогулка и присмотр" }
+  ];
+  if (slug?.includes("shopping") || slug?.includes("delivery")) return [
+    { value: "buy_deliver", label: "Купить и принести" },
+    { value: "pickup_order", label: "Забрать заказ" },
+    { value: "transfer_item", label: "Передать вещь" }
+  ];
+  return [];
+}
+
+function containsMedicalProcedure(value: string) {
+  const normalized = value.toLocaleLowerCase("ru-RU");
+  return ["укол", "инъекц", "капельниц", "перевяз", "обработка ран", "назначить лекар", "медицинский уход"].some((term) => normalized.includes(term));
+}
+
+function containsDiaperTask(value: string) {
+  const normalized = value.toLocaleLowerCase("ru-RU");
+  return normalized.includes("подгузник") || normalized.includes("памперс");
+}
+
 const pricingPackageOptions = [
   { value: "short_help", label: "Короткая помощь", price: "400–700 ₽" },
   { value: "home_help_2h", label: "Бытовая помощь 2 часа", price: "700–1 100 ₽" },
@@ -1517,6 +1638,12 @@ function formatQuoteRange(min?: number, max?: number | null) {
   if (min === undefined) return "по согласованию";
   const format = (value: number) => new Intl.NumberFormat("ru-RU").format(value);
   return max === null || max === undefined ? `от ${format(min)} ₽` : `${format(min)}–${format(max)} ₽`;
+}
+
+function formatStructuredRange(min: number | null, max: number | null) {
+  if (min === null) return "по согласованию";
+  const format = (value: number) => new Intl.NumberFormat("ru-RU").format(value);
+  return max === null ? `от ${format(min)} ₽` : `${format(min)}–${format(max)} ₽`;
 }
 
 function extractCommentLine(comment: string | null | undefined, prefix: string) {

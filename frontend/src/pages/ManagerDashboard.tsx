@@ -506,6 +506,7 @@ function formatBalanceChange(before?: number | null, after?: number | null) {
 }
 
 function detailRows(row: ManagerRecord): Array<[string, string]> {
+  const categorySnapshot = (row as any).categorySnapshot?.snapshot;
   const values: Array<[string, unknown]> = [
     ["Внутренний ID", row.id],
     ["Номер", row.publicNumber ?? row.orderId],
@@ -516,6 +517,12 @@ function detailRows(row: ManagerRecord): Array<[string, string]> {
     ["Помощник", row.performer?.displayName],
     ["Причина", row.reason],
     ["Описание", row.description],
+    ["Применённая структура", categorySnapshot?.structureTitle ? `${categorySnapshot.structureTitle} ${categorySnapshot.structureVersion} (${categorySnapshot.fallbackStatus})` : undefined],
+    ["Категория", categorySnapshot?.category?.title],
+    ["Задача", categorySnapshot?.subcategory?.title],
+    ["Как часто нужна помощь", categorySnapshot?.frequencyTitle],
+    ["Дополнительная задача", categorySnapshot?.additionalTaskSubcategoryTitle],
+    ["Ориентировочная сумма", categorySnapshot?.finalCalculatedRecommendedPrice != null ? `${categorySnapshot.finalCalculatedRecommendedPrice} ₽` : undefined],
     ["Дата создания", row.createdAt ? formatDateTimeRu(row.createdAt) : undefined]
   ];
   return values.filter((entry): entry is [string, string | number] => entry[1] !== undefined && entry[1] !== null)

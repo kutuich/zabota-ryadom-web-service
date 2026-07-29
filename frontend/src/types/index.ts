@@ -109,7 +109,7 @@ export type StructuredCategory = {
   children?: StructuredCategory[];
   taskTemplates?: CategoryTaskTemplate[];
   safetyRules?: Array<{ id: string; title: string; description: string; severity: string; isBlocking: boolean }>;
-  pricingRules?: Array<{ id: string; recommendedMinPrice?: number | null; recommendedMaxPrice?: number | null; priceComment?: string | null }>;
+  pricingRules?: Array<{ id: string; recommendedMinPrice?: number | null; recommendedMaxPrice?: number | null; defaultDurationMinutes?: number | null; priceComment?: string | null }>;
 };
 
 export type CategoryStructure = {
@@ -127,6 +127,7 @@ export type CategoryStructure = {
   source: string;
   comment?: string | null;
   publishedAt?: string | null;
+  archivedAt?: string | null;
   createdAt: string;
   updatedAt: string;
   scopeRegion?: { id: string; name: string; slug: string } | null;
@@ -150,6 +151,36 @@ export type CategoriesForCity = {
   statusLabel: string;
   structure: Pick<CategoryStructure, "id" | "scopeType" | "versionNumber" | "title" | "qualityStatus"> | null;
   categories: StructuredCategory[];
+};
+
+export type StructuredRequestPriceQuote = {
+  baseRange: { min: number | null; max: number | null } | null;
+  calculatedRecommendedPrice: number | null;
+  additionalTask: {
+    category: { id: string; slug: string; title: string };
+    subcategory?: { id: string; slug: string; title: string } | null;
+    taskTemplate?: { id: string; slug: string; title: string } | null;
+    baseRange: { min: number | null; max: number | null } | null;
+    calculatedRecommendedPrice: number | null;
+  } | null;
+  finalCalculatedRecommendedPrice: number | null;
+  breakdown: Array<{
+    kind: "main" | "additional";
+    categoryTitle: string;
+    subcategoryTitle?: string | null;
+    taskTemplateTitle?: string | null;
+    baseRecommendedMinPrice?: number | null;
+    baseRecommendedMaxPrice?: number | null;
+    calculatedRecommendedPrice: number | null;
+    pricingComment?: string | null;
+  }>;
+  sourceStructure: Pick<CategoryStructure, "id" | "scopeType" | "versionNumber" | "title" | "qualityStatus"> | null;
+  sourceMessage?: string;
+  fallbackStatus: CategoryCityStatus["status"];
+  frequencyCode?: string;
+  frequencyTitle?: string;
+  userMessage: string;
+  warnings: string[];
 };
 
 export type HelperCategoryPreference = {
@@ -214,6 +245,14 @@ export type ServiceConversation = {
   status: string;
   user?: Pick<User, "id" | "displayName" | "role" | "phone" | "email" | "status">;
   messages?: ServiceMessage[];
+};
+
+export type ServiceConversationUser = Pick<User, "id" | "displayName" | "role" | "phone" | "normalizedPhone" | "email" | "status"> & {
+  city?: { id: string; name: string; region: string } | null;
+};
+
+export type ServiceMessageUserSearchResult = ServiceConversationUser & {
+  canMessage: boolean;
 };
 
 export type BroadcastPreview = {
@@ -399,6 +438,21 @@ export type ClientRequest = {
       subcategory?: { id: string; slug: string; title: string } | null;
       recommendedPrice?: { min?: number | null; max?: number | null; comment?: string | null } | null;
       safetyRules?: Array<{ title: string; description: string; severity: string; isBlocking: boolean }>;
+      cityTitle?: string;
+      regionTitle?: string;
+      structureTitle?: string;
+      structureVersion?: string;
+      structureScopeType?: string;
+      fallbackStatus?: string;
+      frequencyTitle?: string;
+      taskTemplateTitle?: string | null;
+      calculatedRecommendedPrice?: number | null;
+      additionalTaskCategoryTitle?: string | null;
+      additionalTaskSubcategoryTitle?: string | null;
+      additionalTaskCalculatedPrice?: number | null;
+      finalCalculatedRecommendedPrice?: number | null;
+      calculationBreakdownJson?: Array<{ kind: string; categoryTitle: string; subcategoryTitle?: string | null; calculatedRecommendedPrice?: number | null }>;
+      calculatedAt?: string;
     } | null;
   } | null;
   contactName?: string | null;

@@ -494,7 +494,10 @@ for (const expectedPackage of [
 ]) {
   assert.match(clientPricingUi, new RegExp(expectedPackage));
 }
-assert.match(clientPricingUi, /Действия, которые входят в пакет/);
+const newRequestUi = clientPricingUi.slice(clientPricingUi.indexOf('activeTab === "Создать заявку"'), clientPricingUi.indexOf('activeTab === "Мой баланс"'));
+assert.doesNotMatch(newRequestUi, /Пакет помощи/);
+assert.match(newRequestUi, /Как часто нужна помощь\?/);
+assert.match(newRequestUi, /Добавить дополнительную задачу/);
 assert.match(clientPricingUi, /Помощь с простой едой сверх пакета/);
 
 const currentPriceSummary = read("components/PriceSummary.tsx");
@@ -776,12 +779,51 @@ assert.match(categoryStructuresPage, /adminExportCategoryCityTemplate/);
 assert.match(categoryStructuresPage, /adminExportCategoryRegionTemplate/);
 assert.match(categoryStructuresPage, /Создать черновик/);
 assert.match(categoryStructuresPage, /Импорт никогда не публикует структуру автоматически/);
+assert.match(categoryStructuresPage, /data-category-structure-list/);
+assert.match(categoryStructuresPage, /data-category-structure-card/);
+assert.match(categoryStructuresPage, /data-open-category-structure/);
+assert.match(categoryStructuresPage, /onClose=\{\(\) => setSelected\(null\)\}/);
+assert.match(categoryStructuresPage, />Свернуть</);
+assert.match(categoryStructuresPage, /data-city-structure-card/);
+assert.match(categoryStructuresPage, /label="Шаблоны"/);
+assert.match(categoryStructuresPage, /label="Создать"/);
+assert.match(categoryStructuresPage, /label="Основа"/);
+assert.match(categoryStructuresPage, /aria-selected=\{activeTab === tab\}/);
+assert.match(categoryStructuresPage, /useState<StructureStatusFilter>\("working"\)/);
+assert.match(categoryStructuresPage, /statusFilter === "working" \? \["active", "draft"\]\.includes\(item\.status\)/);
+assert.match(categoryStructuresPage, /Рабочие: опубликованные и черновики/);
+assert.match(categoryStructuresPage, /Архивные/);
+assert.match(categoryStructuresPage, /Все, включая архивные/);
+assert.match(categoryStructuresPage, /if \(tab === "Версии"\) setStatusFilter\("all"\)/);
+assert.match(categoryStructuresPage, /data-structure-status=\{item\.status\}/);
+assert.match(categoryStructuresPage, /item\.status === "archived" \? "category-structure-row is-archived"/);
+assert.match(categoryStructuresPage, /Архивная версия сохранена для истории и не применяется пользователям/);
+assert.match(categoryStructuresPage, /statusLabel\(item\.status\)/);
+
+const categoryStructureStyles = read("styles/global.css");
+assert.match(categoryStructureStyles, /\.category-structure-layout\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
+assert.match(categoryStructureStyles, /\.category-structure-row\s*\{[^}]*width:\s*100%/s);
+assert.match(categoryStructureStyles, /\.city-structure-card\s*\{/);
+assert.match(categoryStructureStyles, /\.category-structure-tabs button\.is-active/);
+assert.match(categoryStructureStyles, /\.category-structure-row\.is-archived/);
 
 const customerCategoryUi = read("pages/ClientDashboard.tsx");
 assert.match(customerCategoryUi, /categoriesForRequest/);
-assert.match(customerCategoryUi, /Направление помощи/);
+assert.match(customerCategoryUi, /Как часто нужна помощь\?/);
+assert.match(customerCategoryUi, /Добавить дополнительную задачу/);
+assert.match(customerCategoryUi, /Ориентировочная сумма:/);
+assert.match(customerCategoryUi, /База ориентиров:/);
+assert.match(customerCategoryUi, /calculateRequestPrice/);
+assert.match(customerCategoryUi, /Подкатегория \/ задача/);
+assert.match(customerCategoryUi, /Задача «Смена подгузника» относится к категории «Уход на дому без медицинских процедур»/);
+assert.match(customerCategoryUi, /Сервис не принимает задачи с медицинскими процедурами/);
 assert.match(customerCategoryUi, /Ориентир по похожим задачам/);
 assert.doesNotMatch(customerCategoryUi, /Тариф по категории/);
+
+const requestCardSource = read("components/RequestCard.tsx");
+assert.match(requestCardSource, /Расчёт по структуре категорий/);
+assert.match(requestCardSource, /Основная задача/);
+assert.match(requestCardSource, /Дополнительная задача/);
 
 const helperCategoryUi = read("pages/PerformerDashboard.tsx");
 assert.match(helperCategoryUi, /Какие задачи вы готовы выполнять/);
@@ -797,6 +839,8 @@ const categoryServiceSource = readBackend("services/categoryStructureService.ts"
 assert.match(categoryServiceSource, /uses_region_fallback/);
 assert.match(categoryServiceSource, /uses_federal_fallback/);
 assert.match(categoryServiceSource, /Ремонтные, технические и опасные работы не принимаются/);
+assert.match(categoryServiceSource, /findActiveStructure[\s\S]*status: "active"/);
+assert.match(categoryServiceSource, /status === "working" \? \{ status: \{ in: \["active", "draft"\] \} \}/);
 
 const serviceMessagesPanel = read("components/ServiceMessagesPanel.tsx");
 const serviceMessageComposer = read("components/ServiceMessageComposer.tsx");
@@ -819,6 +863,23 @@ assert.match(serviceCommunicationPage, /data-broadcast-preview/);
 assert.match(serviceCommunicationPage, /Вложения в массовых рассылках пока не поддерживаются/);
 assert.match(serviceCommunicationPage, /Сохранить черновик/);
 assert.match(serviceCommunicationPage, /Отменить рассылку/);
+assert.ok(serviceCommunicationPage.indexOf("Создать рассылку") < serviceCommunicationPage.indexOf("История рассылок"));
+assert.match(serviceCommunicationPage, /className="broadcast-layout"/);
+assert.match(serviceCommunicationPage, /broadcast-create-card/);
+assert.match(serviceCommunicationPage, /broadcast-history-card/);
+assert.doesNotMatch(serviceCommunicationPage, /return <div className="admin-two-column"><section className="plain-section"><h2>Создать рассылку/);
+assert.match(serviceCommunicationPage, /Найти пользователя/);
+assert.match(serviceCommunicationPage, /placeholder="Имя, телефон или email"/);
+assert.match(serviceCommunicationPage, /service-user-search-card/);
+assert.match(serviceCommunicationPage, /service-selected-user-card/);
+assert.match(serviceCommunicationPage, /service-message-compose-card|ServiceMessageComposer/);
+assert.match(serviceCommunicationPage, /service-message-history-card/);
+assert.ok(serviceCommunicationPage.indexOf("service-user-search-card") < serviceCommunicationPage.indexOf("<ServiceMessageComposer"));
+assert.ok(serviceCommunicationPage.indexOf("<ServiceMessageComposer") < serviceCommunicationPage.indexOf("service-message-history-card"));
+assert.match(serviceCommunicationPage, /aria-selected=\{tab === item\}/);
+assert.match(categoryApi, /service-conversations\/users\/search/);
+assert.match(categoryStructureStyles, /\.broadcast-layout\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
+assert.match(categoryStructureStyles, /\.service-communications-tabs button\.is-active/);
 assert.match(userServiceCommunication, /Документы и вложения/);
 assert.match(adminPaymentsBankRefundPage, /Написать по платежу/);
 assert.match(adminPaymentsBankRefundPage, /Написать по возврату/);

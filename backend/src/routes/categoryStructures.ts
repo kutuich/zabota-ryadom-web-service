@@ -136,7 +136,10 @@ adminCategoryStructuresRouter.post(
 );
 adminCategoryStructuresRouter.get(
   "/",
-  asyncHandler(async (_req, res) => res.json(await listCategoryStructures()))
+  asyncHandler(async (req, res) => {
+    const status = z.enum(["working", "active", "draft", "archived", "all"]).default("working").parse(req.query.status);
+    res.json(await listCategoryStructures(status));
+  })
 );
 adminCategoryStructuresRouter.get(
   "/:id/export.xlsx",

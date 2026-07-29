@@ -144,8 +144,45 @@ export async function listServiceConversations(actor: Actor, search = "") {
   return rows;
 }
 
+export async function searchServiceMessageUsers(actor: Actor, rawQuery: string) {
+  if (!["admin", "superadmin", "manager"].includes(actor.realRole)) throw new HttpError(403, "Недостаточно прав", "admin_or_manager_required");
+  const query = rawQuery.trim();
+  if (query.length < 2) throw new HttpError(400, "Введите минимум 2 символа", "service_user_search_too_short");
+  const normalizedQuery = query.toLocaleLowerCase("ru-RU");
+  const queryDigits = query.replace(/\D/g, "");
+  const phoneNeedle = queryDigits.length >= 10 ? queryDigits.slice(-10) : queryDigits;
+  const users = await prisma.user.findMany({
+    where: {
+      role: actor.realRole === "manager" ? { in: ["client", "performer"] } : { not: "oauth_pending" },
+      status: actor.realRole === "manager" ? "active" : { not: "oauth_pending" }
+    },
+    select: {
+      id: true,
+      displayName: true,
+      role: true,
+      phone: true,
+      normalizedPhone: true,
+      email: true,
+      status: true,
+      city: { select: { id: true, name: true, region: true } }
+    },
+    orderBy: { displayName: "asc" },
+    take: 5000
+  });
+  return users.filter((user) => {
+    const textMatches = user.displayName.toLocaleLowerCase("ru-RU").includes(normalizedQuery)
+      || user.email?.toLocaleLowerCase("ru-RU").includes(normalizedQuery);
+    if (textMatches) return true;
+    if (!phoneNeedle) return false;
+    return [user.phone, user.normalizedPhone].some((value) => value?.replace(/\D/g, "").slice(-10).includes(phoneNeedle));
+  }).slice(0, 50).map((user) => ({
+    ...user,
+    canMessage: !["archived", "pending_archive", "oauth_pending"].includes(user.status)
+  }));
+}
+
 export async function getServiceConversation(actor: Actor, targetUserId: string) {
-  const target = await prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true, role: true, status: true, displayName: true, phone: true, email: true } });
+  const target = await prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true, role: true, status: true, displayName: true, phone: true, normalizedPhone: true, email: true, city: { select: { id: true, name: true, region: true } } } });
   if (!target) throw new HttpError(404, "Пользователь не найден", "service_message_user_not_found");
   if (actor.realRole === "manager" && !["client", "performer"].includes(target.role)) throw new HttpError(403, "Менеджер не может просматривать сообщения служебной роли", "manager_permission_denied");
   const conversation = await prisma.serviceConversation.findUnique({ where: { userId: target.id }, include: { messages: { include: messageInclude, orderBy: { createdAt: "desc" } } } });

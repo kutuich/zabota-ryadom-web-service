@@ -1903,6 +1903,7 @@ function UserProfile({ user, legalStatuses, archiveSafety }: { user: User; legal
 function RequestDetails({ request }: { request: ClientRequest }) {
   const pricing = request.pricing ?? parseJsonObject(request.pricingBreakdownJson);
   const agreedTerms = request.chat?.agreedTerms ?? null;
+  const categorySnapshot = request.categorySnapshot?.snapshot;
   const builtPublicAddress = buildPublicAddressFromRequest(request);
   const publicMapAddress = request.yandexPublicMapAddress || builtPublicAddress || request.publicAddress || "";
   const exactMapAddress = request.yandexExactMapAddress || buildYandexExactAddressFromRequest(request);
@@ -1929,10 +1930,15 @@ function RequestDetails({ request }: { request: ClientRequest }) {
         </strong>
         <span>Описание</span><strong>{request.description}</strong>
         <span>Отклики</span><strong>{request.responses?.length ?? 0}</strong>
+        {categorySnapshot?.structureTitle && <><span>Применённая структура</span><strong>{categorySnapshot.structureTitle} {categorySnapshot.structureVersion} ({categorySnapshot.fallbackStatus})</strong></>}
+        {categorySnapshot?.subcategory?.title && <><span>Задача</span><strong>{categorySnapshot.subcategory.title}</strong></>}
+        {categorySnapshot?.frequencyTitle && <><span>Как часто нужна помощь</span><strong>{categorySnapshot.frequencyTitle}</strong></>}
+        {categorySnapshot?.additionalTaskSubcategoryTitle && <><span>Дополнительная задача</span><strong>{categorySnapshot.additionalTaskCategoryTitle}: {categorySnapshot.additionalTaskSubcategoryTitle}</strong></>}
+        {categorySnapshot?.finalCalculatedRecommendedPrice != null && <><span>Ориентировочная сумма</span><strong>{categorySnapshot.finalCalculatedRecommendedPrice.toLocaleString("ru-RU")} ₽</strong></>}
       </div>
       {agreedTerms
         ? <AgreedTermsSummary terms={agreedTerms} />
-        : <PriceSummary pricing={pricing} fallbackPayment={request.priceEstimateAmount} role="admin" />}
+        : !categorySnapshot?.calculatedAt && <PriceSummary pricing={pricing} fallbackPayment={request.priceEstimateAmount} role="admin" />}
     </div>
   );
 }

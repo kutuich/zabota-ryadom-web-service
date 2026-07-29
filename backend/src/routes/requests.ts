@@ -19,7 +19,11 @@ import {
 } from "../services/addressService";
 import { asyncHandler, HttpError } from "../utils/http";
 import { activateSettlementTx } from "../services/settlementService";
-import { createRequestCategorySnapshotTx } from "../services/categoryStructureService";
+import {
+  calculateStructuredRequestPrice,
+  createRequestCategorySnapshotTx,
+  REQUEST_FREQUENCY_CODES
+} from "../services/categoryStructureService";
 
 export const requestsRouter = Router();
 
@@ -75,10 +79,17 @@ const requestInclude = {
 
 const createRequestSchema = z.object({
   cityId: z.string().min(1),
-  categoryId: z.string().min(1),
+  categoryId: z.string().min(1).optional(),
   structuredCategoryId: z.string().min(1).optional(),
   structuredSubcategoryId: z.string().min(1).optional(),
   categoryTaskTemplateId: z.string().min(1).optional(),
+  frequencyCode: z.enum(REQUEST_FREQUENCY_CODES).default("once"),
+  categorySpecificFormatCode: z.string().max(80).optional(),
+  additionalTask: z.object({
+    categoryId: z.string().min(1),
+    subcategoryId: z.string().min(1).optional(),
+    taskTemplateId: z.string().min(1).optional()
+  }).optional(),
   contactName: z.string().max(120).optional(),
   contactPhone: z.string().max(40).optional(),
   helpFor: z.enum(["elderly", "child", "limited_mobility", "home_family", "other"]).optional(),
@@ -127,6 +138,28 @@ const createRequestSchema = z.object({
 });
 
 const updateRequestSchema = createRequestSchema.partial();
+
+const structuredPriceSchema = z.object({
+  cityId: z.string().min(1),
+  categoryId: z.string().min(1),
+  subcategoryId: z.string().min(1).optional(),
+  taskTemplateId: z.string().min(1).optional(),
+  frequencyCode: z.enum(REQUEST_FREQUENCY_CODES).default("once"),
+  categorySpecificFormatCode: z.string().max(80).optional(),
+  durationMinutes: z.number().int().positive().max(1440).optional(),
+  queryText: z.string().max(4000).optional(),
+  additionalTask: z.object({
+    categoryId: z.string().min(1),
+    subcategoryId: z.string().min(1).optional(),
+    taskTemplateId: z.string().min(1).optional()
+  }).optional()
+});
+
+requestsRouter.post(
+  "/calculate-price",
+  requireRole("client"),
+  asyncHandler(async (req, res) => res.json(await calculateStructuredRequestPrice(structuredPriceSchema.parse(req.body))))
+);
 
 requestsRouter.get(
   "/",
@@ -212,16 +245,22 @@ requestsRouter.post(
     if (medicalMatches.length > 0) {
       throw new HttpError(
         400,
-        "Сервис не оказывает медицинские услуги. Уберите медицинские процедуры из заявки.",
+        "Сервис не принимает задачи с медицинскими процедурами. Уберите такие действия из заявки.",
         "medical_terms_forbidden",
         { matches: medicalMatches }
       );
     }
 
-    const [city, category] = await Promise.all([
-      prisma.city.findFirst({ where: { id: input.cityId, isActive: true, directoryStatus: { notIn: ["hidden", "duplicate"] } } }),
-      prisma.serviceCategory.findFirst({ where: { id: input.categoryId, isActive: true } })
-    ]);
+    const city = await prisma.city.findFirst({ where: { id: input.cityId, isActive: true, directoryStatus: { notIn: ["hidden", "duplicate"] } } });
+    const structuredCategory = input.structuredCategoryId
+      ? await prisma.category.findUnique({ where: { id: input.structuredCategoryId }, select: { slug: true } })
+      : null;
+    const category = input.categoryId
+      ? await prisma.serviceCategory.findFirst({ where: { id: input.categoryId, isActive: true } })
+      : await prisma.serviceCategory.findFirst({
+          where: { isActive: true, ...(structuredCategory ? { slug: structuredCategory.slug } : {}) },
+          orderBy: { sortOrder: "asc" }
+        }) ?? await prisma.serviceCategory.findFirst({ where: { isActive: true }, orderBy: { sortOrder: "asc" } });
 
     if (!city || !category) {
       throw new HttpError(400, "Город или категория недоступны", "dictionary_invalid");
@@ -231,7 +270,7 @@ requestsRouter.post(
     const addressView = buildAddressView(addressParts);
 
     const feeSettings = await getServiceFeeSettings();
-    const pricing = calculatePrice({
+    const legacyPricing = calculatePrice({
       category,
       expectedDurationHours: input.expectedDurationHours,
       date: input.date,
@@ -256,6 +295,19 @@ requestsRouter.post(
       hasPets: input.hasPets,
       ...feeSettings
     });
+    const structuredPricing = input.structuredCategoryId ? await calculateStructuredRequestPrice({
+      cityId: input.cityId,
+      categoryId: input.structuredCategoryId,
+      subcategoryId: input.structuredSubcategoryId,
+      taskTemplateId: input.categoryTaskTemplateId,
+      frequencyCode: input.frequencyCode,
+      categorySpecificFormatCode: input.categorySpecificFormatCode,
+      durationMinutes: input.expectedDurationHours ? Math.round(input.expectedDurationHours * 60) : undefined,
+      queryText: `${input.title} ${input.description}`,
+      additionalTask: input.additionalTask
+    }) : null;
+    const recommendedAmount = structuredPricing ? structuredPricing.finalCalculatedRecommendedPrice : legacyPricing.performerPaymentAmount;
+    const pricing = structuredPricing ?? legacyPricing;
 
     const approximate = toApproximatePoint(input.lat, input.lng, city.mapCenterLat, city.mapCenterLng);
     const request = await prisma.$transaction(async (tx) => {
@@ -266,7 +318,7 @@ requestsRouter.post(
           publicNumber,
           clientId: req.user!.id,
           cityId: input.cityId,
-          categoryId: input.categoryId,
+          categoryId: category.id,
           contactName: input.contactName,
           contactPhone: input.contactPhone,
           helpFor: input.helpFor,
@@ -312,8 +364,8 @@ requestsRouter.post(
           needsWalk: input.needsWalk,
           needsHygieneHelp: input.needsHygieneHelp,
           hasPets: input.hasPets,
-          budgetAmount: pricing.performerPaymentAmount,
-          priceEstimateAmount: pricing.performerPaymentAmount,
+          budgetAmount: recommendedAmount,
+          priceEstimateAmount: recommendedAmount,
           pricingBreakdownJson: JSON.stringify(pricing),
           comment: input.comment,
           status: "draft",
@@ -326,7 +378,12 @@ requestsRouter.post(
         cityId: input.cityId,
         categoryId: input.structuredCategoryId,
         subcategoryId: input.structuredSubcategoryId,
-        taskTemplateId: input.categoryTaskTemplateId
+        taskTemplateId: input.categoryTaskTemplateId,
+        frequencyCode: input.frequencyCode,
+        categorySpecificFormatCode: input.categorySpecificFormatCode,
+        durationMinutes: input.expectedDurationHours ? Math.round(input.expectedDurationHours * 60) : undefined,
+        queryText: `${input.title} ${input.description}`,
+        additionalTask: input.additionalTask
       });
       await writeAudit(req.user!.id, "request.create", "request", created.id, {
         publicNumber,
@@ -378,7 +435,7 @@ requestsRouter.patch(
     if (medicalMatches.length > 0) {
       throw new HttpError(
         400,
-        "Сервис не оказывает медицинские услуги. Уберите медицинские процедуры из заявки.",
+        "Сервис не принимает задачи с медицинскими процедурами. Уберите такие действия из заявки.",
         "medical_terms_forbidden",
         { matches: medicalMatches }
       );
@@ -491,7 +548,12 @@ requestsRouter.patch(
           cityId: input.cityId ?? request.cityId,
           categoryId: input.structuredCategoryId,
           subcategoryId: input.structuredSubcategoryId,
-          taskTemplateId: input.categoryTaskTemplateId
+          taskTemplateId: input.categoryTaskTemplateId,
+          frequencyCode: input.frequencyCode,
+          categorySpecificFormatCode: input.categorySpecificFormatCode,
+          durationMinutes: input.expectedDurationHours ? Math.round(input.expectedDurationHours * 60) : undefined,
+          queryText: `${input.title ?? request.title} ${input.description ?? request.description}`,
+          additionalTask: input.additionalTask
         });
       }
 

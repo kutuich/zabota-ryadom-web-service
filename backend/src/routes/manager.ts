@@ -16,7 +16,7 @@ import {
   buildYandexPublicMapAddress,
   normalizeAddressParts
 } from "../services/addressService";
-import { createRequestCategorySnapshotTx } from "../services/categoryStructureService";
+import { createRequestCategorySnapshotTx, serializeRequestCategorySnapshot } from "../services/categoryStructureService";
 
 export const managerRouter = Router();
 
@@ -216,7 +216,8 @@ managerRouter.get(
         client: { select: { id: true, displayName: true, phone: true } },
         createdByManager: { select: { id: true, displayName: true } },
         selectedPerformer: { select: { id: true, displayName: true, phone: true } },
-        chats: { orderBy: { createdAt: "desc" }, take: 1 }
+        chats: { orderBy: { createdAt: "desc" }, take: 1 },
+        categorySnapshots: { orderBy: { createdAt: "desc" }, take: 1 }
       },
       orderBy: { createdAt: "desc" },
       take: 200
@@ -225,7 +226,8 @@ managerRouter.get(
       ...request,
       chat: request.chats[0]
         ? { ...request.chats[0], agreedTerms: serializeAgreedTerms(request.chats[0]) }
-        : null
+        : null,
+      categorySnapshot: serializeRequestCategorySnapshot(request.categorySnapshots[0])
     })));
   })
 );
@@ -373,12 +375,13 @@ managerRouter.get(
         createdByManager: { select: { id: true, displayName: true } },
         selectedPerformer: { select: { id: true, displayName: true, phone: true, email: true } },
         responses: { include: { performer: { select: { id: true, displayName: true } } } },
-        chats: { orderBy: { createdAt: "desc" } }
+        chats: { orderBy: { createdAt: "desc" } },
+        categorySnapshots: { orderBy: { createdAt: "desc" }, take: 1 }
       }
     });
     if (!request) throw new HttpError(404, "Заявка не найдена", "request_not_found");
     await managerViewAudit(req.user!.id, "manager.request.view", "request", request.id);
-    res.json(request);
+    res.json({ ...request, categorySnapshot: serializeRequestCategorySnapshot(request.categorySnapshots[0]) });
   })
 );
 

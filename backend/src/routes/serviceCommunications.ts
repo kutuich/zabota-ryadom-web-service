@@ -18,6 +18,7 @@ import {
   listServiceConversations,
   markServiceMessageRead,
   previewBroadcast,
+  searchServiceMessageUsers,
   sendBroadcast,
   sendServiceMessage
 } from "../services/serviceCommunicationService";
@@ -63,6 +64,10 @@ adminServiceConversationsRouter.use(authenticate, requireAdminManagerOrSuperadmi
 adminServiceConversationsRouter.get("/", asyncHandler(async (req, res) => {
   const search = typeof req.query.search === "string" ? req.query.search.slice(0, 120) : "";
   res.json(await listServiceConversations(actor(req), search));
+}));
+adminServiceConversationsRouter.get("/users/search", asyncHandler(async (req, res) => {
+  const { q } = z.object({ q: z.string().trim().min(2).max(120) }).parse(req.query);
+  res.json(await searchServiceMessageUsers(actor(req), q));
 }));
 adminServiceConversationsRouter.get("/:userId", asyncHandler(async (req, res) => {
   res.json(await getServiceConversation(actor(req), req.params.userId));

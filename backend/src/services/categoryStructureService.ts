@@ -14,6 +14,53 @@ export const CATEGORY_IMPORT_MAX_BYTES = 5 * 1024 * 1024;
 export type CategoryScopeType = typeof CATEGORY_SCOPE_TYPES[number];
 export type EffectiveCategoryStructureStatus = "local_ready" | "uses_region_fallback" | "uses_federal_fallback" | "missing_structure";
 
+export const REQUEST_FREQUENCY_CODES = ["once", "several_weekly", "daily", "regular_schedule", "urgent_today", "unknown"] as const;
+export type RequestFrequencyCode = typeof REQUEST_FREQUENCY_CODES[number];
+
+export type StructuredRequestPriceInput = {
+  cityId: string;
+  categoryId: string;
+  subcategoryId?: string | null;
+  taskTemplateId?: string | null;
+  frequencyCode: RequestFrequencyCode;
+  categorySpecificFormatCode?: string | null;
+  durationMinutes?: number | null;
+  queryText?: string | null;
+  additionalTask?: {
+    categoryId: string;
+    subcategoryId?: string | null;
+    taskTemplateId?: string | null;
+  } | null;
+};
+
+const frequencyTitles: Record<RequestFrequencyCode, string> = {
+  once: "Разово",
+  several_weekly: "Несколько раз в неделю",
+  daily: "Ежедневно",
+  regular_schedule: "Регулярно по графику",
+  urgent_today: "Срочно / сегодня",
+  unknown: "Пока не знаю, обсудить в чате"
+};
+
+const categorySpecificFormatTitles: Record<string, string> = {
+  one_way: "В одну сторону",
+  round_trip: "Туда и обратно",
+  with_waiting: "С ожиданием",
+  by_agreement: "По согласованию",
+  companionship: "Побыть рядом",
+  hygiene_help: "Помощь с гигиеной",
+  diaper_change: "Смена подгузника",
+  dressing_help: "Помощь переодеться",
+  meal_help: "Помощь с приёмом пищи",
+  walk_supervision: "Прогулка и присмотр",
+  buy_deliver: "Купить и принести",
+  pickup_order: "Забрать заказ",
+  transfer_item: "Передать вещь"
+};
+
+const medicalProcedureTerms = ["укол", "инъекц", "капельниц", "перевяз", "обработка ран", "назначить лекар", "назначение лекар", "медицинский уход"];
+export const MEDICAL_PROCEDURE_WARNING = "Сервис не принимает задачи с медицинскими процедурами. При угрозе жизни или здоровью обращайтесь в экстренные службы.";
+
 const forbiddenImportTerms = ["клиент", "исполнитель", "комиссия", "работник", "трудоустроим", "медицинские услуги"];
 const repairCategoryTerms = ["электрик", "электрика", "сантехник", "сантехника", "газ", "ремонт", "бытовая техника", "строительные работы"];
 
@@ -21,7 +68,7 @@ const federalCategories = [
   ["home-help", "Помощь по дому", 700, 1100, ["Лёгкая уборка", "Мытьё посуды", "Вынос мусора", "Полив растений", "Помощь с вещами", "Простая подготовка еды"]],
   ["shopping-delivery", "Покупки и доставка", 400, 700, ["Купить продукты", "Купить товары для дома", "Купить в аптеке по готовому списку", "Получить заказ", "Доставить вещи"]],
   ["accompaniment", "Сопровождение", 800, 1500, ["В поликлинику без медицинских процедур", "В магазин", "В МФЦ, банк или организацию", "На прогулку", "До транспорта или такси", "Встреча или проводы"]],
-  ["supervision", "Присмотр без медицинских процедур", 700, 1200, ["Побыть рядом 1–2 часа", "Побыть рядом 3–4 часа", "Присмотр во время отсутствия родственников", "Прогулка и присмотр", "Бытовая поддержка рядом"]],
+  ["supervision", "Уход на дому без медицинских процедур", 700, 1200, ["Побыть рядом", "Помощь с гигиеной", "Смена подгузника", "Помощь переодеться", "Помощь с приёмом пищи", "Прогулка и присмотр", "Регулярный уход без медицинских процедур"]],
   ["documents-household", "Помощь с документами и организацией быта", null, null, ["Записаться на приём", "Распечатать или отсканировать документы", "Помочь разобраться с квитанцией", "Сопроводить в организацию", "Помочь заполнить простую форму"]],
   ["regular-help", "Регулярная помощь", 700, null, ["Регулярные покупки", "Регулярная помощь по дому", "Регулярное сопровождение", "Регулярный присмотр без медицинских процедур"]],
   ["urgent-help", "Срочная помощь", null, null, ["Срочные покупки", "Срочное сопровождение", "Срочная бытовая помощь", "Срочно забрать или передать вещь"]],
@@ -160,8 +207,9 @@ export async function getEffectiveCategoryStructure(cityId: string, client: DbCl
   return { status: "missing_structure" as const, statusLabel: effectiveStatusLabel("missing_structure"), structure: null, city };
 }
 
-export async function listCategoryStructures() {
+export async function listCategoryStructures(status: "working" | "active" | "draft" | "archived" | "all" = "working") {
   return prisma.categoryStructure.findMany({
+    where: status === "working" ? { status: { in: ["active", "draft"] } } : status === "all" ? undefined : { status },
     include: structureListInclude,
     orderBy: [{ scopeType: "asc" }, { updatedAt: "desc" }]
   });
@@ -400,7 +448,16 @@ export async function categoriesForCity(cityId: string, audience: "customer" | "
   const categories = await prisma.category.findMany({
     where: { structureId: effective.structure.id, parentId: null, status: "active", [visibilityField]: true },
     include: {
-      children: { where: { status: "active", [visibilityField]: true }, orderBy: { sortOrder: "asc" }, include: { taskTemplates: { where: { isActive: true }, orderBy: { sortOrder: "asc" } } } },
+      children: {
+        where: { status: "active", [visibilityField]: true },
+        orderBy: { sortOrder: "asc" },
+        include: {
+          taskTemplates: { where: { isActive: true }, orderBy: { sortOrder: "asc" } },
+          pricingRules: { where: { isActive: true } },
+          safetyRules: { where: audience === "customer" ? { showToCustomer: true } : { showToHelper: true }, orderBy: { sortOrder: "asc" } }
+        }
+      },
+      taskTemplates: { where: { isActive: true }, orderBy: { sortOrder: "asc" } },
       safetyRules: { where: audience === "customer" ? { showToCustomer: true } : { showToHelper: true }, orderBy: { sortOrder: "asc" } },
       pricingRules: { where: { isActive: true } }
     },
@@ -411,6 +468,106 @@ export async function categoriesForCity(cityId: string, audience: "customer" | "
     statusLabel: effective.statusLabel,
     structure: publicStructurePassport(effective.structure),
     categories: categories.map((category) => publicCategory(category, audience))
+  };
+}
+
+export function calculateRecommendedAmount(
+  minPrice: number | null,
+  maxPrice: number | null,
+  frequencyCode: RequestFrequencyCode,
+  durationMinutes?: number | null,
+  defaultDurationMinutes?: number | null
+) {
+  if (minPrice === null) return null;
+  const max = maxPrice ?? minPrice;
+  let mode: "simple" | "normal" | "extended" | "urgent" = frequencyCode === "urgent_today" ? "urgent" : "normal";
+  if (durationMinutes && defaultDurationMinutes) {
+    if (durationMinutes <= defaultDurationMinutes / 2) mode = "simple";
+    else if (durationMinutes > defaultDurationMinutes) mode = "extended";
+  }
+  const raw = mode === "simple" ? minPrice : mode === "extended" || mode === "urgent" ? max : (minPrice + max) / 2;
+  const step = raw < 1000 ? 50 : 100;
+  return Math.round(raw / step) * step;
+}
+
+export async function calculateStructuredRequestPrice(input: StructuredRequestPriceInput, client: DbClient = prisma) {
+  const effective = await getEffectiveCategoryStructure(input.cityId, client);
+  if (!effective.structure) {
+    return {
+      baseRange: null,
+      calculatedRecommendedPrice: null,
+      additionalTask: null,
+      finalCalculatedRecommendedPrice: null,
+      breakdown: [],
+      sourceStructure: null,
+      fallbackStatus: effective.status,
+      userMessage: "Для этого города база ориентиров пока не настроена. Итоговая сумма согласуется в чате.",
+      warnings: safetyWarnings(input.queryText)
+    };
+  }
+
+  const main = await resolveStructuredSelection(client, effective.structure.id, input);
+  const additional = input.additionalTask
+    ? await resolveStructuredSelection(client, effective.structure.id, input.additionalTask)
+    : null;
+  if (additional && additional.category.id === main.category.id) {
+    throw new HttpError(400, "Дополнительная задача должна относиться к другому направлению", "request_additional_category_mismatch");
+  }
+
+  const mainAmount = calculateRecommendedAmount(
+    main.pricing?.recommendedMinPrice ?? null,
+    main.pricing?.recommendedMaxPrice ?? null,
+    input.frequencyCode,
+    input.durationMinutes,
+    main.pricing?.defaultDurationMinutes
+  );
+  const additionalAmount = additional
+    ? calculateRecommendedAmount(
+        additional.pricing?.recommendedMinPrice ?? null,
+        additional.pricing?.recommendedMaxPrice ?? null,
+        input.frequencyCode,
+        input.durationMinutes,
+        additional.pricing?.defaultDurationMinutes
+      )
+    : null;
+  const finalAmount = mainAmount === null ? null : mainAmount + (additionalAmount ?? 0);
+  const sourceStructure = publicStructurePassport(effective.structure);
+  const sourceMessage = calculationSourceMessage(effective.status, effective.city, sourceStructure);
+  const breakdown = [
+    calculationLine("main", main, mainAmount),
+    ...(additional ? [calculationLine("additional", additional, additionalAmount)] : [])
+  ];
+  const warnings = [
+    ...safetyWarnings(input.queryText),
+    ...main.safetyRules.filter((rule) => rule.severity === "warning").map((rule) => rule.description)
+  ];
+  const userMessage = mainAmount === null
+    ? "Для этой задачи ориентир пока не задан. Итоговая сумма согласуется в чате."
+    : additional && additionalAmount === null
+      ? `Ориентировочная сумма основной задачи: ${mainAmount} ₽. Дополнительная задача будет уточнена в чате.`
+      : `Ориентировочная сумма: ${finalAmount} ₽. Итоговая сумма подтверждается Заказчиком и Помощником в чате.`;
+
+  return {
+    baseRange: main.pricing ? { min: main.pricing.recommendedMinPrice, max: main.pricing.recommendedMaxPrice } : null,
+    calculatedRecommendedPrice: mainAmount,
+    additionalTask: additional ? {
+      category: categoryIdentity(additional.category),
+      subcategory: additional.subcategory ? categoryIdentity(additional.subcategory) : null,
+      taskTemplate: additional.taskTemplate ? taskIdentity(additional.taskTemplate) : null,
+      baseRange: additional.pricing ? { min: additional.pricing.recommendedMinPrice, max: additional.pricing.recommendedMaxPrice } : null,
+      calculatedRecommendedPrice: additionalAmount
+    } : null,
+    finalCalculatedRecommendedPrice: finalAmount,
+    breakdown,
+    sourceStructure,
+    sourceMessage,
+    fallbackStatus: effective.status,
+    frequencyCode: input.frequencyCode,
+    frequencyTitle: frequencyTitles[input.frequencyCode],
+    categorySpecificFormatCode: input.categorySpecificFormatCode ?? null,
+    categorySpecificFormatTitle: input.categorySpecificFormatCode ? categorySpecificFormatTitles[input.categorySpecificFormatCode] ?? "По согласованию" : null,
+    userMessage,
+    warnings
   };
 }
 
@@ -444,7 +601,18 @@ export async function getHelperCategoryPreferences(helperUserId: string, cityId?
   return rows.map(publicHelperCategoryPreference);
 }
 
-export async function createRequestCategorySnapshotTx(client: Prisma.TransactionClient, input: { requestId: string; cityId: string; categoryId?: string | null; subcategoryId?: string | null; taskTemplateId?: string | null }) {
+export async function createRequestCategorySnapshotTx(client: Prisma.TransactionClient, input: {
+  requestId: string;
+  cityId: string;
+  categoryId?: string | null;
+  subcategoryId?: string | null;
+  taskTemplateId?: string | null;
+  frequencyCode?: RequestFrequencyCode;
+  categorySpecificFormatCode?: string | null;
+  durationMinutes?: number | null;
+  queryText?: string | null;
+  additionalTask?: StructuredRequestPriceInput["additionalTask"];
+}) {
   const effective = await getEffectiveCategoryStructure(input.cityId, client);
   if (!effective.structure) return null;
   const [category, subcategory, taskTemplate] = await Promise.all([
@@ -465,9 +633,24 @@ export async function createRequestCategorySnapshotTx(client: Prisma.Transaction
     throw new HttpError(400, "Шаблон задачи не относится к выбранной категории", "request_task_template_mismatch");
   }
   const selectedCategory = category ?? (subcategory?.parentId ? await client.category.findUnique({ where: { id: subcategory.parentId } }) : null);
-  const pricing = selectedCategory ? await client.categoryPricingRule.findFirst({ where: { categoryId: selectedCategory.id, isActive: true } }) : null;
+  const pricing = subcategory
+    ? await client.categoryPricingRule.findFirst({ where: { categoryId: subcategory.id, isActive: true } })
+    : selectedCategory ? await client.categoryPricingRule.findFirst({ where: { categoryId: selectedCategory.id, isActive: true } }) : null;
   const safetyRules = selectedCategory ? await client.categorySafetyRule.findMany({ where: { categoryId: selectedCategory.id, showToCustomer: true }, orderBy: { sortOrder: "asc" } }) : [];
   const city = effective.city;
+  const calculation = selectedCategory ? await calculateStructuredRequestPrice({
+    cityId: input.cityId,
+    categoryId: selectedCategory.id,
+    subcategoryId: subcategory?.id,
+    taskTemplateId: taskTemplate?.id,
+    frequencyCode: input.frequencyCode ?? "unknown",
+    categorySpecificFormatCode: input.categorySpecificFormatCode,
+    durationMinutes: input.durationMinutes,
+    queryText: input.queryText,
+    additionalTask: input.additionalTask
+  }, client) : null;
+  const additional = calculation?.additionalTask;
+  const calculatedAt = new Date().toISOString();
   return client.requestCategorySnapshot.create({ data: {
     requestId: input.requestId,
     structureId: effective.structure.id,
@@ -483,7 +666,45 @@ export async function createRequestCategorySnapshotTx(client: Prisma.Transaction
       recommendedPrice: pricing ? { min: pricing.recommendedMinPrice, max: pricing.recommendedMaxPrice, comment: pricing.priceComment } : null,
       safetyRules: safetyRules.map((rule) => ({ title: rule.title, description: rule.description, severity: rule.severity, isBlocking: rule.isBlocking })),
       city: { id: city.id, name: city.name, region: city.region },
-      createdAt: new Date().toISOString()
+      cityId: city.id,
+      cityTitle: city.name,
+      regionTitle: city.region,
+      structureId: effective.structure.id,
+      structureTitle: effective.structure.title,
+      structureVersion: effective.structure.versionNumber,
+      structureScopeType: effective.structure.scopeType,
+      structureFallbackStatus: effective.status,
+      categoryId: selectedCategory?.id ?? null,
+      categoryTitle: selectedCategory?.title ?? null,
+      categorySlug: selectedCategory?.slug ?? null,
+      subcategoryId: subcategory?.id ?? null,
+      subcategoryTitle: subcategory?.title ?? null,
+      subcategorySlug: subcategory?.slug ?? null,
+      taskTemplateId: taskTemplate?.id ?? null,
+      taskTemplateTitle: taskTemplate?.title ?? null,
+      frequencyCode: calculation?.frequencyCode ?? input.frequencyCode ?? "unknown",
+      frequencyTitle: calculation?.frequencyTitle ?? frequencyTitles[input.frequencyCode ?? "unknown"],
+      categorySpecificFormatCode: input.categorySpecificFormatCode ?? null,
+      categorySpecificFormatTitle: input.categorySpecificFormatCode ? categorySpecificFormatTitles[input.categorySpecificFormatCode] ?? "По согласованию" : null,
+      baseRecommendedMinPrice: calculation?.baseRange?.min ?? null,
+      baseRecommendedMaxPrice: calculation?.baseRange?.max ?? null,
+      calculatedRecommendedPrice: calculation?.calculatedRecommendedPrice ?? null,
+      additionalTaskCategoryId: additional?.category.id ?? null,
+      additionalTaskCategoryTitle: additional?.category.title ?? null,
+      additionalTaskSubcategoryId: additional?.subcategory?.id ?? null,
+      additionalTaskSubcategoryTitle: additional?.subcategory?.title ?? null,
+      additionalTaskCalculatedPrice: additional?.calculatedRecommendedPrice ?? null,
+      finalCalculatedRecommendedPrice: calculation?.finalCalculatedRecommendedPrice ?? null,
+      pricingComment: pricing?.priceComment ?? null,
+      calculationBreakdownJson: calculation?.breakdown ?? [],
+      pricingSourceStructureId: calculation?.sourceStructure?.id ?? effective.structure.id,
+      pricingSourceStructureTitle: calculation?.sourceStructure?.title ?? effective.structure.title,
+      pricingSourceVersion: calculation?.sourceStructure?.versionNumber ?? effective.structure.versionNumber,
+      pricingSourceScopeType: calculation?.sourceStructure?.scopeType ?? effective.structure.scopeType,
+      fallbackStatus: calculation?.fallbackStatus ?? effective.status,
+      safetyRulesShown: calculation?.warnings ?? [],
+      calculatedAt,
+      createdAt: calculatedAt
     })
   } });
 }
@@ -678,6 +899,63 @@ function publicStructurePassport(structure: any) {
   return { id: structure.id, scopeType: structure.scopeType, versionNumber: structure.versionNumber, title: structure.title, qualityStatus: structure.qualityStatus };
 }
 
+async function resolveStructuredSelection(client: DbClient, structureId: string, input: { categoryId: string; subcategoryId?: string | null; taskTemplateId?: string | null }) {
+  const category = await client.category.findFirst({
+    where: { id: input.categoryId, structureId, parentId: null, status: "active", isVisibleForCustomer: true },
+    include: { pricingRules: { where: { isActive: true }, orderBy: { createdAt: "asc" } }, safetyRules: { where: { showToCustomer: true }, orderBy: { sortOrder: "asc" } } }
+  });
+  if (!category) throw new HttpError(400, "Выбрана недоступная категория", "request_category_invalid");
+  const subcategory = input.subcategoryId
+    ? await client.category.findFirst({
+        where: { id: input.subcategoryId, structureId, parentId: category.id, status: "active", isVisibleForCustomer: true },
+        include: { pricingRules: { where: { isActive: true }, orderBy: { createdAt: "asc" } }, safetyRules: { where: { showToCustomer: true }, orderBy: { sortOrder: "asc" } } }
+      })
+    : null;
+  if (input.subcategoryId && !subcategory) throw new HttpError(400, "Подкатегория не относится к выбранной категории", "request_subcategory_mismatch");
+  const taskCategoryId = subcategory?.id ?? category.id;
+  const taskTemplate = input.taskTemplateId
+    ? await client.categoryTaskTemplate.findFirst({ where: { id: input.taskTemplateId, categoryId: taskCategoryId, isActive: true } })
+    : null;
+  if (input.taskTemplateId && !taskTemplate) throw new HttpError(400, "Шаблон задачи не относится к выбранной категории", "request_task_template_mismatch");
+  const pricing = subcategory?.pricingRules[0] ?? category.pricingRules[0] ?? null;
+  return { category, subcategory, taskTemplate, pricing, safetyRules: [...category.safetyRules, ...(subcategory?.safetyRules ?? [])] };
+}
+
+function calculationLine(kind: "main" | "additional", selection: Awaited<ReturnType<typeof resolveStructuredSelection>>, amount: number | null) {
+  return {
+    kind,
+    categoryId: selection.category.id,
+    categoryTitle: selection.category.title,
+    subcategoryId: selection.subcategory?.id ?? null,
+    subcategoryTitle: selection.subcategory?.title ?? null,
+    taskTemplateId: selection.taskTemplate?.id ?? null,
+    taskTemplateTitle: selection.taskTemplate?.title ?? null,
+    baseRecommendedMinPrice: selection.pricing?.recommendedMinPrice ?? null,
+    baseRecommendedMaxPrice: selection.pricing?.recommendedMaxPrice ?? null,
+    calculatedRecommendedPrice: amount,
+    pricingComment: selection.pricing?.priceComment ?? null
+  };
+}
+
+function categoryIdentity(category: { id: string; slug: string; title: string }) {
+  return { id: category.id, slug: category.slug, title: category.title };
+}
+
+function taskIdentity(task: { id: string; slug: string; title: string }) {
+  return { id: task.id, slug: task.slug, title: task.title };
+}
+
+function safetyWarnings(text?: string | null) {
+  const normalized = (text ?? "").toLocaleLowerCase("ru-RU");
+  return medicalProcedureTerms.some((term) => normalized.includes(term)) ? [MEDICAL_PROCEDURE_WARNING] : [];
+}
+
+function calculationSourceMessage(status: EffectiveCategoryStructureStatus, city: any, structure: ReturnType<typeof publicStructurePassport>) {
+  if (status === "local_ready") return `База расчёта: ${city.name} v${structure.versionNumber}.`;
+  if (status === "uses_region_fallback") return `База расчёта: ${city.region} v${structure.versionNumber}. Для ${city.name} локальная структура пока не создана.`;
+  return `База расчёта: базовая структура РФ v${structure.versionNumber}. Локальные ориентиры для города пока не заданы.`;
+}
+
 function publicCategory(category: any, audience: "customer" | "helper") {
   const descriptionField = audience === "customer" ? "descriptionForCustomer" : "descriptionForHelper";
   const hintField = audience === "customer" ? "customerHint" : "helperHint";
@@ -713,7 +991,32 @@ function publicCategory(category: any, audience: "customer" | "helper") {
         [hintField]: task[hintField],
         safetyNote: task.safetyNote,
         sortOrder: task.sortOrder
+      })),
+      safetyRules: (child.safetyRules ?? []).map((rule: any) => ({
+        id: rule.id,
+        title: rule.title,
+        description: rule.description,
+        severity: rule.severity,
+        isBlocking: rule.isBlocking,
+        sortOrder: rule.sortOrder
+      })),
+      pricingRules: (child.pricingRules ?? []).map((price: any) => ({
+        id: price.id,
+        recommendedPackageCode: price.recommendedPackageCode,
+        recommendedMinPrice: price.recommendedMinPrice,
+        recommendedMaxPrice: price.recommendedMaxPrice,
+        defaultDurationMinutes: price.defaultDurationMinutes,
+        priceComment: price.priceComment
       }))
+    })),
+    taskTemplates: (category.taskTemplates ?? []).map((task: any) => ({
+      id: task.id,
+      slug: task.slug,
+      title: task.title,
+      description: task.description,
+      [hintField]: task[hintField],
+      safetyNote: task.safetyNote,
+      sortOrder: task.sortOrder
     })),
     safetyRules: (category.safetyRules ?? []).map((rule: any) => ({
       id: rule.id,

@@ -63,13 +63,17 @@ import {
   roleToLegalScope
 } from "../services/legalService";
 import {
+  archiveCategoryStructure,
   buildCityTemplateExport,
+  calculateRecommendedAmount,
+  calculateStructuredRequestPrice,
   categoriesForCity,
   createDraftFromImport,
   createRequestCategorySnapshotTx,
   createStructureFromParent,
   ensureFederalCategoryStructure,
   getEffectiveCategoryStructure,
+  listCategoryStructures,
   publishCategoryStructure,
   saveHelperCategoryPreferences,
   validateCategoryImport
@@ -81,6 +85,7 @@ import {
   hasCurrentMarketingConsent,
   markServiceMessageRead,
   previewBroadcast,
+  searchServiceMessageUsers,
   sendBroadcast,
   sendServiceMessage
 } from "../services/serviceCommunicationService";
@@ -543,6 +548,10 @@ async function run() {
 
   const cleanMedicalWording = detectMedicalTerms("Без медицинских процедур, только бытовая помощь");
   assert.equal(cleanMedicalWording.length, 0);
+  assert.equal(detectMedicalTerms("Помощь со сменой подгузника и простой гигиеной").length, 0);
+  assert.equal(calculateRecommendedAmount(900, 1500, "once"), 1200);
+  assert.equal(calculateRecommendedAmount(700, 1600, "unknown"), 1200);
+  assert.equal(calculateRecommendedAmount(900, 1500, "urgent_today"), 1500);
 
   const moderated = moderateChatMessage("Мой телефон 89001234567");
   assert.equal(moderated.status, "hidden");
@@ -586,21 +595,34 @@ async function run() {
 
 async function runServiceCommunicationTests() {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const phoneSuffix = Math.floor(Math.random() * 10_000_000).toString().padStart(7, "0");
+  const normalizedSearchPhone = `+7922${phoneSuffix}`;
   const app = createApp();
   const city = await prisma.city.create({ data: { name: `Город сообщений ${suffix}`, normalizedName: `город сообщений ${suffix}`, slug: `messages-${suffix}`, region: "Тестовый регион", status: "active", serviceStatus: "active", isActive: true, mapCenterLat: 60, mapCenterLng: 60 } });
   const admin = await prisma.user.create({ data: { role: "admin", rolesJson: '["admin"]', displayName: `Администратор сообщений ${suffix}`, status: "active" } });
   const manager = await prisma.user.create({ data: { role: "manager", rolesJson: '["manager"]', displayName: `Менеджер сообщений ${suffix}`, status: "active" } });
-  const customer = await prisma.user.create({ data: { role: "client", rolesJson: '["client"]', displayName: `Заказчик сообщений ${suffix}`, status: "active", cityId: city.id } });
+  const customer = await prisma.user.create({ data: { role: "client", rolesJson: '["client"]', displayName: `Заказчик сообщений ${suffix}`, phone: normalizedSearchPhone, normalizedPhone: normalizedSearchPhone, email: `messages-${suffix}@example.test`, status: "active", cityId: city.id } });
   const customerWithoutConsent = await prisma.user.create({ data: { role: "client", rolesJson: '["client"]', displayName: `Заказчик без согласия ${suffix}`, status: "active", cityId: city.id } });
   const helper = await prisma.user.create({ data: { role: "performer", rolesJson: '["performer"]', displayName: `Помощник сообщений ${suffix}`, status: "active", cityId: city.id } });
   const archived = await prisma.user.create({ data: { role: "client", rolesJson: '["client"]', displayName: `Архив сообщений ${suffix}`, status: "archived", cityId: city.id } });
-  const userIds = [admin.id, manager.id, customer.id, customerWithoutConsent.id, helper.id, archived.id];
+  const oauthPending = await prisma.user.create({ data: { role: "oauth_pending", rolesJson: "[]", displayName: `OAuth сообщений ${suffix}`, status: "oauth_pending", cityId: city.id } });
+  const userIds = [admin.id, manager.id, customer.id, customerWithoutConsent.id, helper.id, archived.id, oauthPending.id];
   const storagePaths: string[] = [];
   try {
     const marketingDocument = await prisma.legalDocument.findFirstOrThrow({ where: { type: "marketing_notifications_consent", isActive: true, isPublished: true }, orderBy: { publishedAt: "desc" } });
     await prisma.userConsent.create({ data: { userId: customer.id, documentId: marketingDocument.id, documentType: marketingDocument.type, documentVersion: marketingDocument.version, documentTitle: marketingDocument.title, documentContentHash: marketingDocument.contentHash, isRequired: false, source: "test" } });
     assert.equal(await hasCurrentMarketingConsent(customer.id), true);
     assert.equal(await hasCurrentMarketingConsent(customerWithoutConsent.id), false);
+
+    const adminActor = { id: admin.id, realRole: "admin" };
+    assert.equal((await searchServiceMessageUsers(adminActor, customer.email!.toUpperCase()))[0]?.id, customer.id);
+    assert.equal((await searchServiceMessageUsers(adminActor, normalizedSearchPhone))[0]?.id, customer.id);
+    assert.equal((await searchServiceMessageUsers(adminActor, `8${normalizedSearchPhone.slice(2)}`))[0]?.id, customer.id);
+    assert.equal((await searchServiceMessageUsers(adminActor, normalizedSearchPhone.slice(-10)))[0]?.id, customer.id);
+    assert.equal((await searchServiceMessageUsers(adminActor, `заказчик СООБЩЕНИЙ ${suffix}`))[0]?.id, customer.id);
+    assert.equal((await searchServiceMessageUsers(adminActor, `OAuth сообщений ${suffix}`)).length, 0);
+    const managerSearch = await searchServiceMessageUsers({ id: manager.id, realRole: "manager" }, "сообщений");
+    assert.equal(managerSearch.some((user) => [admin.id, manager.id].includes(user.id)), false);
 
     const pdf = Buffer.from("%PDF-1.4\nservice-message-test").toString("base64");
     const sent = await sendServiceMessage({ id: admin.id, realRole: "admin" }, customer.id, { title: "Информация по оплате", body: "Сервисный платёж сохранён.", messageType: "service_message", clientRequestId: `message-${suffix}`, files: [{ fileName: "../../receipt.pdf", mimeType: "application/pdf", fileData: pdf, attachmentType: "npd_receipt" }] });
@@ -653,6 +675,11 @@ async function runServiceCommunicationTests() {
 
     let response = await apiRequest(app, `/api/admin/service-conversations/${customer.id}/messages`, { method: "POST", token: tokenFor(customer.id, "client"), body: { body: "Запрещено", messageType: "service_message" } });
     assert.equal(response.status, 403);
+    response = await apiRequest(app, `/api/admin/service-conversations/users/search?q=${encodeURIComponent(customer.email!)}`, { method: "GET", token: tokenFor(admin.id, "admin") });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload[0]?.id, customer.id);
+    response = await apiRequest(app, `/api/admin/service-conversations/users/search?q=${encodeURIComponent(customer.email!)}`, { method: "GET", token: tokenFor(customer.id, "client") });
+    assert.equal(response.status, 403);
     response = await apiRequest(app, `/api/me/service-messages/${sent.message.id}`, { method: "GET", token: tokenFor(helper.id, "performer") });
     assert.equal(response.status, 404);
     assert.doesNotThrow(() => assertServiceAttachmentDownloadAccess({ id: customer.id, realRole: "client" }, { id: customer.id, role: "client" }));
@@ -700,6 +727,18 @@ async function runCategoryStructureTests() {
     mapCenterLat: 60,
     mapCenterLng: 60
   } });
+  const fallbackCity = await prisma.city.create({ data: {
+    name: `Тестовый fallback город ${suffix}`,
+    slug: `test-fallback-city-${suffix}`,
+    normalizedName: `тестовый fallback город ${suffix}`,
+    region: region.name,
+    regionId: region.id,
+    status: "active",
+    serviceStatus: "active",
+    isActive: true,
+    mapCenterLat: 61,
+    mapCenterLng: 61
+  } });
   const createdStructureIds: string[] = [];
   const requestIds: string[] = [];
   try {
@@ -709,6 +748,7 @@ async function runCategoryStructureTests() {
     assert.equal(regionDraft.status, "draft");
     await publishCategoryStructure(regionDraft.id, admin.id);
     assert.equal((await getEffectiveCategoryStructure(city.id)).status, "uses_region_fallback");
+    assert.equal((await getEffectiveCategoryStructure(fallbackCity.id)).structure?.id, regionDraft.id);
 
     const cityDraft = await createStructureFromParent({ scopeType: "city", cityId: city.id }, admin.id);
     createdStructureIds.push(cityDraft.id);
@@ -720,6 +760,12 @@ async function runCategoryStructureTests() {
     assert.ok(customerCategories.categories.length > 0);
     assert.equal(Object.prototype.hasOwnProperty.call(customerCategories.categories[0], "descriptionForAdmin"), false);
     assert.equal(Object.prototype.hasOwnProperty.call(customerCategories.categories[0], "isVisibleForAdmin"), false);
+    const categoriesResponse = await apiRequest(createApp(), `/api/categories/for-request?cityId=${city.id}`, {
+      method: "GET",
+      token: tokenFor(customer.id, customer.role)
+    });
+    assert.equal(categoriesResponse.status, 200);
+    assert.equal(categoriesResponse.payload.structure.id, cityDraft.id);
 
     const exported = await buildCityTemplateExport(city.id, admin.id);
     assert.match(exported.fileName, new RegExp(`testovyy-region-${suffix}_test-city-${suffix}`));
@@ -734,6 +780,87 @@ async function runCategoryStructureTests() {
     const structure = await prisma.categoryStructure.findUniqueOrThrow({ where: { id: cityDraft.id }, include: { categories: true } });
     const rootCategory = structure.categories.find((category) => !category.parentId)!;
     const childCategory = structure.categories.find((category) => category.parentId === rootCategory.id)!;
+    await prisma.categoryPricingRule.updateMany({
+      where: { categoryId: rootCategory.id, isActive: true },
+      data: { recommendedMinPrice: 900, recommendedMaxPrice: 1500, defaultDurationMinutes: 120 }
+    });
+    const taskTemplate = await prisma.categoryTaskTemplate.findFirstOrThrow({ where: { categoryId: childCategory.id, isActive: true } });
+    const exactCalculation = await calculateStructuredRequestPrice({
+      cityId: city.id,
+      categoryId: rootCategory.id,
+      subcategoryId: childCategory.id,
+      taskTemplateId: taskTemplate.id,
+      frequencyCode: "once",
+      durationMinutes: 120
+    });
+    assert.equal(exactCalculation.calculatedRecommendedPrice, 1200);
+    assert.equal(exactCalculation.finalCalculatedRecommendedPrice, 1200);
+    assert.equal(exactCalculation.fallbackStatus, "local_ready");
+    assert.match(exactCalculation.sourceMessage, new RegExp(city.name));
+    const priceResponse = await apiRequest(createApp(), "/api/requests/calculate-price", {
+      method: "POST",
+      token: tokenFor(customer.id, customer.role),
+      body: {
+        cityId: city.id,
+        categoryId: rootCategory.id,
+        subcategoryId: childCategory.id,
+        taskTemplateId: taskTemplate.id,
+        frequencyCode: "once",
+        durationMinutes: 120
+      }
+    });
+    assert.equal(priceResponse.status, 200);
+    assert.equal(priceResponse.payload.calculatedRecommendedPrice, 1200);
+    const additionalRoot = structure.categories.find((category) => !category.parentId && category.id !== rootCategory.id)!;
+    const additionalChild = structure.categories.find((category) => category.parentId === additionalRoot.id)!;
+    const additionalTemplate = await prisma.categoryTaskTemplate.findFirstOrThrow({ where: { categoryId: additionalChild.id, isActive: true } });
+    await prisma.categoryPricingRule.updateMany({
+      where: { categoryId: additionalRoot.id, isActive: true },
+      data: { recommendedMinPrice: 700, recommendedMaxPrice: 900 }
+    });
+    const combinedCalculation = await calculateStructuredRequestPrice({
+      cityId: city.id,
+      categoryId: rootCategory.id,
+      subcategoryId: childCategory.id,
+      taskTemplateId: taskTemplate.id,
+      frequencyCode: "once",
+      additionalTask: { categoryId: additionalRoot.id, subcategoryId: additionalChild.id, taskTemplateId: additionalTemplate.id }
+    });
+    assert.equal(combinedCalculation.additionalTask?.calculatedRecommendedPrice, 800);
+    assert.equal(combinedCalculation.finalCalculatedRecommendedPrice, 2000);
+    await assert.rejects(
+      calculateStructuredRequestPrice({ cityId: city.id, categoryId: rootCategory.id, subcategoryId: childCategory.id, taskTemplateId: additionalTemplate.id, frequencyCode: "once" }),
+      /Шаблон задачи не относится/
+    );
+    await prisma.categoryPricingRule.updateMany({
+      where: { categoryId: additionalRoot.id, isActive: true },
+      data: { recommendedMinPrice: null, recommendedMaxPrice: null }
+    });
+    const unpricedAdditional = await calculateStructuredRequestPrice({
+      cityId: city.id,
+      categoryId: rootCategory.id,
+      subcategoryId: childCategory.id,
+      frequencyCode: "once",
+      additionalTask: { categoryId: additionalRoot.id, subcategoryId: additionalChild.id }
+    });
+    assert.equal(unpricedAdditional.finalCalculatedRecommendedPrice, 1200);
+    assert.equal(unpricedAdditional.additionalTask?.calculatedRecommendedPrice, null);
+    const medicalWarning = await calculateStructuredRequestPrice({
+      cityId: city.id,
+      categoryId: rootCategory.id,
+      subcategoryId: childCategory.id,
+      frequencyCode: "once",
+      queryText: "Нужен укол"
+    });
+    assert.ok(medicalWarning.warnings.some((warning) => warning.includes("медицинскими процедурами")));
+    const diaperWording = await calculateStructuredRequestPrice({
+      cityId: city.id,
+      categoryId: rootCategory.id,
+      subcategoryId: childCategory.id,
+      frequencyCode: "once",
+      queryText: "Нужна смена подгузника"
+    });
+    assert.equal(diaperWording.warnings.some((warning) => warning.includes("Сервис не принимает")), false);
     const request = await prisma.clientRequest.create({ data: {
       clientId: customer.id,
       cityId: city.id,
@@ -744,9 +871,22 @@ async function runCategoryStructureTests() {
       approximateAddressText: city.name
     } });
     requestIds.push(request.id);
-    const snapshot = await prisma.$transaction((tx) => createRequestCategorySnapshotTx(tx, { requestId: request.id, cityId: city.id, categoryId: rootCategory.id, subcategoryId: childCategory.id }));
+    const snapshot = await prisma.$transaction((tx) => createRequestCategorySnapshotTx(tx, {
+      requestId: request.id,
+      cityId: city.id,
+      categoryId: rootCategory.id,
+      subcategoryId: childCategory.id,
+      taskTemplateId: taskTemplate.id,
+      frequencyCode: "once",
+      durationMinutes: 120,
+      additionalTask: { categoryId: additionalRoot.id, subcategoryId: additionalChild.id }
+    }));
     assert.ok(snapshot);
     assert.equal(JSON.parse(snapshot!.snapshotJson).category.slug, rootCategory.slug);
+    assert.equal(JSON.parse(snapshot!.snapshotJson).calculatedRecommendedPrice, 1200);
+    assert.equal(JSON.parse(snapshot!.snapshotJson).finalCalculatedRecommendedPrice, 1200);
+    assert.equal(JSON.parse(snapshot!.snapshotJson).structureScopeType, "city");
+    assert.equal(JSON.parse(snapshot!.snapshotJson).additionalTaskCategoryId, additionalRoot.id);
     await prisma.category.update({ where: { id: rootCategory.id }, data: { title: "Временно переименовано" } });
     assert.equal(JSON.parse((await prisma.requestCategorySnapshot.findUniqueOrThrow({ where: { id: snapshot!.id } })).snapshotJson).category.title, rootCategory.title);
 
@@ -762,6 +902,22 @@ async function runCategoryStructureTests() {
     assert.equal((await prisma.categoryStructure.findUniqueOrThrow({ where: { id: cityDraft.id } })).status, "archived");
     assert.equal((await getEffectiveCategoryStructure(city.id)).structure?.id, importedDraft.id);
 
+    const workingStructures = await listCategoryStructures();
+    assert.equal(workingStructures.some((item) => item.status === "archived"), false);
+    const archivedStructures = await listCategoryStructures("archived");
+    assert.ok(archivedStructures.some((item) => item.id === cityDraft.id));
+    let listResponse = await apiRequest(createApp(), "/api/admin/category-structures", { method: "GET", token: tokenFor(admin.id, admin.role) });
+    assert.equal(listResponse.status, 200);
+    assert.equal(listResponse.payload.some((item: { status: string }) => item.status === "archived"), false);
+    listResponse = await apiRequest(createApp(), "/api/admin/category-structures?status=archived", { method: "GET", token: tokenFor(admin.id, admin.role) });
+    assert.equal(listResponse.status, 200);
+    assert.ok(listResponse.payload.some((item: { id: string }) => item.id === cityDraft.id));
+
+    await archiveCategoryStructure(regionDraft.id, admin.id);
+    const fallbackAfterRegionArchive = await getEffectiveCategoryStructure(fallbackCity.id);
+    assert.equal(fallbackAfterRegionArchive.status, "uses_federal_fallback");
+    assert.notEqual(fallbackAfterRegionArchive.structure?.id, regionDraft.id);
+
     const manager = await prisma.user.findFirst({ where: { role: "manager" } });
     if (manager) {
       const denied = await apiRequest(createApp(), "/api/admin/category-structures/create-from-parent", { method: "POST", token: tokenFor(manager.id, "manager"), body: { scopeType: "city", cityId: city.id } });
@@ -772,7 +928,7 @@ async function runCategoryStructureTests() {
     await prisma.clientRequest.deleteMany({ where: { id: { in: requestIds } } });
     await prisma.helperCategoryPreference.deleteMany({ where: { cityId: city.id } });
     await prisma.categoryStructure.deleteMany({ where: { id: { in: createdStructureIds } } });
-    await prisma.city.delete({ where: { id: city.id } });
+    await prisma.city.deleteMany({ where: { id: { in: [city.id, fallbackCity.id] } } });
     await prisma.region.delete({ where: { id: region.id } });
   }
 }
@@ -2011,6 +2167,11 @@ async function runProductionStartupTests() {
 
 async function runSettlementDirectoryTests() {
   const suffix = Date.now().toString(36);
+  const searchRegion = await prisma.region.upsert({
+    where: { name: `ХМАО — Югра ${suffix}` },
+    update: {},
+    create: { name: `ХМАО — Югра ${suffix}`, slug: `khmao-search-${suffix}`, status: "active" }
+  });
   const searchable = await prisma.city.upsert({
     where: { slug: `search-yugorsk-${suffix}` },
     update: {},
@@ -2018,7 +2179,8 @@ async function runSettlementDirectoryTests() {
       name: `Югорск Тест ${suffix}`,
       normalizedName: normalizeSettlementName(`Югорск Тест ${suffix}`),
       slug: `search-yugorsk-${suffix}`,
-      region: "ХМАО — Югра",
+      region: searchRegion.name,
+      regionId: searchRegion.id,
       source: "seed",
       directoryStatus: "verified",
       serviceStatus: "inactive",
@@ -2028,10 +2190,25 @@ async function runSettlementDirectoryTests() {
       mapCenterLng: 63.33
     }
   });
+  await prisma.city.create({ data: {
+    name: searchable.name,
+    normalizedName: searchable.normalizedName,
+    slug: `search-yugorsk-dirty-${suffix}`,
+    region: "Регион не указан",
+    source: "user_suggested",
+    directoryStatus: "needs_review",
+    serviceStatus: "inactive",
+    status: "inactive",
+    isActive: true,
+    mapCenterLat: 0,
+    mapCenterLng: 0
+  } });
   const app = createApp();
   const search = await apiRequest(app, `/api/settlements/search?q=${encodeURIComponent(searchable.name)}`, { method: "GET" });
   assert.equal(search.status, 200);
-  assert.ok(search.payload.some((item: any) => item.id === searchable.id && item.region === "ХМАО — Югра"));
+  assert.equal(search.payload.filter((item: any) => item.name === searchable.name).length, 1);
+  assert.ok(search.payload.some((item: any) => item.id === searchable.id && item.region === searchRegion.name));
+  assert.equal(search.payload.some((item: any) => item.region === "Регион не указан"), false);
 
   const user = await prisma.user.create({
     data: { role: "client", rolesJson: '["client"]', displayName: "Тест городов", status: "active" }
