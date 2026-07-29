@@ -18,6 +18,7 @@ import { creditPaymentToBalance, getPaymentBalanceSummary } from "../services/pa
 import { refundPayment } from "../services/refundService";
 import { writeAudit } from "../services/auditService";
 import { createManualBankRefund } from "../services/manualBankRefundService";
+import { syncTbankPaymentStatus } from "../services/tbankPaymentSyncService";
 import { verifyTbankToken } from "../services/tbankToken";
 import { asyncHandler, HttpError } from "../utils/http";
 
@@ -519,6 +520,7 @@ adminPaymentsRouter.get(
         userId: true,
         provider: true,
         terminalMode: true,
+        providerStatus: true,
         providerPaymentId: true,
         orderId: true,
         amount: true,
@@ -531,6 +533,7 @@ adminPaymentsRouter.get(
         updatedAt: true,
         paidAt: true,
         creditedAt: true,
+        lastSyncedAt: true,
         failedAt: true,
         cancelledAt: true,
         user: { select: { id: true, displayName: true, role: true, phone: true, email: true } }
@@ -578,6 +581,13 @@ adminPaymentsRouter.post(
       adminUserId: req.user!.id
     });
     res.status(201).json({ refund: serializeRefund(refund) });
+  })
+);
+
+adminPaymentsRouter.post(
+  "/:id/sync-tbank-status",
+  asyncHandler(async (req, res) => {
+    res.json(await syncTbankPaymentStatus(req.params.id, req.user!.id));
   })
 );
 
@@ -631,6 +641,8 @@ function serializePayment(payment: PaymentTransaction, _includeTechnical = false
     id: payment.id,
     userId: payment.userId,
     provider: payment.provider,
+    terminalMode: payment.terminalMode,
+    providerStatus: payment.providerStatus,
     providerPaymentId: payment.providerPaymentId,
     orderId: payment.orderId,
     amount: payment.amount,
@@ -644,7 +656,8 @@ function serializePayment(payment: PaymentTransaction, _includeTechnical = false
     paidAt: payment.paidAt,
     creditedAt: payment.creditedAt,
     failedAt: payment.failedAt,
-    cancelledAt: payment.cancelledAt
+    cancelledAt: payment.cancelledAt,
+    lastSyncedAt: payment.lastSyncedAt
   };
 }
 
@@ -670,6 +683,7 @@ function serializeRefund(refund: {
   bankRefundDate?: Date | null;
   bankReference?: string | null;
   adminComment?: string | null;
+  metadataJson?: string | null;
   balanceTransactionId: string | null;
   createdByAdminId: string;
   createdAt: Date;
@@ -693,6 +707,7 @@ function serializeRefund(refund: {
     bankRefundDate: refund.bankRefundDate,
     bankReference: refund.bankReference,
     adminComment: refund.adminComment,
+    metadataJson: refund.metadataJson,
     balanceTransactionId: refund.balanceTransactionId,
     createdByAdminId: refund.createdByAdminId,
     createdByAdmin: refund.createdByAdmin,

@@ -52,6 +52,10 @@ export type GetPaymentStateResult = {
   providerPaymentId: string;
   orderId: string | null;
   amountKopecks: number | null;
+  originalAmountKopecks: number | null;
+  newAmountKopecks: number | null;
+  refundedAmountKopecks: number | null;
+  providerRefundId: string | null;
   providerStatus: string;
   success: true;
   rawResponseJson: string;
@@ -313,6 +317,10 @@ export const tbankPaymentAdapter: PaymentAdapter = {
     const responseAmount = responsePayload.Amount === undefined || responsePayload.Amount === null
       ? null
       : Number(responsePayload.Amount);
+    const originalAmountKopecks = optionalSafeInteger(responsePayload.OriginalAmount);
+    const newAmountKopecks = optionalSafeInteger(responsePayload.NewAmount);
+    const refundedAmountKopecks = optionalSafeInteger(responsePayload.RefundedAmount ?? responsePayload.RefundAmount)
+      ?? (originalAmountKopecks !== null && newAmountKopecks !== null ? originalAmountKopecks - newAmountKopecks : null);
     const identifiersMatch = responsePaymentId === payment.providerPaymentId
       && responseTerminalKey === env.tbankTerminalKey
       && (!responseOrderId || responseOrderId === payment.orderId);
@@ -331,6 +339,10 @@ export const tbankPaymentAdapter: PaymentAdapter = {
       providerPaymentId: responsePaymentId,
       orderId: responseOrderId || null,
       amountKopecks: responseAmount,
+      originalAmountKopecks,
+      newAmountKopecks,
+      refundedAmountKopecks,
+      providerRefundId: valueAsString(responsePayload.RefundId) || null,
       providerStatus: responseStatus,
       success: true,
       rawResponseJson
@@ -416,6 +428,12 @@ export const tbankPaymentAdapter: PaymentAdapter = {
     throw new Error("Старый mock top-up доступен только для mock provider");
   }
 };
+
+function optionalSafeInteger(value: unknown) {
+  if (value === undefined || value === null || value === "") return null;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
 
 export function getPaymentAdapter(provider = env.paymentProvider): PaymentAdapter {
   if (provider === "mock") return mockPaymentAdapter;

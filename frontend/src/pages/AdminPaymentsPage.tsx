@@ -23,6 +23,7 @@ export function AdminPaymentsPage() {
   const [error, setError] = useState("");
   const [detailsError, setDetailsError] = useState("");
   const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
+  const [isSyncingTbank, setIsSyncingTbank] = useState(false);
   const [refundPayment, setRefundPayment] = useState<AdminPaymentDetails | null>(null);
   const [refundReason, setRefundReason] = useState("");
   const [isRefunding, setIsRefunding] = useState(false);
@@ -69,6 +70,20 @@ export function AdminPaymentsPage() {
       setDetailsError("Не удалось проверить статус платежа.");
     } finally {
       setIsRefreshingStatus(false);
+    }
+  }
+
+  async function syncTbankStatus(id: string) {
+    setIsSyncingTbank(true);
+    setDetailsError("");
+    try {
+      const result = await api.syncAdminTbankPayment(id);
+      await Promise.all([openPayment(id), loadPayments()]);
+      setDetailsError(result.message);
+    } catch (syncError) {
+      setDetailsError(syncError instanceof Error ? syncError.message : "Не удалось сверить платёж с T-Bank.");
+    } finally {
+      setIsSyncingTbank(false);
     }
   }
 
@@ -243,7 +258,9 @@ export function AdminPaymentsPage() {
             <PaymentDetails
               details={selectedPayment}
               isRefreshing={isRefreshingStatus}
+              isSyncingTbank={isSyncingTbank}
               onRefresh={() => void refreshPaymentStatus(selectedPayment.payment.id)}
+              onSyncTbank={() => void syncTbankStatus(selectedPayment.payment.id)}
               onRefund={() => {
                 setRefundReason("");
                 setRefundPayment(selectedPayment);
@@ -308,7 +325,7 @@ export function AdminPaymentsPage() {
               </div>
               <button className="secondary-button" type="button" onClick={() => setManualBankRefundPayment(null)} disabled={isRecordingManualBankRefund}>Закрыть</button>
             </div>
-            <p className="notice notice--warning">Подтвердите, что деньги уже фактически возвращены Заказчику через банк. После подтверждения операция будет списана с баланса пользователя и попадёт в реестр «Мой налог».</p>
+            <p className="notice notice--warning">Используйте, если возврат был выполнен в банке, но автоматическая сверка с T-Bank не обнаружила его. Подтвердите, что деньги уже фактически возвращены Заказчику через банк. После подтверждения операция будет списана с баланса пользователя и попадёт в реестр «Мой налог».</p>
             <div className="form-grid">
               <label>Сумма возврата<input type="number" value={manualBankRefundPayment.payment.amount} readOnly /></label>
               <label>Дата фактического возврата в банке<input type="date" value={manualBankRefundDate} onChange={(event) => setManualBankRefundDate(event.target.value)} required /></label>
@@ -338,13 +355,17 @@ export function AdminPaymentsPage() {
 function PaymentDetails({
   details,
   isRefreshing,
+  isSyncingTbank,
   onRefresh,
+  onSyncTbank,
   onRefund,
   onManualBankRefund
 }: {
   details: AdminPaymentDetails;
   isRefreshing: boolean;
+  isSyncingTbank: boolean;
   onRefresh: () => void;
+  onSyncTbank: () => void;
   onRefund: () => void;
   onManualBankRefund: () => void;
 }) {
@@ -362,6 +383,8 @@ function PaymentDetails({
         <span>Валюта</span><strong>{payment.currency}</strong>
         <span>Провайдер</span><strong>{paymentProviderLabel(payment.provider, payment.terminalMode)}</strong>
         <span>Статус</span><strong>{paymentStatusLabel(payment.status)}</strong>
+        <span>Статус T-Bank</span><strong>{payment.providerStatus ?? "не синхронизирован"}</strong>
+        <span>Последняя сверка</span><strong>{payment.lastSyncedAt ? formatDateTimeRu(payment.lastSyncedAt) : "не выполнялась"}</strong>
         <span>Назначение</span><strong>{paymentPurposeLabel(payment.purpose)}</strong>
         <span>Дата создания</span><strong>{formatDateTimeRu(payment.createdAt)}</strong>
         <span>Дата оплаты</span><strong>{payment.paidAt ? formatDateTimeRu(payment.paidAt) : "не оплачено"}</strong>
@@ -378,6 +401,12 @@ function PaymentDetails({
         <button className="secondary-button" type="button" onClick={onRefresh} disabled={isRefreshing}>
           <RefreshCcw size={18} />
           {isRefreshing ? "Проверяем" : "Обновить статус"}
+        </button>
+      )}
+      {payment.provider === "tbank" && (
+        <button className="secondary-button" type="button" onClick={onSyncTbank} disabled={isSyncingTbank}>
+          <RefreshCcw size={18} />
+          {isSyncingTbank ? "Сверяем" : "Сверить с T-Bank"}
         </button>
       )}
       {payment.provider === "tbank" && payment.status === "succeeded" && payment.creditedAt && !(details.refunds?.length) && (

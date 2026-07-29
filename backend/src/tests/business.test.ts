@@ -3470,6 +3470,187 @@ async function runPaymentRouteTests() {
     assert.equal(await prisma.refundTransaction.count({ where: { paymentTransactionId: insufficientManualBankPayment.id } }), 0);
     await prisma.user.update({ where: { id: client.id }, data: { balance: balanceBeforeManualBankInsufficient } });
 
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      assert.match(String(url), /\/GetState$/);
+      const requestBody = JSON.parse(String(init?.body ?? "{}"));
+      const payload = stateResponses.get(String(requestBody.PaymentId));
+      assert.ok(payload, `Missing GetState fixture for ${requestBody.PaymentId}`);
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as typeof fetch;
+
+    async function createSyncPayment(label: string, terminalMode: "test" | "live") {
+      const suffix = `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const syncPayment = await prisma.paymentTransaction.create({
+        data: {
+          userId: client!.id,
+          provider: "tbank",
+          terminalMode,
+          providerPaymentId: `TBANK-SYNC-${suffix}`,
+          orderId: `TOPUP-SYNC-${suffix}`,
+          amount: 150,
+          status: "succeeded",
+          paidAt: new Date(),
+          description: `T-Bank sync ${label}`
+        }
+      });
+      paymentIds.push(syncPayment.id);
+      orderIds.push(syncPayment.orderId);
+      await creditPaymentToBalance(syncPayment.id, { comment: syncPayment.orderId });
+      return syncPayment;
+    }
+
+    const liveSyncPayment = await createSyncPayment("LIVE-FULL", "live");
+    stateResponses.set(liveSyncPayment.providerPaymentId!, {
+      Success: true,
+      TerminalKey: env.tbankTerminalKey,
+      PaymentId: liveSyncPayment.providerPaymentId,
+      OrderId: liveSyncPayment.orderId,
+      RefundId: `SYNC-REFUND-${liveSyncPayment.id}`,
+      Amount: 15000,
+      OriginalAmount: 15000,
+      NewAmount: 0,
+      RefundedAmount: 15000,
+      Status: "REFUNDED",
+      Token: "provider-token-must-not-leak"
+    });
+
+    response = await apiRequest(app, `/api/admin/payments/${liveSyncPayment.id}/sync-tbank-status`, {
+      method: "POST",
+      token: managerToken
+    });
+    assert.equal(response.status, 403);
+    assert.equal(response.payload.code, "manager_permission_denied");
+    for (const token of [clientToken, performerToken]) {
+      response = await apiRequest(app, `/api/admin/payments/${liveSyncPayment.id}/sync-tbank-status`, { method: "POST", token });
+      assert.equal(response.status, 403);
+    }
+    response = await apiRequest(app, `/api/admin/payments/${createdPayment.id}/sync-tbank-status`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 400);
+    assert.equal(response.payload.code, "payment_not_tbank");
+
+    const balanceBeforeLiveSync = (await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance;
+    response = await apiRequest(app, `/api/admin/payments/${liveSyncPayment.id}/sync-tbank-status`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.refundDetected, true);
+    assert.match(response.payload.message, /Сумма списана/);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, balanceBeforeLiveSync - 150);
+    const liveSyncRefund = await prisma.refundTransaction.findUniqueOrThrow({
+      where: { paymentTransactionId: liveSyncPayment.id }
+    });
+    assert.equal(liveSyncRefund.refundType, "tbank_sync_detected");
+    assert.equal(liveSyncRefund.status, "succeeded");
+    const liveSyncLedger = await prisma.balanceTransaction.findUniqueOrThrow({
+      where: { idempotencyKey: `tbank_sync_refund:${liveSyncPayment.id}` }
+    });
+    assert.equal(liveSyncLedger.type, "bank_refund");
+    assert.equal(liveSyncLedger.source, "tbank_sync");
+    assert.equal(liveSyncLedger.amount, -150);
+    const liveSyncPaymentAfter = await prisma.paymentTransaction.findUniqueOrThrow({ where: { id: liveSyncPayment.id } });
+    assert.equal(liveSyncPaymentAfter.status, "refunded");
+    assert.equal(liveSyncPaymentAfter.providerStatus, "REFUNDED");
+    assert.ok(liveSyncPaymentAfter.lastSyncedAt);
+    assert.equal(JSON.stringify(JSON.parse(liveSyncPaymentAfter.metadataJson ?? "{}")).includes("provider-token-must-not-leak"), false);
+    assert.ok(await prisma.npdTaxRegisterEntry.findUnique({ where: { refundTransactionId: liveSyncRefund.id } }));
+
+    response = await apiRequest(app, `/api/admin/payments/${liveSyncPayment.id}/sync-tbank-status`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.alreadyAccounted, true);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, balanceBeforeLiveSync - 150);
+    assert.equal(await prisma.refundTransaction.count({ where: { paymentTransactionId: liveSyncPayment.id } }), 1);
+    assert.equal(await prisma.balanceTransaction.count({ where: { idempotencyKey: `tbank_sync_refund:${liveSyncPayment.id}` } }), 1);
+
+    const testSyncPayment = await createSyncPayment("TEST-FULL", "test");
+    stateResponses.set(testSyncPayment.providerPaymentId!, {
+      Success: true,
+      TerminalKey: env.tbankTerminalKey,
+      PaymentId: testSyncPayment.providerPaymentId,
+      OrderId: testSyncPayment.orderId,
+      Amount: 15000,
+      Status: "REFUNDED"
+    });
+    response = await apiRequest(app, `/api/admin/payments/${testSyncPayment.id}/sync-tbank-status`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 200);
+    const testSyncRefund = await prisma.refundTransaction.findUniqueOrThrow({ where: { paymentTransactionId: testSyncPayment.id } });
+    assert.equal(await prisma.npdTaxRegisterEntry.count({ where: { refundTransactionId: testSyncRefund.id } }), 0);
+
+    const noRefundSyncPayment = await createSyncPayment("NO-REFUND", "test");
+    stateResponses.set(noRefundSyncPayment.providerPaymentId!, {
+      Success: true,
+      TerminalKey: env.tbankTerminalKey,
+      PaymentId: noRefundSyncPayment.providerPaymentId,
+      OrderId: noRefundSyncPayment.orderId,
+      Amount: 15000,
+      Status: "CONFIRMED"
+    });
+    response = await apiRequest(app, `/api/admin/payments/${noRefundSyncPayment.id}/sync-tbank-status`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.refundDetected, false);
+    assert.equal(await prisma.refundTransaction.count({ where: { paymentTransactionId: noRefundSyncPayment.id } }), 0);
+
+    const partialSyncPayment = await createSyncPayment("PARTIAL", "live");
+    stateResponses.set(partialSyncPayment.providerPaymentId!, {
+      Success: true,
+      TerminalKey: env.tbankTerminalKey,
+      PaymentId: partialSyncPayment.providerPaymentId,
+      OrderId: partialSyncPayment.orderId,
+      Amount: 15000,
+      RefundedAmount: 5000,
+      Status: "PARTIAL_REFUNDED"
+    });
+    const balanceBeforePartialSync = (await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance;
+    response = await apiRequest(app, `/api/admin/payments/${partialSyncPayment.id}/sync-tbank-status`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.partialRefund, true);
+    assert.equal(response.payload.manualReview, true);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, balanceBeforePartialSync);
+    assert.equal((await prisma.refundTransaction.findUniqueOrThrow({ where: { paymentTransactionId: partialSyncPayment.id } })).status, "manual_review");
+    assert.equal(await prisma.balanceTransaction.count({ where: { idempotencyKey: `tbank_sync_refund:${partialSyncPayment.id}` } }), 0);
+    assert.equal(await prisma.npdTaxRegisterEntry.count({ where: { refundTransactionId: (await prisma.refundTransaction.findUniqueOrThrow({ where: { paymentTransactionId: partialSyncPayment.id } })).id } }), 0);
+
+    const insufficientSyncPayment = await createSyncPayment("INSUFFICIENT", "live");
+    stateResponses.set(insufficientSyncPayment.providerPaymentId!, {
+      Success: true,
+      TerminalKey: env.tbankTerminalKey,
+      PaymentId: insufficientSyncPayment.providerPaymentId,
+      OrderId: insufficientSyncPayment.orderId,
+      Amount: 15000,
+      Status: "REFUNDED"
+    });
+    const balanceBeforeInsufficientSync = (await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance;
+    await prisma.user.update({ where: { id: client.id }, data: { balance: 0 } });
+    response = await apiRequest(app, `/api/admin/payments/${insufficientSyncPayment.id}/sync-tbank-status`, {
+      method: "POST",
+      token: adminToken
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.manualReview, true);
+    assert.match(response.payload.message, /недостаточно средств/);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).balance, 0);
+    assert.equal(await prisma.balanceTransaction.count({ where: { idempotencyKey: `tbank_sync_refund:${insufficientSyncPayment.id}` } }), 0);
+    assert.equal((await prisma.refundTransaction.findUniqueOrThrow({ where: { paymentTransactionId: insufficientSyncPayment.id } })).status, "manual_review");
+    await prisma.user.update({ where: { id: client.id }, data: { balance: balanceBeforeInsufficientSync } });
+
     response = await apiRequest(app, `/api/admin/payments/${createdPayment.id}/refund`, {
       method: "POST",
       token: clientToken,
@@ -3656,7 +3837,10 @@ async function runPaymentRouteTests() {
     env.tbankTerminalMode = originalTbankTerminalMode;
     globalThis.fetch = originalFetch;
     await prisma.auditLog.deleteMany({
-      where: { actorUserId: admin.id, action: { in: ["admin.npd_register.update", "admin.bank_refund.create"] } }
+      where: {
+        actorUserId: admin.id,
+        action: { in: ["admin.npd_register.update", "admin.bank_refund.create", "admin.payment.tbank_sync", "admin.payment.tbank_sync_refund", "admin.payment.tbank_sync_manual_review"] }
+      }
     });
     const testRefunds = await prisma.refundTransaction.findMany({
       where: { paymentTransactionId: { in: paymentIds } },
@@ -3667,7 +3851,10 @@ async function runPaymentRouteTests() {
     await prisma.balanceTransaction.deleteMany({
       where: {
         idempotencyKey: {
-          in: testRefunds.flatMap((refund) => [`payment_refund:${refund.id}`, `manual_bank_refund:${refund.id}`])
+          in: [
+            ...testRefunds.flatMap((refund) => [`payment_refund:${refund.id}`, `manual_bank_refund:${refund.id}`]),
+            ...paymentIds.map((paymentId) => `tbank_sync_refund:${paymentId}`)
+          ]
         }
       }
     });

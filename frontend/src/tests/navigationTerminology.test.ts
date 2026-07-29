@@ -687,6 +687,14 @@ assert.match(adminPaymentsBankRefundPage, /Вернуть через T-Bank/);
 assert.match(adminPaymentsBankRefundPage, /деньги уже фактически возвращены Заказчику через банк/);
 assert.match(adminPaymentsBankRefundPage, /payment\.provider === "tbank"/);
 assert.match(adminPaymentsBankRefundPage, /recordManualBankRefund/);
+assert.match(adminPaymentsBankRefundPage, /Сверить с T-Bank/);
+assert.match(adminPaymentsBankRefundPage, /syncAdminTbankPayment/);
+assert.match(adminPaymentsBankRefundPage, /payment\.provider === "tbank"/);
+assert.match(adminPaymentsBankRefundPage, /автоматическая сверка с T-Bank не обнаружила его/);
+assert.match(adminPaymentsBankRefundPage, /Возврат уже был учтён ранее|result\.message/);
+
+const managerDashboardPayments = read("pages/ManagerDashboard.tsx");
+assert.doesNotMatch(managerDashboardPayments, /syncAdminTbankPayment|Сверить с T-Bank/);
 
 const forbiddenUserLabels = [
   "Предлагаемая оплата",

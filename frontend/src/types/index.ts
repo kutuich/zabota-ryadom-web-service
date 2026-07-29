@@ -554,6 +554,7 @@ export type PaymentTransaction = {
   userId: string;
   provider: string;
   terminalMode?: "test" | "live" | null;
+  providerStatus?: string | null;
   providerPaymentId?: string | null;
   orderId: string;
   amount: number;
@@ -570,6 +571,7 @@ export type PaymentTransaction = {
   rawInitResponseJson?: string | null;
   rawStateResponseJson?: string | null;
   metadataJson?: string | null;
+  lastSyncedAt?: string | null;
   createdAt: string;
   updatedAt: string;
   paidAt?: string | null;
@@ -597,6 +599,15 @@ export type PaymentRefreshResult = {
   status: string;
   creditedAt?: string | null;
   balanceTransactionId?: string | null;
+  message: string;
+};
+
+export type TbankPaymentSyncResult = {
+  synced: true;
+  refundDetected: boolean;
+  alreadyAccounted?: boolean;
+  partialRefund?: boolean;
+  manualReview?: boolean;
   message: string;
 };
 
@@ -722,6 +733,7 @@ export type RefundTransaction = {
   bankRefundDate?: string | null;
   bankReference?: string | null;
   adminComment?: string | null;
+  metadataJson?: string | null;
   balanceTransactionId?: string | null;
   createdByAdminId: string;
   createdByAdmin?: Pick<User, "id" | "displayName"> | null;

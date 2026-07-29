@@ -434,6 +434,7 @@ model PaymentTransaction {
   amount               Int
   currency             String   @default("RUB")
   status               String
+  providerStatus       String?
   purpose              String   @default("balance_top_up")
   description          String?
   paymentUrl           String?
@@ -446,6 +447,7 @@ model PaymentTransaction {
   rawStateResponseJson String?
   rawWebhookJson       String?
   metadataJson         String?
+  lastSyncedAt         DateTime?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
   paidAt               DateTime?
@@ -481,6 +483,7 @@ model RefundTransaction {
   adminComment         String?
   rawRequestJson       String?
   rawResponseJson      String?
+  metadataJson         String?
   balanceTransactionId String?            @unique
   createdByAdminId     String
   createdAt            DateTime           @default(now())

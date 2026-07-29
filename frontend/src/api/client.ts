@@ -268,6 +268,8 @@ export const api = {
     method: "POST",
     body: JSON.stringify(body)
   }),
+  syncAdminTbankPayment: (id: string) =>
+    apiFetch<import("../types").TbankPaymentSyncResult>(`/admin/payments/${id}/sync-tbank-status`, { method: "POST" }),
   adminSettings: () => apiFetch<unknown[]>("/admin/settings"),
   getTrialBalanceSettings: () => apiFetch<TrialBalanceSettings>("/admin/trial-balance/settings"),
   updateTrialBalanceSettings: (body: Pick<TrialBalanceSettings, "enabled" | "amount" | "autoGrantNewUsers">) =>
