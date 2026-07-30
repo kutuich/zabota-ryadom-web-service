@@ -86,7 +86,8 @@ export const adminNavigation: NavGroup[] = [
     items: [
       { label: "Балансы", path: `${APP_ADMIN_PREFIX}/balances` },
       { label: "Платежи", path: `${APP_ADMIN_PREFIX}/payments` },
-      { label: "Мой налог", path: `${APP_ADMIN_PREFIX}/npd-register` }
+      { label: "Мой налог", path: `${APP_ADMIN_PREFIX}/npd-register` },
+      { label: "Резерв визитов", path: `${APP_ADMIN_PREFIX}/visit-reserve` }
     ]
   },
   {
@@ -122,7 +123,8 @@ export const managerNavigation: NavGroup[] = [
     label: "Финансы только для просмотра",
     items: [
       { label: "Платежи", path: `${APP_MANAGER_PREFIX}/payments` },
-      { label: "Операции баланса", path: `${APP_MANAGER_PREFIX}/balances` }
+      { label: "Операции баланса", path: `${APP_MANAGER_PREFIX}/balances` },
+      { label: "Резерв визитов", path: `${APP_MANAGER_PREFIX}/visit-reserve` }
     ]
   },
   { label: "Учётная запись", items: [{ label: "Профиль менеджера", path: `${APP_MANAGER_PREFIX}/profile` }] }

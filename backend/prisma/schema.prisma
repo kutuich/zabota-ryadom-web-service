@@ -507,6 +507,10 @@ model ClientRequest {
   reviews                Review[]
   balanceTransactions    BalanceTransaction[]
   categorySnapshots      RequestCategorySnapshot[]
+  agreementVersions      AgreementVersion[]
+  visits                 RequestVisit[]
+  serviceFeeBatches      ServiceFeeAgreementBatch[]
+  visitDisputes          RequestVisitDispute[]
   serviceMessages        ServiceMessage[]
   serviceAttachments     ServiceMessageAttachment[]
 
@@ -574,9 +578,152 @@ model Chat {
   performer   User          @relation("PerformerChats", fields: [performerId], references: [id])
   messages    ChatMessage[]
   complaints  Complaint[]
+  agreementVersions AgreementVersion[]
+  serviceFeeBatches ServiceFeeAgreementBatch[]
 
   @@index([clientId])
   @@index([performerId])
+}
+
+model AgreementVersion {
+  id                       String   @id @default(cuid())
+  requestId                String
+  chatId                   String
+  version                  Int
+  status                   String   @default("draft")
+  recipientType            String?
+  dependentSnapshotJson    String?
+  selectedTasksJson        String
+  scheduleRulesJson        String
+  expandedVisitsJson       String
+  pricingSnapshotJson      String
+  termsComment             String?
+  visitCount               Int
+  totalDurationMinutes     Int
+  totalHelpAmount          Int?
+  customerServiceFeeTotal  Int
+  helperServiceFeeTotal    Int
+  termsHash                String
+  createdByUserId          String
+  customerConfirmedAt      DateTime?
+  helperConfirmedAt        DateTime?
+  finalizedAt              DateTime?
+  supersededAt             DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  request                  ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  chat                     Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  visits                   RequestVisit[]
+  feeBatch                 ServiceFeeAgreementBatch?
+
+  @@unique([chatId, version])
+  @@index([requestId, status])
+  @@index([chatId, status])
+}
+
+model RequestVisit {
+  id                       String   @id @default(cuid())
+  requestId                String
+  agreementVersionId       String
+  sequence                 Int
+  scheduledStart           DateTime
+  scheduledEnd             DateTime
+  startTime                String
+  durationMinutes          Int
+  timezone                 String
+  status                   String   @default("scheduled")
+  tasksSnapshotJson        String
+  pricingBreakdownJson     String   @default("{}")
+  helpAmount               Int?
+  customerServiceFeeAmount Int
+  helperServiceFeeAmount   Int
+  autoCloseAt              DateTime?
+  closedAt                 DateTime?
+  disputedAt               DateTime?
+  cancelledAt              DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  request                  ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  agreementVersion         AgreementVersion @relation(fields: [agreementVersionId], references: [id], onDelete: Cascade)
+  allocations              ServiceFeeVisitAllocation[]
+  disputes                 RequestVisitDispute[]
+
+  @@unique([agreementVersionId, sequence])
+  @@index([requestId, scheduledStart])
+  @@index([status, autoCloseAt])
+}
+
+model ServiceFeeAgreementBatch {
+  id                       String   @id @default(cuid())
+  requestId                String
+  chatId                   String
+  agreementVersionId       String   @unique
+  clientId                 String
+  helperId                 String
+  visitCount               Int
+  customerServiceFeeTotal  Int
+  helperServiceFeeTotal    Int
+  status                   String   @default("confirmed")
+  idempotencyKey           String   @unique
+  confirmedAt              DateTime
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  request                  ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  chat                     Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  agreementVersion         AgreementVersion @relation(fields: [agreementVersionId], references: [id], onDelete: Cascade)
+  allocations              ServiceFeeVisitAllocation[]
+
+  @@index([requestId, status])
+  @@index([chatId])
+}
+
+model ServiceFeeVisitAllocation {
+  id                       String   @id @default(cuid())
+  batchId                  String
+  visitId                  String
+  side                     String
+  userId                   String
+  feeAmount                Int
+  mainBalanceAmount        Int      @default(0)
+  bonusBalanceAmount       Int      @default(0)
+  sourceLedgerEntriesJson  String   @default("[]")
+  refundLedgerEntriesJson  String   @default("[]")
+  status                   String   @default("reserved")
+  resolution               String?
+  resolutionComment        String?
+  releasedAt               DateTime?
+  refundedAt               DateTime?
+  disputedAt               DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  batch                    ServiceFeeAgreementBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  visit                    RequestVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+
+  @@unique([visitId, side])
+  @@index([userId, status])
+  @@index([batchId, status])
+}
+
+model RequestVisitDispute {
+  id                       String   @id @default(cuid())
+  requestId                String
+  visitId                  String
+  openedByUserId           String
+  reason                   String
+  description              String?
+  status                   String   @default("open")
+  resolution               String?
+  resolutionComment        String?
+  resolvedByAdminId        String?
+  openedAt                 DateTime @default(now())
+  resolvedAt               DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  request                  ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  visit                    RequestVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, status])
+  @@index([visitId, status])
 }
 
 model ChatMessage {

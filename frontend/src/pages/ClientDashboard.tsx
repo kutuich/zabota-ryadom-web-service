@@ -19,6 +19,7 @@ import { formatDateRu, formatTimeRu } from "../utils/dateTime";
 import { CityCombobox } from "../components/CityCombobox";
 import { UserCitiesPanel } from "../components/UserCitiesPanel";
 import { ServiceMessagesPanel } from "../components/ServiceMessagesPanel";
+import { RequestCreationForm } from "../components/RequestCreationForm";
 
 export function ClientDashboard() {
   const { bootstrap, user } = useAuth();
@@ -629,7 +630,18 @@ export function ClientDashboard() {
         </form>
       )}
 
-      {activeTab === "Создать заявку" && (
+      {activeTab === "Создать заявку" && user && (
+        <RequestCreationForm
+          cities={bootstrap?.cities ?? []}
+          user={user}
+          onCreated={async () => {
+            await load();
+            navigate("/app/client/requests");
+          }}
+        />
+      )}
+
+      {(activeTab as string) === "__legacy_create_request" && (
         <form className="form-grid" onSubmit={createRequest}>
           <h2 className="form-section-title span-2">Контакты и направление помощи</h2>
           {formErrors.length > 0 && (

@@ -35,10 +35,12 @@ export function sendError(error: unknown, _req: Request, res: Response, _next: N
     return res.status(400).json({
       error: "Проверьте заполнение формы",
       code: "validation_error",
-      details: error.issues.map((issue) => ({
-        field: issue.path.join("."),
-        message: issue.message
-      }))
+      details: {
+        validationErrors: error.issues.map((issue) => ({
+          path: issue.path.join("."),
+          message: issue.message
+        }))
+      }
     });
   }
 

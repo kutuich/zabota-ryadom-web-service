@@ -23,6 +23,7 @@ import {
   type CategoryImportPayload
 } from "../services/categoryStructureService";
 import { asyncHandler, HttpError } from "../utils/http";
+import { flattenRequestCatalog } from "../services/requestScheduleService";
 
 export const categoryStructuresRouter = Router();
 export const categoriesRouter = Router();
@@ -56,7 +57,7 @@ categoriesRouter.get(
   "/for-request",
   asyncHandler(async (req, res) => {
     const cityId = z.string().min(1).parse(req.query.cityId);
-    res.json(await categoriesForCity(cityId, "customer"));
+    res.json(flattenRequestCatalog(await categoriesForCity(cityId, "customer")));
   })
 );
 categoriesRouter.get(

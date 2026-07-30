@@ -1,5 +1,7 @@
 # Вход через VK ID
 
+> Статус: ACTIVE TECHNICAL DOCUMENT. Фактическое включение production определяется env и не подтверждалось чтением production secrets в документационном аудите 2026-07-30.
+
 ## Сценарий
 
 «Забота Рядом» использует официальный VK ID OAuth 2.1 Authorization Code Flow. Backend создаёт `state` и PKCE `code_verifier`, проверяет callback, обменивает `code` на токен и получает профиль VK. Client secret и токены VK не передаются во frontend и не сохраняются в базе.
@@ -45,3 +47,5 @@ Production redirect URI должен использовать HTTPS. Значе�
 6. Проверьте обычный вход по телефону/email и отдельный вход администратора.
 
 В базе хранится только идентификатор VK и безопасная копия полей профиля. Access token, client secret и PKCE verifier не сохраняются.
+
+См. [production current state](PRODUCTION_CURRENT_STATE.md) и [documentation index](DOCUMENTATION_INDEX.md).

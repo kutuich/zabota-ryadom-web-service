@@ -24,6 +24,12 @@ import {
   createRequestCategorySnapshotTx,
   REQUEST_FREQUENCY_CODES
 } from "../services/categoryStructureService";
+import {
+  calculateMultiTaskRequest,
+  createMultiTaskRequestSnapshotTx,
+  REQUEST_FREQUENCIES,
+  type RequestScheduleInput
+} from "../services/requestScheduleService";
 
 export const requestsRouter = Router();
 
@@ -105,8 +111,19 @@ const createRequestSchema = z.object({
   urgencyFlags: z.array(z.string()).default([]),
   isRemoteAddress: z.boolean().default(false),
   transportOption: z.string().max(120).optional(),
-  title: z.string().min(4).max(160),
-  description: z.string().min(10).max(4000),
+  recipientType: z.enum(["self", "adult", "elderly", "child"]).optional(),
+  dependentName: z.string().min(1).max(120).optional(),
+  dependentMainState: z.enum(["independent", "light_support", "limited_mobility", "bedridden"]).optional(),
+  dependentStateFeatures: z.array(z.string().max(80)).max(20).optional(),
+  selectedTasks: z.array(z.object({
+    categoryId: z.string().min(1),
+    subcategoryId: z.string().min(1).nullable().optional(),
+    taskTemplateId: z.string().min(1).nullable().optional()
+  })).max(100).optional(),
+  scheduleV2: z.any().optional(),
+  accompanimentWaitingMinutes: z.number().int().min(0).max(1440).optional(),
+  title: z.string().min(4).max(160).optional(),
+  description: z.string().min(1).max(4000).optional(),
   addressText: z.string().max(500).optional(),
   addressStreet: z.string().min(1).max(160).optional(),
   addressHouse: z.string().min(1).max(60).optional(),
@@ -155,10 +172,49 @@ const structuredPriceSchema = z.object({
   }).optional()
 });
 
+const visitSlotSchema = z.object({
+  id: z.string().min(1).max(80),
+  startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  durationMinutes: z.number().int().positive().max(1440)
+});
+const scheduleV2Schema = z.object({
+  frequency: z.enum(REQUEST_FREQUENCIES),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  weeksCount: z.number().int().positive().max(104).nullable().optional(),
+  visitCount: z.number().int().positive().max(5000).nullable().optional(),
+  daysOfWeek: z.array(z.number().int().min(0).max(6)).max(7).optional(),
+  slots: z.array(visitSlotSchema).max(24).optional(),
+  daySchedules: z.array(z.object({ dayOfWeek: z.number().int().min(0).max(6), slots: z.array(visitSlotSchema).max(24) })).max(7).optional()
+});
+
+const multiTaskPriceSchema = z.object({
+  cityId: z.string().min(1),
+  recipientType: z.enum(["self", "adult", "elderly", "child"]),
+  dependentState: z.object({ mainState: z.string().min(1), features: z.array(z.string()).default([]) }),
+  selectedTasks: z.array(z.object({ categoryId: z.string().min(1), subcategoryId: z.string().nullable().optional(), taskTemplateId: z.string().nullable().optional() })).min(1).max(100),
+  frequency: z.enum(REQUEST_FREQUENCIES),
+  schedule: scheduleV2Schema,
+  accompanimentWaitingMinutes: z.number().int().min(0).max(1440).optional(),
+  queryText: z.string().max(4000).optional()
+});
+
 requestsRouter.post(
   "/calculate-price",
   requireRole("client"),
-  asyncHandler(async (req, res) => res.json(await calculateStructuredRequestPrice(structuredPriceSchema.parse(req.body))))
+  asyncHandler(async (req, res) => {
+    if (Array.isArray(req.body?.selectedTasks)) {
+      const input = multiTaskPriceSchema.parse(req.body);
+      return res.json(await calculateMultiTaskRequest({
+        cityId: input.cityId,
+        selectedTasks: input.selectedTasks,
+        frequency: input.frequency,
+        schedule: input.schedule,
+        queryText: input.queryText
+      }));
+    }
+    return res.json(await calculateStructuredRequestPrice(structuredPriceSchema.parse(req.body)));
+  })
 );
 
 requestsRouter.get(
@@ -240,7 +296,23 @@ requestsRouter.post(
   requireFeatureConsent("create_request"),
   asyncHandler(async (req, res) => {
     const input = createRequestSchema.parse(req.body);
-    const medicalMatches = detectMedicalTerms(`${input.title} ${input.description}`);
+    const usesStructuredV2 = Boolean(input.selectedTasks?.length);
+    const scheduleV2 = usesStructuredV2 ? scheduleV2Schema.parse(input.scheduleV2) as RequestScheduleInput : null;
+    if (usesStructuredV2) {
+      const validationErrors = [
+        !input.contactName?.trim() ? { path: "contactName", message: "Укажите имя контактного лица." } : null,
+        !input.contactPhone?.trim() ? { path: "contactPhone", message: "Укажите телефон контактного лица." } : null,
+        !input.recipientType ? { path: "recipientType", message: "Выберите, кому нужна помощь." } : null,
+        input.recipientType !== "self" && !input.dependentName?.trim() ? { path: "dependentName", message: "Укажите имя Подопечного." } : null,
+        input.recipientType === "child" && !input.dependentAge ? { path: "dependentAge", message: "Укажите возраст Подопечного." } : null,
+        !input.dependentMainState ? { path: "dependentMainState", message: "Выберите основное состояние Подопечного." } : null
+      ].filter(Boolean);
+      if (validationErrors.length) throw new HttpError(400, "Проверьте заполнение формы", "validation_error", { validationErrors });
+    } else if (!input.title || !input.description) {
+      throw new HttpError(400, "Проверьте заполнение формы", "validation_error", { validationErrors: [{ path: "title", message: "Опишите задачу." }] });
+    }
+
+    const medicalMatches = detectMedicalTerms(`${input.title ?? ""} ${input.description ?? ""} ${input.comment ?? ""}`);
 
     if (medicalMatches.length > 0) {
       throw new HttpError(
@@ -251,9 +323,24 @@ requestsRouter.post(
       );
     }
 
+    const multiPricing = usesStructuredV2 ? await calculateMultiTaskRequest({
+      cityId: input.cityId,
+      selectedTasks: input.selectedTasks!,
+      frequency: scheduleV2!.frequency,
+      schedule: scheduleV2!,
+      queryText: `${input.comment ?? ""}`
+    }) : null;
+    const hasAccompaniment = multiPricing?.selectedTasks.some((task) => task.categorySlug === "accompaniment") ?? false;
+    if (hasAccompaniment && !input.comment?.trim()) {
+      throw new HttpError(400, "Проверьте заполнение формы", "validation_error", { validationErrors: [{ path: "comment", message: "Укажите место назначения и действия, которые Помощнику нужно выполнить в процессе сопровождения." }] });
+    }
+    const resolvedTitle = input.title ?? multiPricing!.selectedTasks.slice(0, 3).map((task) => task.taskTemplateTitle).join(", ");
+    const resolvedDescription = input.description ?? `Выбранные задачи: ${multiPricing!.selectedTasks.map((task) => task.taskTemplateTitle).join(", ")}.`;
+
     const city = await prisma.city.findFirst({ where: { id: input.cityId, isActive: true, directoryStatus: { notIn: ["hidden", "duplicate"] } } });
-    const structuredCategory = input.structuredCategoryId
-      ? await prisma.category.findUnique({ where: { id: input.structuredCategoryId }, select: { slug: true } })
+    const primaryStructuredCategoryId = input.structuredCategoryId ?? input.selectedTasks?.[0]?.categoryId;
+    const structuredCategory = primaryStructuredCategoryId
+      ? await prisma.category.findUnique({ where: { id: primaryStructuredCategoryId }, select: { slug: true } })
       : null;
     const category = input.categoryId
       ? await prisma.serviceCategory.findFirst({ where: { id: input.categoryId, isActive: true } })
@@ -295,7 +382,7 @@ requestsRouter.post(
       hasPets: input.hasPets,
       ...feeSettings
     });
-    const structuredPricing = input.structuredCategoryId ? await calculateStructuredRequestPrice({
+    const structuredPricing = !usesStructuredV2 && input.structuredCategoryId ? await calculateStructuredRequestPrice({
       cityId: input.cityId,
       categoryId: input.structuredCategoryId,
       subcategoryId: input.structuredSubcategoryId,
@@ -306,8 +393,11 @@ requestsRouter.post(
       queryText: `${input.title} ${input.description}`,
       additionalTask: input.additionalTask
     }) : null;
-    const recommendedAmount = structuredPricing ? structuredPricing.finalCalculatedRecommendedPrice : legacyPricing.performerPaymentAmount;
-    const pricing = structuredPricing ?? legacyPricing;
+    const recommendedAmount = multiPricing ? multiPricing.totalHelpAmount : structuredPricing ? structuredPricing.finalCalculatedRecommendedPrice : legacyPricing.performerPaymentAmount;
+    const pricing = multiPricing ?? structuredPricing ?? legacyPricing;
+    const firstVisit = multiPricing?.expandedVisits[0];
+    const derivedHelpFor = input.recipientType === "child" ? "child" : input.recipientType === "elderly" ? "elderly" : input.recipientType ? "home_family" : input.helpFor;
+    const derivedStates = usesStructuredV2 ? [input.dependentMainState!, ...(input.dependentStateFeatures ?? [])] : input.dependentState;
 
     const approximate = toApproximatePoint(input.lat, input.lng, city.mapCenterLat, city.mapCenterLng);
     const request = await prisma.$transaction(async (tx) => {
@@ -321,15 +411,15 @@ requestsRouter.post(
           categoryId: category.id,
           contactName: input.contactName,
           contactPhone: input.contactPhone,
-          helpFor: input.helpFor,
+          helpFor: derivedHelpFor,
           additionalActionsJson: JSON.stringify(input.additionalActions),
-          dependentStateJson: JSON.stringify(input.dependentState),
+          dependentStateJson: JSON.stringify(derivedStates),
           dependentAge: input.dependentAge,
-          scheduleType: input.scheduleType,
+          scheduleType: scheduleV2?.frequency ?? input.scheduleType,
           regularPeriod: input.regularPeriod,
           repeatedVisitsAllowed: input.repeatedVisitsAllowed,
-          title: input.title,
-          description: input.description,
+          title: resolvedTitle,
+          description: resolvedDescription,
           addressText: addressView.fullAddress,
           approximateAddressText: input.approximateAddressText || addressView.publicAddress,
           addressCity: addressParts.city,
@@ -350,14 +440,14 @@ requestsRouter.post(
           approximateLng: approximate.lng,
           mapPrivacyRadiusMeters: city.mapDefaultRadiusMeters,
           district: input.district,
-          date: input.date ? new Date(input.date) : null,
-          timeFrom: input.timeFrom,
-          timeTo: input.timeTo,
-          expectedDurationHours: input.expectedDurationHours,
-          urgency: input.urgency,
-          hasElderlyPerson: input.hasElderlyPerson,
-          hasChild: input.hasChild,
-          hasLimitedMobility: input.hasLimitedMobility,
+          date: firstVisit ? new Date(`${firstVisit.date}T00:00:00.000Z`) : input.date ? new Date(input.date) : null,
+          timeFrom: firstVisit?.startTime ?? input.timeFrom,
+          timeTo: firstVisit?.endTime ?? input.timeTo,
+          expectedDurationHours: firstVisit ? firstVisit.durationMinutes / 60 : input.expectedDurationHours,
+          urgency: scheduleV2?.frequency === "urgent_today" ? "urgent" : scheduleV2 && !["once", "urgent_today"].includes(scheduleV2.frequency) ? "regular" : input.urgency,
+          hasElderlyPerson: input.recipientType === "elderly" || input.hasElderlyPerson,
+          hasChild: input.recipientType === "child" || input.hasChild,
+          hasLimitedMobility: ["limited_mobility", "bedridden"].includes(input.dependentMainState ?? "") || input.hasLimitedMobility,
           physicalHelpLevel: input.physicalHelpLevel,
           needsCooking: input.needsCooking,
           needsCleaning: input.needsCleaning,
@@ -373,7 +463,20 @@ requestsRouter.post(
         },
         include: requestInclude
       });
-      await createRequestCategorySnapshotTx(tx, {
+      if (multiPricing) {
+        await createMultiTaskRequestSnapshotTx(tx, {
+          requestId: created.id,
+          cityId: input.cityId,
+          recipientType: input.recipientType!,
+          dependentName: input.dependentName,
+          dependentAge: input.dependentAge,
+          dependentState: { mainState: input.dependentMainState!, features: input.dependentStateFeatures ?? [] },
+          selectedTasks: input.selectedTasks!,
+          frequency: scheduleV2!.frequency,
+          schedule: scheduleV2!,
+          accompanimentWaitingMinutes: input.accompanimentWaitingMinutes
+        }, multiPricing);
+      } else await createRequestCategorySnapshotTx(tx, {
         requestId: created.id,
         cityId: input.cityId,
         categoryId: input.structuredCategoryId,
@@ -382,7 +485,7 @@ requestsRouter.post(
         frequencyCode: input.frequencyCode,
         categorySpecificFormatCode: input.categorySpecificFormatCode,
         durationMinutes: input.expectedDurationHours ? Math.round(input.expectedDurationHours * 60) : undefined,
-        queryText: `${input.title} ${input.description}`,
+        queryText: `${resolvedTitle} ${resolvedDescription}`,
         additionalTask: input.additionalTask
       });
       await writeAudit(req.user!.id, "request.create", "request", created.id, {

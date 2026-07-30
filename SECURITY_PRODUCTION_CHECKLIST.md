@@ -1,38 +1,48 @@
 # Проверка production-безопасности
 
-Документ относится к preview-версии «Забота Рядом 2.0». Перед production-запуском нужно пройти ручную проверку.
+> Статус: OPERATIONAL. Текущее состояние без секретов: [`docs/PRODUCTION_CURRENT_STATE.md`](docs/PRODUCTION_CURRENT_STATE.md).
 
-## Секреты и окружение
+## Secrets и сеть
 
-- Заменить `JWT_SECRET` на длинный уникальный production-секрет.
-- Проверить `CORS_ORIGIN` и разрешить только production-домен.
-- Не хранить реальные ключи и секреты в коде и seed-файлах.
-- Проверить `.env.preview.example` и production env в хостинге.
+- production `JWT_SECRET`, T-Bank и OAuth credentials хранятся только в env;
+- logs/API не возвращают secrets, tokens или raw банковские credentials;
+- CORS разрешает только production origin;
+- Caddy принимает 80/443, приложение слушает host localhost;
+- webhook проверяет Token, terminal/order/payment ids и amount.
 
-## База и хранение
+## База и файлы
 
-- Для production перейти с SQLite на PostgreSQL.
-- Настроить резервное копирование базы.
-- Настроить резервное копирование загруженных документов помощников.
-- Проверить доступ к файлам документов: заказчик видит только статусы, администратор видит файлы.
+Текущий production использует SQLite на persistent storage с обязательным backup. PostgreSQL требуется перед горизонтальным масштабированием, несколькими пишущими инстансами или ростом конкурентной записи.
 
-## Юридические документы и согласия
+- `/opt/zabota/data` не удаляется при deploy/rollback;
+- DB и uploads регулярно резервируются и проверяются восстановлением;
+- service-message attachments скачиваются только через protected endpoint;
+- production не запускает demo seed и legacy mock top-up.
 
-- Перед публикацией финально проверить тексты юридических документов с юристом.
-- Проверить, что новая версия документа требует повторного принятия.
-- Проверить `contentHash` для каждой версии документа.
-- Проверить экспорт согласий пользователя и общий legal-архив.
-- Проверить журнал экспортов `ConsentExportLog`.
+## Workflow v2
 
-## Доступ и безопасность
+- ownership проверяется для request/chat/visit/dispute;
+- точный адрес и contact fields проходят allowlist DTO;
+- одна версия условий подтверждается обеими сторонами;
+- batch claim, unique constraints и ledger idempotency защищают от двойной финализации;
+- проверка полной суммы обеих сторон предшествует списанию;
+- main/bonus ledger и allocations сохраняют источник;
+- manager не получает admin dispute/financial permissions;
+- действия открытия/закрытия/решения спора пишутся в AuditLog;
+- спор не вызывает T-Bank refund.
 
-- Проверить guards для заявок, откликов, чата, баланса, отзывов и загрузки документов.
-- Проверить, что обращения к администратору доступны даже при недостающих обязательных согласиях.
-- Проверить скрытие телефона, ссылок, банковских карт и кодов из SMS в чате.
-- Проверить скрытие точного адреса до перехода заявки в работу.
+## Legal и аккаунты
 
-## Preview-ограничения
+- опубликованные legal versions не редактируются;
+- required consents и content hash проверяются;
+- OAuth не назначает admin;
+- acting mode выдаётся только подписанной backend-сессией;
+- архивирование сохраняет финансовую, legal и message history.
 
-- SQLite в preview может сбрасываться при редеплое, если нет persistent disk.
-- Mock payment используется только для тестирования.
-- Яндекс.Карты работают только внешними ссылками, без API и геокодинга.
+## Payments
+
+- `PAYMENT_PROVIDER=tbank`, `TBANK_TERMINAL_MODE=live`, receipt выключен;
+- payment credit и refunds атомарны и идемпотентны;
+- test/mock/internal fee operations исключены из NPD register;
+- partial refund требует manual review;
+- online касса не включается без отдельной юридической и технической проверки.

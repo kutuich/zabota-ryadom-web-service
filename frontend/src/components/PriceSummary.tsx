@@ -21,11 +21,9 @@ export function PriceSummary({
   const clientFee = pricing?.clientServiceFeeAmount ?? fallbackServiceFee;
   const clientTotal = pricing?.clientTotalExpense ?? payment + clientFee;
   const performerFee = pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? fallbackServiceFee;
-  const performerNet = pricing?.performerNetAmount ?? Math.max(0, payment - performerFee);
   const visitFormat = pricing?.packageLabel ?? pricing?.visitFormat ?? pricing?.packageName;
   const packageRange = pricing ? formatRange(pricing.packagePriceMin, pricing.packagePriceMax) : null;
   const customerRange = pricing ? formatRange(pricing.customerTotalMin, pricing.customerTotalMax) : null;
-  const helperRange = pricing ? formatRange(pricing.helperNetMin, pricing.helperNetMax) : null;
   const reasons = pricing?.recommendationReasons?.length ? pricing.recommendationReasons : pricing?.increaseFactors ?? [];
   const included = pricing?.includedActions?.length ? pricing.includedActions : pricing?.included ?? [];
   const notIncluded = pricing?.notIncluded?.length ? pricing.notIncluded : pricing?.excluded ?? [];
@@ -46,11 +44,11 @@ export function PriceSummary({
         <>
           <strong>{packageRange ?? `${payment} ₽`}</strong>
           <dl>
-            <div><dt>Стоимость помощи</dt><dd>{packageRange ?? `${payment} ₽`}</dd></div>
+            <div><dt>Согласованная стоимость помощи</dt><dd>{packageRange ?? `${payment} ₽`}</dd></div>
             <div><dt>Сервисный сбор помощника</dt><dd>{performerFee} ₽</dd></div>
-            <div><dt>Доход после сервисного сбора</dt><dd>{helperRange ?? `${performerNet} ₽`}</dd></div>
+            <div><dt>Оплата помощи</dt><dd>Напрямую от Заказчика</dd></div>
           </dl>
-          <p>{performerPriceExplanation}</p>
+          <p>{performerPriceExplanation} Сервисный сбор оплачивается сервису отдельно со внутреннего баланса.</p>
         </>
       ) : (
         <>

@@ -136,6 +136,7 @@ export function CityCombobox({ cities = [], value, onChange, label = "Насел
         </div>
       )}
       <span className="field-help">Поиск по названию и региону. Выберите подходящий вариант.</span>
+      {selectedCity && <span className="field-help city-combobox__selected-region">{[selectedCity.region, selectedCity.district].filter(Boolean).join(" · ")}</span>}
       {message && <span className="field-help">{message}</span>}
     </div>
   );

@@ -271,7 +271,7 @@ echo
 # 1. Project structure and env presence (contents of real env files are never read).
 echo "[1/14] Структура проекта и env-файлы"
 detail_heading "Структура проекта"
-for required_path in backend frontend landing-public Dockerfile package.json package-lock.json scripts docs; do
+for required_path in backend frontend landing-public Dockerfile package.json package-lock.json scripts docs ZABOTA_RYADOM_CURRENT_SOURCE_OF_TRUTH.md docs/DOCUMENTATION_INDEX.md docs/REQUEST_WORKFLOW_V2.md docs/REQUEST_CALCULATOR.md; do
   if [ -e "$required_path" ]; then
     detail_text "- $required_path: найдено."
   else
@@ -280,6 +280,26 @@ for required_path in backend frontend landing-public Dockerfile package.json pac
     detail_text "- $required_path: НЕ НАЙДЕНО."
   fi
 done
+
+DOCUMENTATION_LOG="$WORK_DIR/documentation-consistency.log"
+: >"$DOCUMENTATION_LOG"
+if rg -n 'одна основная и одна дополнительная|одна дополнительная задача' --glob '*.md' --glob '!docs/DOCUMENTATION_AUDIT_*.md' . >"$DOCUMENTATION_LOG" 2>/dev/null; then
+  STRUCTURE_STATUS="есть замечания"
+  add_important "В активной документации найдена устаревшая модель одной дополнительной задачи."
+fi
+if rg -n '/Users/|file:///|localhost:[0-9]+/Users/' --glob '*.md' . >>"$DOCUMENTATION_LOG" 2>/dev/null; then
+  STRUCTURE_STATUS="есть замечания"
+  add_warning "В Markdown найдены абсолютные локальные ссылки."
+fi
+if ! rg -q '^PAYMENT_PROVIDER=tbank$' .env.production.example || ! rg -q '^TBANK_TERMINAL_MODE=live$' .env.production.example; then
+  STRUCTURE_STATUS="есть замечания"
+  add_important "Production example не отражает утверждённые T-Bank live flags."
+fi
+if [ -s "$DOCUMENTATION_LOG" ]; then
+  append_log "Согласованность документации" "$DOCUMENTATION_LOG"
+else
+  detail_text "- Документационный индекс, workflow v2 wording, production flags и локальные ссылки: замечаний нет."
+fi
 
 for example_file in .env.production.example; do
   if [ ! -f "$example_file" ]; then
@@ -839,7 +859,7 @@ record_search "Возможные склеенные русские слова" 
 echo "[14/14] CORS и production env example"
 detail_heading "Production env example"
 if [ -f .env.production.example ]; then
-  for env_key in CORS_ORIGIN DATABASE_URL PAYMENT_PROVIDER TBANK_SUCCESS_URL TBANK_FAIL_URL TBANK_NOTIFICATION_URL; do
+  for env_key in CORS_ORIGIN DATABASE_URL PAYMENT_PROVIDER TBANK_SUCCESS_URL TBANK_FAIL_URL TBANK_NOTIFICATION_URL VISIT_RECONCILIATION_ENABLED VISIT_RECONCILIATION_INTERVAL_MINUTES VISIT_RECONCILIATION_RUN_ON_STARTUP; do
     if grep -Eq "^[[:space:]]*${env_key}=" .env.production.example; then
       detail_text "- $env_key: найден."
     else

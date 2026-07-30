@@ -20,7 +20,17 @@ export function resolveTbankTerminalMode(source: NodeJS.ProcessEnv = process.env
   return source.TBANK_TERMINAL_MODE === "live" ? "live" : "test";
 }
 
+export function resolveVisitReconciliationConfig(source: NodeJS.ProcessEnv = process.env) {
+  const interval = Number(source.VISIT_RECONCILIATION_INTERVAL_MINUTES ?? 15);
+  return {
+    enabled: source.VISIT_RECONCILIATION_ENABLED !== "false",
+    intervalMinutes: Number.isFinite(interval) && interval >= 1 ? interval : 15,
+    runOnStartup: source.VISIT_RECONCILIATION_RUN_ON_STARTUP !== "false"
+  };
+}
+
 const defaultServiceFeeAmount = resolveDefaultServiceFeeAmount();
+const visitReconciliation = resolveVisitReconciliationConfig();
 
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? "development",
@@ -35,6 +45,10 @@ export const env = {
   // Deprecated API compatibility alias. DEFAULT_COMMISSION_AMOUNT no longer controls business logic.
   defaultCommissionAmount: defaultServiceFeeAmount,
   defaultMinTopUpAmount: Number(process.env.DEFAULT_MIN_TOP_UP_AMOUNT ?? 150),
+  maxScheduleVisits: Number(process.env.MAX_SCHEDULE_VISITS ?? 366),
+  visitReconciliationEnabled: visitReconciliation.enabled,
+  visitReconciliationIntervalMinutes: visitReconciliation.intervalMinutes,
+  visitReconciliationRunOnStartup: visitReconciliation.runOnStartup,
   trialBalanceEnabled: process.env.TRIAL_BALANCE_ENABLED === "true",
   trialBalanceAmount: Number(process.env.TRIAL_BALANCE_AMOUNT ?? 100),
   paymentProvider: process.env.PAYMENT_PROVIDER ?? "mock",

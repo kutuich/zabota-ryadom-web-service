@@ -46,7 +46,7 @@ import {
   grantTrialBalanceToUser,
   updateTrialBalanceSettings
 } from "../services/trialBalanceService";
-import { env, resolveDefaultServiceFeeAmount, resolveTbankTerminalMode, resolveUploadsDir } from "../config/env";
+import { env, resolveDefaultServiceFeeAmount, resolveTbankTerminalMode, resolveUploadsDir, resolveVisitReconciliationConfig } from "../config/env";
 import { creditPaymentToBalance, paymentCreditIdempotencyKey } from "../services/paymentService";
 import { normalizeSettlementName } from "../services/settlementService";
 import { getUserArchiveSafety, OAUTH_PENDING_CANCEL_ARCHIVE_REASON } from "../services/userLifecycleService";
@@ -78,6 +78,9 @@ import {
   saveHelperCategoryPreferences,
   validateCategoryImport
 } from "../services/categoryStructureService";
+import { expandRequestSchedule } from "../services/requestScheduleService";
+import { openVisitDispute, reconcileDueVisits, resolveVisitDispute } from "../services/visitOperationsService";
+import { createVisitReconciliationScheduler } from "../services/visitReconciliationScheduler";
 import {
   createBroadcast,
   assertServiceAttachmentDownloadAccess,
@@ -96,6 +99,9 @@ async function run() {
   assert.equal(resolveTbankTerminalMode({ TBANK_TERMINAL_MODE: "test" }), "test");
   assert.equal(resolveTbankTerminalMode({ TBANK_TERMINAL_MODE: "live" }), "live");
   assert.equal(resolveTbankTerminalMode({ TBANK_TERMINAL_MODE: "invalid" }), "test");
+  assert.deepEqual(resolveVisitReconciliationConfig({}), { enabled: true, intervalMinutes: 15, runOnStartup: true });
+  assert.deepEqual(resolveVisitReconciliationConfig({ VISIT_RECONCILIATION_ENABLED: "false", VISIT_RECONCILIATION_INTERVAL_MINUTES: "5", VISIT_RECONCILIATION_RUN_ON_STARTUP: "false" }), { enabled: false, intervalMinutes: 5, runOnStartup: false });
+  await testVisitReconciliationScheduler();
   assert.equal(normalizeRussianPhone("+79224000320"), "+79224000320");
   assert.equal(normalizeRussianPhone("79224000320"), "+79224000320");
   assert.equal(normalizeRussianPhone("89224000320"), "+79224000320");
@@ -588,9 +594,56 @@ async function run() {
   await runUserLifecycleTests();
   await runUploadStorageTests();
   await runCategoryStructureTests();
+  runRequestScheduleTests();
   await runServiceCommunicationTests();
 
   console.log("Business tests passed");
+}
+
+function runRequestScheduleTests() {
+  const visits = expandRequestSchedule({
+    frequency: "several_weekly",
+    startDate: "2030-01-01",
+    visitCount: 4,
+    daysOfWeek: [1, 3],
+    daySchedules: [
+      { dayOfWeek: 1, slots: [{ id: "morning", startTime: "09:00", durationMinutes: 60 }, { id: "evening", startTime: "18:00", durationMinutes: 90 }] },
+      { dayOfWeek: 3, slots: [{ id: "day", startTime: "12:00", durationMinutes: 120 }] }
+    ]
+  }, "Asia/Yekaterinburg", new Date("2029-01-01T00:00:00.000Z"));
+  assert.equal(visits.length, 4);
+  const multiSlotDate = visits.find((visit, index) => visits.some((other, otherIndex) => otherIndex !== index && other.date === visit.date))!.date;
+  assert.deepEqual(visits.filter((visit) => visit.date === multiSlotDate).map((visit) => visit.startTime), ["09:00", "18:00"]);
+  assert.equal(visits.find((visit) => visit.startTime === "09:00")?.endTime, "10:00");
+  assert.throws(() => expandRequestSchedule({
+    frequency: "once",
+    startDate: "2030-01-01",
+    slots: [
+      { id: "first", startTime: "10:00", durationMinutes: 120 },
+      { id: "second", startTime: "11:00", durationMinutes: 60 }
+    ]
+  }, "Asia/Yekaterinburg", new Date("2029-01-01T00:00:00.000Z")), /Проверьте заполнение формы/);
+  assert.throws(() => expandRequestSchedule({
+    frequency: "weekly",
+    startDate: "2030-01-01",
+    daysOfWeek: [1],
+    slots: [{ id: "weekly", startTime: "10:00", durationMinutes: 60 }]
+  }, "Asia/Yekaterinburg", new Date("2029-01-01T00:00:00.000Z")), /Проверьте заполнение формы/);
+
+  const fifteenVisits = expandRequestSchedule({
+    frequency: "daily",
+    startDate: "2030-02-01",
+    endDate: "2030-02-05",
+    slots: [
+      { id: "morning", startTime: "10:00", durationMinutes: 120 },
+      { id: "day", startTime: "14:00", durationMinutes: 120 },
+      { id: "evening", startTime: "18:00", durationMinutes: 120 }
+    ]
+  }, "Asia/Yekaterinburg", new Date("2029-01-01T00:00:00.000Z"));
+  assert.equal(fifteenVisits.length, 15);
+  assert.equal(fifteenVisits.reduce((sum, visit) => sum + visit.durationMinutes, 0), 30 * 60);
+  assert.equal(fifteenVisits.filter((visit) => visit.date === "2030-02-01").length, 3);
+  assert.equal(fifteenVisits.length * FIXED_SERVICE_FEE_AMOUNT, 750);
 }
 
 async function runServiceCommunicationTests() {
@@ -2697,12 +2750,21 @@ async function runBonusServiceFeeTests() {
     assert.ok(bonusFeeRows.every((row) => row.balanceKind === "bonus" && row.amount === -50));
     assert.ok(bonusFeeRows.every((row) => row.balanceBefore === 100 && row.balanceAfter === 50));
     assert.ok(bonusFeeRows.every((row) => row.reason.includes("Сервисный сбор")));
+    const feeBatch = await prisma.serviceFeeAgreementBatch.findFirstOrThrow({ where: { requestId: zeroBalanceRequestId } });
+    assert.equal(feeBatch.visitCount, 1);
+    assert.equal(feeBatch.customerServiceFeeTotal, 50);
+    assert.equal(feeBatch.helperServiceFeeTotal, 50);
+    const visitAllocations = await prisma.serviceFeeVisitAllocation.findMany({ where: { batchId: feeBatch.id }, orderBy: { side: "asc" } });
+    assert.equal(visitAllocations.length, 2);
+    assert.ok(visitAllocations.every((row) => row.feeAmount === 50 && row.bonusBalanceAmount === 50 && row.mainBalanceAmount === 0));
+    assert.ok(visitAllocations.every((row) => JSON.parse(row.sourceLedgerEntriesJson).length === 1));
     await Promise.all([
       apiRequest(app, `/api/chats/${chatId}/client-confirm`, { method: "POST", token: clientToken }),
       apiRequest(app, `/api/chats/${chatId}/performer-confirm`, { method: "POST", token: performerToken })
     ]);
     assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).bonusBalance, 50);
     assert.equal(await countServiceFeeTransactions(zeroBalanceRequestId), 2);
+    assert.equal(await prisma.serviceFeeAgreementBatch.count({ where: { requestId: zeroBalanceRequestId } }), 1);
 
     await Promise.all([
       prisma.user.update({ where: { id: client.id }, data: { balance: 20, bonusBalance: 30 } }),
@@ -2762,6 +2824,187 @@ async function runBonusServiceFeeTests() {
       { amount: combinedReal?.amount, before: combinedReal?.balanceBefore, after: combinedReal?.balanceAfter },
       { amount: -20, before: 20, after: 0 }
     );
+
+    await Promise.all([
+      prisma.user.update({ where: { id: client.id }, data: { balance: 450, bonusBalance: 300 } }),
+      prisma.user.update({ where: { id: performer.id }, data: { balance: 500, bonusBalance: 250 } })
+    ]);
+    const effective = await getEffectiveCategoryStructure(client.cityId);
+    assert.ok(effective.structure);
+    const requestCategory = await prisma.category.findFirstOrThrow({
+      where: { structureId: effective.structure.id, slug: "home-help", parentId: null, status: "active" },
+      include: { children: { where: { status: "active" }, include: { taskTemplates: { where: { isActive: true } } } }, taskTemplates: { where: { isActive: true } } }
+    });
+    const requestSubcategory = requestCategory.children[0] ?? null;
+    const requestTaskTemplate = requestSubcategory?.taskTemplates[0] ?? requestCategory.taskTemplates[0] ?? null;
+    const selectedTasks = [{
+      categoryId: requestCategory.id,
+      subcategoryId: requestSubcategory?.id ?? null,
+      taskTemplateId: requestTaskTemplate?.id ?? null
+    }];
+    const schedule = {
+      frequency: "daily",
+      startDate: "2030-02-01",
+      endDate: "2030-02-05",
+      slots: [
+        { id: "morning", startTime: "10:00", durationMinutes: 60 },
+        { id: "day", startTime: "14:00", durationMinutes: 120 },
+        { id: "evening", startTime: "18:00", durationMinutes: 180 }
+      ]
+    };
+    const singleVisitPrices = new Map<number, number>();
+    for (const [durationMinutes, startTime] of [[60, "10:00"], [120, "14:00"], [180, "18:00"]] as const) {
+      const singleQuote = await apiRequest(app, "/api/requests/calculate-price", {
+        method: "POST",
+        token: clientToken,
+        body: {
+          cityId: client.cityId,
+          recipientType: "self",
+          dependentState: { mainState: "independent", features: [] },
+          selectedTasks,
+          frequency: "once",
+          schedule: { frequency: "once", startDate: "2030-02-01", slots: [{ id: `single-${durationMinutes}`, startTime, durationMinutes }] }
+        }
+      });
+      assert.equal(singleQuote.status, 200);
+      assert.equal(singleQuote.payload.expandedVisits.length, 1);
+      assert.equal(singleQuote.payload.expandedVisits[0].calculatedEndTime, singleQuote.payload.expandedVisits[0].endTime);
+      singleVisitPrices.set(durationMinutes, singleQuote.payload.expandedVisits[0].calculatedHelpPrice);
+    }
+    response = await apiRequest(app, "/api/requests/calculate-price", {
+      method: "POST",
+      token: clientToken,
+      body: {
+        cityId: client.cityId,
+        recipientType: "self",
+        dependentState: { mainState: "independent", features: [] },
+        selectedTasks,
+        frequency: "daily",
+        schedule
+      }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.visitCount, 15);
+    assert.equal(response.payload.totalDurationMinutes, 30 * 60);
+    assert.equal(response.payload.customerServiceFeeTotal, 750);
+    assert.equal(response.payload.helperServiceFeeTotal, 750);
+    assert.equal(response.payload.perVisitHelpAmount, null);
+    const quotedVisits = response.payload.expandedVisits;
+    assert.equal(quotedVisits.length, 15);
+    assert.equal(new Set(quotedVisits.map((visit: any) => visit.calculatedHelpPrice)).size, 3);
+    for (const visit of quotedVisits) assert.equal(visit.calculatedHelpPrice, singleVisitPrices.get(visit.durationMinutes));
+    const quotedTotalHelpAmount = quotedVisits.reduce((sum: number, visit: any) => sum + visit.calculatedHelpPrice, 0);
+    assert.equal(response.payload.totalHelpAmount, quotedTotalHelpAmount);
+    assert.notEqual(response.payload.totalHelpAmount, quotedVisits[0].calculatedHelpPrice * 15);
+    assert.deepEqual(quotedVisits.slice(0, 3).map((visit: any) => visit.startTime), ["10:00", "14:00", "18:00"]);
+    assert.equal(response.payload.dailyBreakdown.length, 5);
+    assert.equal(response.payload.dailyBreakdown.every((day: any) => day.visitCount === 3 && day.totalDurationMinutes === 360), true);
+    response = await apiRequest(app, "/api/requests", {
+      method: "POST",
+      token: clientToken,
+      body: {
+        cityId: client.cityId,
+        contactName: client.displayName ?? "Заказчик",
+        contactPhone: client.phone ?? "+79000000002",
+        recipientType: "self",
+        dependentMainState: "independent",
+        selectedTasks,
+        scheduleV2: schedule,
+        addressStreet: "ул. Мира",
+        addressHouse: "10",
+        additionalActions: [],
+        dependentState: [],
+        comment: "Проверка конечного графика"
+      }
+    });
+    assert.equal(response.status, 201);
+    const scheduleRequest = response.payload;
+    requestIds.push(scheduleRequest.id);
+    assert.equal(await countServiceFeeTransactions(scheduleRequest.id), 0);
+    assert.equal(await prisma.serviceFeeAgreementBatch.count({ where: { requestId: scheduleRequest.id } }), 0);
+    assert.equal(await prisma.requestVisit.count({ where: { requestId: scheduleRequest.id } }), 0);
+    assert.equal((await prisma.requestCategorySnapshot.findFirstOrThrow({ where: { requestId: scheduleRequest.id } })).snapshotJson.includes('"schemaVersion":2'), true);
+    response = await apiRequest(app, `/api/requests/${scheduleRequest.id}/publish`, { method: "POST", token: clientToken });
+    assert.equal(response.status, 200);
+    response = await apiRequest(app, `/api/requests/${scheduleRequest.id}/respond`, { method: "POST", token: performerToken, body: { message: "Готов согласовать конечный график" } });
+    assert.equal(response.status, 201);
+    response = await apiRequest(app, `/api/requests/responses/${response.payload.response.id}/accept`, { method: "POST", token: clientToken });
+    assert.equal(response.status, 200);
+    const scheduleChat = response.payload.chat;
+    response = await apiRequest(app, `/api/chats/${scheduleChat.id}/terms`, {
+      method: "PATCH",
+      token: clientToken,
+      body: {
+        agreedHelperAmount: quotedVisits[0].calculatedHelpPrice,
+        agreedVisits: quotedVisits.map((visit: any) => ({ visitId: visit.id, amount: visit.calculatedHelpPrice })),
+        agreedTermsComment: "Пять дней по три визита",
+        schedule,
+        selectedTasks
+      }
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.agreementVersion.visitCount, 15);
+    assert.equal(response.payload.agreementVersion.totalDurationMinutes, 30 * 60);
+    assert.equal(response.payload.agreementVersion.totalHelpAmount, quotedTotalHelpAmount);
+    assert.deepEqual(response.payload.agreementVersion.expandedVisits.slice(0, 3).map((visit: any) => visit.agreedHelpAmount), quotedVisits.slice(0, 3).map((visit: any) => visit.calculatedHelpPrice));
+    const agreementVersionId = response.payload.agreementVersion.id;
+    const agreementTermsHash = response.payload.agreementVersion.termsHash;
+    await prisma.agreementVersion.update({ where: { id: agreementVersionId }, data: { termsHash: "tampered" } });
+    await apiRequest(app, `/api/chats/${scheduleChat.id}/client-confirm`, { method: "POST", token: clientToken });
+    assert.equal(await countServiceFeeTransactions(scheduleRequest.id), 0);
+    response = await apiRequest(app, `/api/chats/${scheduleChat.id}/performer-confirm`, { method: "POST", token: performerToken });
+    assert.equal(response.status, 409);
+    assert.equal(response.payload.code, "agreement_version_integrity_failed");
+    assert.equal(await prisma.serviceFeeAgreementBatch.count({ where: { requestId: scheduleRequest.id } }), 0);
+    assert.equal(await countServiceFeeTransactions(scheduleRequest.id), 0);
+    await prisma.agreementVersion.update({ where: { id: agreementVersionId }, data: { termsHash: agreementTermsHash } });
+    response = await apiRequest(app, `/api/chats/${scheduleChat.id}/performer-confirm`, { method: "POST", token: performerToken });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "in_work");
+    const scheduleBatch = await prisma.serviceFeeAgreementBatch.findFirstOrThrow({ where: { requestId: scheduleRequest.id } });
+    assert.deepEqual(
+      { visits: scheduleBatch.visitCount, customer: scheduleBatch.customerServiceFeeTotal, helper: scheduleBatch.helperServiceFeeTotal },
+      { visits: 15, customer: 750, helper: 750 }
+    );
+    assert.equal(await prisma.requestVisit.count({ where: { requestId: scheduleRequest.id } }), 15);
+    const finalizedVisits = await prisma.requestVisit.findMany({ where: { requestId: scheduleRequest.id }, orderBy: { sequence: "asc" } });
+    assert.deepEqual(finalizedVisits.slice(0, 3).map((visit) => visit.helpAmount), quotedVisits.slice(0, 3).map((visit: any) => visit.calculatedHelpPrice));
+    assert.equal(finalizedVisits.every((visit) => JSON.parse(visit.pricingBreakdownJson).agreedHelpAmount === visit.helpAmount), true);
+    const scheduleAllocations = await prisma.serviceFeeVisitAllocation.findMany({ where: { batchId: scheduleBatch.id } });
+    assert.equal(scheduleAllocations.length, 30);
+    assert.equal(scheduleAllocations.reduce((sum, item) => sum + item.feeAmount, 0), 1500);
+    assert.equal(scheduleAllocations.reduce((sum, item) => sum + item.bonusBalanceAmount, 0), 550);
+    assert.equal(scheduleAllocations.reduce((sum, item) => sum + item.mainBalanceAmount, 0), 950);
+    assert.deepEqual(
+      await prisma.user.findUniqueOrThrow({ where: { id: client.id }, select: { balance: true, bonusBalance: true } }),
+      { balance: 0, bonusBalance: 0 }
+    );
+    assert.deepEqual(
+      await prisma.user.findUniqueOrThrow({ where: { id: performer.id }, select: { balance: true, bonusBalance: true } }),
+      { balance: 0, bonusBalance: 0 }
+    );
+    await Promise.all([
+      apiRequest(app, `/api/chats/${scheduleChat.id}/client-confirm`, { method: "POST", token: clientToken }),
+      apiRequest(app, `/api/chats/${scheduleChat.id}/performer-confirm`, { method: "POST", token: performerToken })
+    ]);
+    assert.equal(await prisma.serviceFeeAgreementBatch.count({ where: { requestId: scheduleRequest.id } }), 1);
+    assert.equal(await countServiceFeeTransactions(scheduleRequest.id), 4);
+
+    const firstVisit = await prisma.requestVisit.findFirstOrThrow({ where: { requestId: scheduleRequest.id }, orderBy: { sequence: "asc" } });
+    const dispute = await openVisitDispute(firstVisit.id, { id: client.id, role: "client" }, "helper_no_show", "Проверка спора по одному визиту");
+    const reconciliation = await reconcileDueVisits(prisma, new Date("2031-01-01T00:00:00.000Z"));
+    assert.ok(reconciliation.closed >= 14);
+    assert.equal(await prisma.requestVisit.count({ where: { requestId: scheduleRequest.id, status: "completed" } }), 14);
+    assert.equal(await prisma.serviceFeeVisitAllocation.count({ where: { batchId: scheduleBatch.id, status: "disputed" } }), 2);
+    assert.equal(await prisma.serviceFeeVisitAllocation.count({ where: { batchId: scheduleBatch.id, status: "released" } }), 28);
+    const repeatReconciliation = await reconcileDueVisits(prisma, new Date("2031-01-01T00:00:00.000Z"));
+    assert.equal(repeatReconciliation.closed, 0);
+    await resolveVisitDispute(dispute.id, admin.id, "return_to_source", "Возврат в исходные кошельки для теста");
+    assert.equal(await prisma.serviceFeeVisitAllocation.count({ where: { batchId: scheduleBatch.id, status: "refunded" } }), 2);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).bonusBalance, 50);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: performer.id } })).bonusBalance, 50);
+    await resolveVisitDispute(dispute.id, admin.id, "return_to_source", "Повтор не должен возвращать средства");
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: client.id } })).bonusBalance, 50);
   } finally {
     if (requestIds.length) {
       await prisma.balanceTransaction.deleteMany({ where: { relatedRequestId: { in: requestIds } } });
@@ -2782,6 +3025,48 @@ async function runBonusServiceFeeTests() {
       where: { key: { in: trackedSettingKeys.filter((key) => !originalSettingKeys.has(key)) } }
     });
   }
+}
+
+async function testVisitReconciliationScheduler() {
+  let release: (() => void) | undefined;
+  let calls = 0;
+  const logger = { info: () => undefined, error: () => undefined };
+  const scheduler = createVisitReconciliationScheduler({
+    enabled: true,
+    intervalMinutes: 60,
+    runOnStartup: false,
+    logger,
+    now: () => new Date("2030-02-10T12:00:00.000Z"),
+    reconcile: async () => {
+      calls += 1;
+      await new Promise<void>((resolve) => { release = resolve; });
+      return { checked: 3, closed: 2, skippedDisputed: 1 };
+    }
+  });
+  const first = scheduler.runOnce("manual");
+  const parallel = await scheduler.runOnce("manual");
+  assert.equal(parallel.skipped, true);
+  release?.();
+  const result = await first;
+  assert.equal(result.closed, 2);
+  assert.equal(calls, 1);
+  assert.equal(scheduler.getDiagnostics().lastSkippedDisputed, 1);
+  scheduler.start();
+  scheduler.stop();
+  assert.equal(scheduler.getDiagnostics().nextRunAt, null);
+
+  let startupCalls = 0;
+  const startupScheduler = createVisitReconciliationScheduler({
+    enabled: true,
+    intervalMinutes: 60,
+    runOnStartup: true,
+    logger,
+    reconcile: async () => { startupCalls += 1; return { checked: 0, closed: 0, skippedDisputed: 0 }; }
+  });
+  startupScheduler.start();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  startupScheduler.stop();
+  assert.equal(startupCalls, 1);
 }
 
 async function runCriticalSafetyTests() {

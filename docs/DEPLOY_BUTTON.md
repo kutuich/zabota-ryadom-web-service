@@ -1,5 +1,7 @@
 # Production deploy двойным кликом
 
+> Статус: OPERATIONAL DOCUMENT. Запускать только по отдельному разрешению после checklist и backup.
+
 Файл `deploy-zabota-production.command` в корне проекта загружает текущую версию в GitHub, обновляет production-сервер, пересобирает Docker image, перезапускает контейнер и проверяет основные адреса приложения.
 
 ## Первый запуск

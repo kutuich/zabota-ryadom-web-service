@@ -22,6 +22,7 @@ import { downloadXlsx, downloadZip } from "../utils/xlsx";
 import { buildPublicAddressFromRequest, buildYandexExactAddressFromRequest, buildYandexMapsSearchUrl } from "../utils/address";
 import { formatDateRu, formatDateTimeRu, formatTimeRu } from "../utils/dateTime";
 import { useAuth } from "../context/AuthContext";
+import { VisitReservePanel } from "../components/VisitReservePanel";
 
 const summaryLabels: Record<string, string> = {
   usersTotal: "Пользователей",
@@ -479,7 +480,7 @@ export function AdminDashboard() {
           "Статус чата",
           "Оплата помощнику",
           "Сервисный сбор помощника",
-          "Доход помощника после сервисного сбора"
+          "Оплата помощи"
         ],
         ...requests.flatMap((request) => (request.responses ?? []).map((response: any) => {
           const pricing = request.pricing ?? parseJsonObject(request.pricingBreakdownJson);
@@ -497,7 +498,7 @@ export function AdminDashboard() {
             chat ? labelStatus(chat.status) : "",
             agreedTerms?.agreedHelperAmount ?? pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0,
             agreedTerms?.helperServiceFeeAmount ?? pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0,
-            agreedTerms?.helperNetAmount ?? pricing?.performerNetAmount ?? Math.max(0, (pricing?.performerPaymentAmount ?? request.priceEstimateAmount ?? 0) - (pricing?.performerServiceFeeAmount ?? pricing?.performerCommissionAmount ?? 0))
+            "напрямую между сторонами"
           ];
         }))
       ]
@@ -1059,6 +1060,8 @@ export function AdminDashboard() {
       {activeTab === "Платежи" && <AdminPaymentsPage />}
 
       {activeTab === "Мой налог" && <AdminNpdRegisterPage />}
+
+      {activeTab === "Резерв визитов" && <VisitReservePanel canReconcile />}
 
       {activeTab === "Блокировки" && (
         <UsersTable
@@ -2015,7 +2018,7 @@ function requestExportHeader() {
     "Сервисный сбор заказчика",
     "Сервисный сбор помощника",
     "Итого расходы заказчика",
-    "Доход помощника после сервисного сбора",
+    "Оплата помощи",
     "Дата создания",
     "Дата обновления"
   ];
@@ -2040,7 +2043,7 @@ function requestExportRow(request: ClientRequest) {
     customerFee,
     helperFee,
     agreedTerms?.customerTotalAmount ?? pricing?.clientTotalExpense ?? payment + customerFee,
-    agreedTerms?.helperNetAmount ?? pricing?.performerNetAmount ?? Math.max(0, payment - helperFee),
+    "напрямую между сторонами",
     formatDateTimeRu((request as any).createdAt),
     formatDateTimeRu((request as any).updatedAt)
   ];
@@ -2123,6 +2126,7 @@ function adminTabFromPath(pathname: string) {
   if (pathname.startsWith("/app/admin/balances")) return "Балансы";
   if (pathname.startsWith("/app/admin/npd-register")) return "Мой налог";
   if (pathname.startsWith("/app/admin/payments")) return "Платежи";
+  if (pathname.startsWith("/app/admin/visit-reserve")) return "Резерв визитов";
   if (pathname.startsWith("/app/admin/blocked")) return "Блокировки";
   if (pathname.startsWith("/app/admin/categories")) return "Структуры категорий";
   if (pathname.startsWith("/app/admin/legal")) return "Юридические документы";

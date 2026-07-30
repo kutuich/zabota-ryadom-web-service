@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { authenticate } from "../middleware/auth";
 import { prisma } from "../db/prisma";
-import { chargeAgreementFeesTx, getServiceFeeSettings, hasAvailableBalance } from "../services/balanceService";
+import { getServiceFeeSettings, hasAvailableBalance } from "../services/balanceService";
 import { writeAudit } from "../services/auditService";
 import { requireFeatureConsent } from "../services/legalService";
 import { moderateChatMessage } from "../services/moderationService";
@@ -11,6 +11,7 @@ import { canShowExactAddressToHelper } from "../services/addressService";
 import { serializeAgreedTerms } from "../services/agreementTermsService";
 import { PRICING_ADDONS, PRICING_PACKAGES } from "../services/pricingService";
 import { asyncHandler, HttpError } from "../utils/http";
+import { confirmAgreementVersionTx, createAgreementVersionTx, finalizeAgreementBatchTx } from "../services/agreementWorkflowService";
 
 export const chatsRouter = Router();
 
@@ -29,16 +30,36 @@ const chatInclude = {
   messages: {
     include: { sender: { select: { id: true, displayName: true, role: true } } },
     orderBy: { createdAt: "asc" as const }
-  }
+  },
+  agreementVersions: { orderBy: { version: "desc" as const }, take: 1 }
 };
 
 const agreementTermsSchema = z.object({
   agreedHelperAmount: z.number().int().min(1).max(100_000),
+  agreedVisits: z.array(z.object({
+    visitId: z.string().min(1).max(160),
+    amount: z.number().int().min(1).max(100_000)
+  })).max(5000).optional(),
   agreedPackageId: z.string().min(1).max(80).nullable().optional(),
   agreedAddons: z.array(z.string().min(1).max(80)).max(20).optional(),
   agreedDurationMinutes: z.number().int().min(15).max(24 * 60).nullable().optional(),
   agreedScheduledAt: z.string().max(40).refine((value) => !Number.isNaN(Date.parse(value)), "Некорректная дата и время").nullable().optional(),
-  agreedTermsComment: z.string().max(1000).nullable().optional()
+  agreedTermsComment: z.string().max(1000).nullable().optional(),
+  selectedTasks: z.array(z.object({
+    categoryId: z.string().min(1),
+    subcategoryId: z.string().min(1).nullable().optional(),
+    taskTemplateId: z.string().min(1).nullable().optional()
+  })).max(100).optional(),
+  schedule: z.object({
+    frequency: z.enum(["urgent_today", "once", "daily", "weekly", "several_weekly", "regular_schedule"]),
+    startDate: z.string(),
+    endDate: z.string().nullable().optional(),
+    weeksCount: z.number().int().positive().nullable().optional(),
+    visitCount: z.number().int().positive().nullable().optional(),
+    daysOfWeek: z.array(z.number().int().min(0).max(6)).optional(),
+    slots: z.array(z.object({ id: z.string(), startTime: z.string(), durationMinutes: z.number().int().positive() })).optional(),
+    daySchedules: z.array(z.object({ dayOfWeek: z.number().int().min(0).max(6), slots: z.array(z.object({ id: z.string(), startTime: z.string(), durationMinutes: z.number().int().positive() })) })).optional()
+  }).optional()
 });
 
 chatsRouter.get(
@@ -170,7 +191,7 @@ chatsRouter.patch(
       ["completed", "cancelled", "archived"].includes(chat.status) ||
       ["in_progress", "completed", "cancelled", "archived"].includes(chat.request.status)
     ) {
-      throw new HttpError(400, "Условия этой заявки больше нельзя изменить", "agreement_terms_locked");
+      throw new HttpError(400, "Согласованный график уже подтверждён и защищён от изменения. Для изменения условий потребуется создать новую версию графика. Эта возможность будет добавлена отдельным этапом.", "agreement_terms_locked");
     }
 
     const requestPricing = safeJsonObject(chat.request.pricingBreakdownJson);
@@ -228,6 +249,20 @@ chatsRouter.patch(
           isSystem: true
         }
       });
+      const agreementVersion = await createAgreementVersionTx(tx, { ...chat, request: chat.request }, req.user!.id, {
+        agreedHelperAmount: input.agreedHelperAmount,
+        agreedVisits: input.agreedVisits,
+        termsComment: input.agreedTermsComment === undefined ? chat.agreedTermsComment : input.agreedTermsComment,
+        schedule: input.schedule,
+        selectedTasks: input.selectedTasks
+      });
+      await tx.chat.update({
+        where: { id: chat.id },
+        data: {
+          customerTotalAmount: agreementVersion.totalHelpAmount == null ? null : agreementVersion.totalHelpAmount + agreementVersion.customerServiceFeeTotal,
+          helperNetAmount: agreementVersion.totalHelpAmount == null ? null : Math.max(0, agreementVersion.totalHelpAmount - agreementVersion.helperServiceFeeTotal)
+        }
+      });
       await writeAudit(req.user!.id, "chat.agreement_terms_update", "chat", chat.id, {
         requestId: chat.requestId,
         agreedHelperAmount: input.agreedHelperAmount,
@@ -270,6 +305,7 @@ chatsRouter.post(
         throw new HttpError(400, "Сначала согласуйте и сохраните стоимость помощи", "agreement_terms_required");
       }
       const confirmedAt = new Date();
+      await confirmAgreementVersionTx(tx, chat.id, "customer", confirmedAt);
       await tx.chat.update({
         where: { id: chat.id },
         data: {
@@ -326,6 +362,7 @@ chatsRouter.post(
         throw new HttpError(400, "Сначала согласуйте и сохраните стоимость помощи", "agreement_terms_required");
       }
       const confirmedAt = new Date();
+      await confirmAgreementVersionTx(tx, chat.id, "helper", confirmedAt);
       await tx.chat.update({
         where: { id: chat.id },
         data: {
@@ -505,26 +542,24 @@ async function finalizeAgreementIfReady(
   }
 
   const settings = await getServiceFeeSettings(tx);
-  const [client, performer] = await Promise.all([
+  const agreementDraft = await tx.agreementVersion.findFirst({ where: { chatId: chat.id, status: "draft" }, orderBy: { version: "desc" } });
+  if (!agreementDraft) throw new HttpError(400, "Сначала сохраните согласованные условия и график", "agreement_version_required");
+  const clientFeeTotal = agreementDraft.visitCount * settings.clientServiceFeeAmount;
+  const helperFeeTotal = agreementDraft.visitCount * settings.performerCommissionAmount;
+  const [clientBalance, helperBalance] = await Promise.all([
     tx.user.findUnique({ where: { id: chat.clientId }, select: { balance: true, bonusBalance: true } }),
     tx.user.findUnique({ where: { id: chat.performerId }, select: { balance: true, bonusBalance: true } })
   ]);
-  if (!client || !performer) {
-    throw new HttpError(404, "Участник заявки не найден", "participant_not_found");
-  }
-
-  if (!hasAvailableBalance(client, settings.clientServiceFeeAmount, true)) {
+  if (!clientBalance || !helperBalance) throw new HttpError(404, "Участник заявки не найден", "participant_not_found");
+  if (!hasAvailableBalance(clientBalance, clientFeeTotal, true)) {
     await tx.chat.update({ where: { id: chat.id }, data: { status: "waiting_client_balance" } });
     await tx.clientRequest.update({ where: { id: chat.requestId }, data: { status: "waiting_client_balance" } });
-    await writeAudit(viewer.id, "chat.waiting_client_balance", "chat", chat.id, settings, tx);
     const updated = await tx.chat.findUnique({ where: { id: chat.id }, include: chatInclude });
     return serializeChat(updated, viewer);
   }
-
-  if (!hasAvailableBalance(performer, settings.performerCommissionAmount, true)) {
+  if (!hasAvailableBalance(helperBalance, helperFeeTotal, true)) {
     await tx.chat.update({ where: { id: chat.id }, data: { status: "waiting_performer_balance" } });
     await tx.clientRequest.update({ where: { id: chat.requestId }, data: { status: "waiting_performer_balance" } });
-    await writeAudit(viewer.id, "chat.waiting_performer_balance", "chat", chat.id, settings, tx);
     const updated = await tx.chat.findUnique({ where: { id: chat.id }, include: chatInclude });
     return serializeChat(updated, viewer);
   }
@@ -543,12 +578,9 @@ async function finalizeAgreementIfReady(
     return serializeChat(current, viewer);
   }
 
-  await chargeAgreementFeesTx(tx, {
-    requestId: chat.requestId,
-    clientId: chat.clientId,
-    performerId: chat.performerId,
-    actorUserId: viewer.id
-  });
+  const batch = await finalizeAgreementBatchTx(tx, chat, viewer.id);
+  if (!batch) return serializeChat(chat, viewer);
+  const agreementVersion = await tx.agreementVersion.findUnique({ where: { id: batch.agreementVersionId } });
   await tx.clientRequest.update({
     where: { id: chat.requestId },
     data: {
@@ -570,18 +602,28 @@ async function finalizeAgreementIfReady(
     where: { id: chat.id },
     data: {
       status: "in_work",
-      customerServiceFeeAmount: settings.clientServiceFeeAmount,
-      helperServiceFeeAmount: settings.performerCommissionAmount,
-      customerTotalAmount: chat.agreedHelperAmount + settings.clientServiceFeeAmount,
-      helperNetAmount: Math.max(0, chat.agreedHelperAmount - settings.performerCommissionAmount),
+      customerServiceFeeAmount: batch.customerServiceFeeTotal,
+      helperServiceFeeAmount: batch.helperServiceFeeTotal,
+      customerTotalAmount: (agreementVersion?.totalHelpAmount ?? chat.agreedHelperAmount) + batch.customerServiceFeeTotal,
+      helperNetAmount: Math.max(0, (agreementVersion?.totalHelpAmount ?? chat.agreedHelperAmount) - batch.helperServiceFeeTotal),
       conditionsJson: JSON.stringify({
         requestTitle: chat.request.title,
         publicNumber: chat.request.publicNumber,
         agreedHelperAmount: chat.agreedHelperAmount,
+        agreementVersionId: agreementVersion?.id,
+        agreementVersion: agreementVersion?.version,
+        termsHash: agreementVersion?.termsHash,
+        visitCount: batch.visitCount,
+        expandedVisits: agreementVersion ? parseJsonArray(agreementVersion.expandedVisitsJson) : [],
+        selectedTasks: agreementVersion ? parseJsonArray(agreementVersion.selectedTasksJson) : [],
+        agreedHelpAmountPerVisit: chat.agreedHelperAmount,
+        totalHelpAmount: agreementVersion?.totalHelpAmount,
         customerServiceFeeAmount: settings.clientServiceFeeAmount,
         helperServiceFeeAmount: settings.performerCommissionAmount,
-        customerTotalAmount: chat.agreedHelperAmount + settings.clientServiceFeeAmount,
-        helperNetAmount: Math.max(0, chat.agreedHelperAmount - settings.performerCommissionAmount),
+        customerServiceFeeTotal: batch.customerServiceFeeTotal,
+        helperServiceFeeTotal: batch.helperServiceFeeTotal,
+        customerTotalAmount: (agreementVersion?.totalHelpAmount ?? chat.agreedHelperAmount) + batch.customerServiceFeeTotal,
+        helperNetAmount: Math.max(0, (agreementVersion?.totalHelpAmount ?? chat.agreedHelperAmount) - batch.helperServiceFeeTotal),
         agreedPackageId: chat.agreedPackageId,
         agreedPackageTitle: chat.agreedPackageTitle,
         agreedAddons: parseStringArray(chat.agreedAddonsJson),
@@ -605,8 +647,10 @@ async function finalizeAgreementIfReady(
   });
   await writeAudit(viewer.id, "chat.agreement_finalized", "chat", chat.id, {
     requestId: chat.requestId,
-    clientServiceFeeAmount: settings.clientServiceFeeAmount,
-    performerCommissionAmount: settings.performerCommissionAmount,
+    clientServiceFeeAmount: batch.customerServiceFeeTotal,
+    performerCommissionAmount: batch.helperServiceFeeTotal,
+    visitCount: batch.visitCount,
+    agreementVersionId: batch.agreementVersionId,
     agreedHelperAmount: chat.agreedHelperAmount
   }, tx);
 
@@ -646,6 +690,7 @@ function serializeChat(chat: any, viewer: { id: string; role: string }) {
         archivedAt: chat.archivedAt
       })
     : chat.request;
+  const agreementVersion = chat.agreementVersions?.[0];
   return {
     id: chat.id,
     requestId: chat.requestId,
@@ -672,6 +717,24 @@ function serializeChat(chat: any, viewer: { id: string; role: string }) {
     termsUpdatedAt: chat.termsUpdatedAt,
     termsUpdatedByUserId: chat.termsUpdatedByUserId,
     agreedTerms: serializeAgreedTerms(chat),
+    agreementVersion: agreementVersion ? {
+      id: agreementVersion.id,
+      version: agreementVersion.version,
+      status: agreementVersion.status,
+      selectedTasks: parseJsonArray(agreementVersion.selectedTasksJson),
+      scheduleRules: safeJsonObject(agreementVersion.scheduleRulesJson),
+      expandedVisits: parseJsonArray(agreementVersion.expandedVisitsJson),
+      pricingSnapshot: safeJsonObject(agreementVersion.pricingSnapshotJson),
+      visitCount: agreementVersion.visitCount,
+      totalDurationMinutes: agreementVersion.totalDurationMinutes,
+      totalHelpAmount: agreementVersion.totalHelpAmount,
+      customerServiceFeeTotal: agreementVersion.customerServiceFeeTotal,
+      helperServiceFeeTotal: agreementVersion.helperServiceFeeTotal,
+      termsHash: agreementVersion.termsHash,
+      customerConfirmedAt: agreementVersion.customerConfirmedAt,
+      helperConfirmedAt: agreementVersion.helperConfirmedAt,
+      finalizedAt: agreementVersion.finalizedAt
+    } : null,
     conditionsJson: chat.conditionsJson,
     notAgreedAt: chat.notAgreedAt,
     reopenedAt: chat.reopenedAt,
@@ -717,6 +780,16 @@ function parseStringArray(value?: string | null) {
   try {
     const parsed = JSON.parse(value);
     return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseJsonArray(value?: string | null) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }

@@ -151,9 +151,56 @@ export type CategoriesForCity = {
   statusLabel: string;
   structure: Pick<CategoryStructure, "id" | "scopeType" | "versionNumber" | "title" | "qualityStatus"> | null;
   categories: StructuredCategory[];
+  directions?: Array<{
+    id: string;
+    slug: string;
+    title: string;
+    subtitle?: string | null;
+    safetyRules?: Array<{ id: string; title: string; description: string; severity: string; isBlocking: boolean }>;
+    tasks: Array<{
+      id: string;
+      categoryId: string;
+      categorySlug: string;
+      categoryTitle: string;
+      subcategoryId?: string | null;
+      subcategorySlug?: string | null;
+      taskTemplateId?: string | null;
+      taskTemplateSlug?: string | null;
+      slug: string;
+      title: string;
+      aliases: string[];
+    }>;
+  }>;
 };
 
 export type StructuredRequestPriceQuote = {
+  visitCount?: number;
+  totalDurationMinutes?: number;
+  perVisitHelpAmount?: number | null;
+  totalHelpAmount?: number | null;
+  customerServiceFeeAmount?: number;
+  helperServiceFeeAmount?: number;
+  customerServiceFeeTotal?: number;
+  helperServiceFeeTotal?: number;
+  totalCustomerEstimate?: number | null;
+  helperNetEstimate?: number | null;
+  unpricedTasks?: Array<{ taskTemplateTitle: string }>;
+  expandedVisits?: Array<{
+    id: string;
+    sequence: number;
+    date: string;
+    startTime: string;
+    endTime: string;
+    durationMinutes: number;
+    calculatedEndTime?: string;
+    calculatedHelpPrice?: number | null;
+    calculatedSubtotal?: number;
+    helpAmount?: number | null;
+    customerServiceFee?: number;
+    helperServiceFee?: number;
+    pricingBreakdown?: unknown[];
+    unpricedTasks?: Array<{ taskTemplateTitle?: string; subcategoryTitle?: string }>;
+  }>;
   baseRange: { min: number | null; max: number | null } | null;
   calculatedRecommendedPrice: number | null;
   additionalTask: {
@@ -526,6 +573,17 @@ export type ClientRequest = {
 };
 
 export type PricingQuote = {
+  expandedVisits?: Array<{
+    id: string;
+    sequence: number;
+    date: string;
+    startTime: string;
+    endTime: string;
+    durationMinutes: number;
+    agreedHelpAmount?: number | null;
+    calculatedHelpPrice?: number | null;
+    helpAmount?: number | null;
+  }>;
   basePrice: number;
   durationHours: number;
   billableHours: number;
@@ -727,6 +785,34 @@ export type Chat = {
   performerConfirmedAt?: string | null;
   agreementFinalizedAt?: string | null;
   agreedTerms?: AgreedTerms | null;
+  agreementVersion?: {
+    id: string;
+    version: number;
+    status: string;
+    selectedTasks: Array<{ taskTemplateTitle?: string; subcategoryTitle?: string; categoryTitle?: string }>;
+    expandedVisits: Array<{
+      id: string;
+      sequence: number;
+      date: string;
+      startTime: string;
+      endTime: string;
+      durationMinutes: number;
+      timezone: string;
+      agreedHelpAmount?: number | null;
+      calculatedHelpPrice?: number | null;
+      pricingBreakdown?: unknown[];
+      unpricedTasks?: unknown[];
+    }>;
+    visitCount: number;
+    totalDurationMinutes: number;
+    totalHelpAmount?: number | null;
+    customerServiceFeeTotal: number;
+    helperServiceFeeTotal: number;
+    termsHash: string;
+    customerConfirmedAt?: string | null;
+    helperConfirmedAt?: string | null;
+    finalizedAt?: string | null;
+  } | null;
   conditionsJson?: string | null;
   archivedAt?: string | null;
   exactAddressVisible: boolean;

@@ -110,6 +110,8 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
 
 export const api = {
   bootstrap: () => apiFetch<Bootstrap>("/public/bootstrap"),
+  visitReserveSummary: () => apiFetch<any>("/admin/visits/reserve-summary"),
+  reconcileVisits: () => apiFetch<{ skipped: boolean; checked: number; closed: number; skippedDisputed: number }>("/admin/visits/reconcile", { method: "POST" }),
   searchSettlements: (query: string) => apiFetch<SettlementSearchResult[]>(`/settlements/search?q=${encodeURIComponent(query)}`),
   suggestSettlement: (body: { name: string; region?: string; district?: string; type?: string }) =>
     apiFetch<{ settlement: SettlementSearchResult; existing: boolean }>("/settlements/suggest", { method: "POST", body: JSON.stringify(body) }),
@@ -224,6 +226,7 @@ export const api = {
     }),
   updateChatTerms: (chatId: string, body: {
     agreedHelperAmount: number;
+    agreedVisits?: Array<{ visitId: string; amount: number }>;
     agreedPackageId?: string | null;
     agreedAddons?: string[];
     agreedDurationMinutes?: number | null;

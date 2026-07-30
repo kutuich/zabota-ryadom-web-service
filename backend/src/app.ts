@@ -37,6 +37,7 @@ import {
 } from "./routes/serviceCommunications";
 import { authenticate } from "./middleware/auth";
 import { sendError } from "./utils/http";
+import { adminVisitsRouter, visitsRouter } from "./routes/visits";
 
 export function createApp() {
   const app = express();
@@ -70,6 +71,7 @@ export function createApp() {
   app.use("/api/knowledge", knowledgeRouter);
   app.use("/api/legal", legalRouter);
   app.use("/api/chats", chatsRouter);
+  app.use("/api/visits", visitsRouter);
   app.use("/api/balance", balanceRouter);
   app.use("/api/payments", paymentsRouter);
   app.use("/api/complaints", complaintsRouter);
@@ -84,6 +86,7 @@ export function createApp() {
   app.use("/api/admin/payments", paymentServiceMessagesRouter);
   app.use("/api/admin/broadcasts", adminBroadcastsRouter);
   app.use("/api/admin/category-structures", adminCategoryStructuresRouter);
+  app.use("/api/admin/visits", adminVisitsRouter);
   app.use("/api/admin", adminRouter);
 
   if (env.nodeEnv === "production") {

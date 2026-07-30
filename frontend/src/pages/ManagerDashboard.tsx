@@ -12,6 +12,7 @@ import { formatDateTimeRu } from "../utils/dateTime";
 import { labelStatus } from "../utils/labels";
 import { ServiceCommunicationsPage } from "./ServiceCommunicationsPage";
 import { UserServiceCommunicationPanel } from "../components/UserServiceCommunicationPanel";
+import { VisitReservePanel } from "../components/VisitReservePanel";
 
 type ManagerRecord = Record<string, any>;
 
@@ -240,6 +241,7 @@ export function ManagerDashboard() {
       {activeTab === "Обращения" && <ReadOnlyRows title="Обращения" rows={complaints} render={(row) => complaintRow(row, () => void openDetail("complaint", row.id))} />}
       {activeTab === "Платежи" && <ReadOnlyRows title="Платежи" rows={payments} render={paymentRow} />}
       {activeTab === "Операции баланса" && <ReadOnlyRows title="Операции баланса" rows={transactions} render={transactionRow} />}
+      {activeTab === "Резерв визитов" && <VisitReservePanel canReconcile={false} />}
 
       {activeTab === "Профиль менеджера" && user && (
         <section className="plain-section">

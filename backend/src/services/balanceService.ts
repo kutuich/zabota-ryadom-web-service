@@ -355,6 +355,7 @@ export async function chargeAvailableBalanceTx(
     comment?: string;
     useBonus?: boolean;
     chargeBonusFirst?: boolean;
+    idempotencyKeyPrefix?: string;
   } = {}
 ) {
   const payer = await tx.user.findUnique({
@@ -407,8 +408,9 @@ export async function chargeAvailableBalanceTx(
     }
   });
 
+  const sourceLedgerEntryIds: string[] = [];
   if (bonusCharge > 0) {
-    await tx.balanceTransaction.create({
+    const entry = await tx.balanceTransaction.create({
       data: {
         userId: payerUserId,
         type: options.type ?? "commission_charge",
@@ -418,13 +420,15 @@ export async function chargeAvailableBalanceTx(
         comment: options.comment ?? "Автоматическое списание после двойного подтверждения условий",
         balanceBefore: payer.bonusBalance,
         balanceAfter: payer.bonusBalance - bonusCharge,
-        relatedRequestId
+        relatedRequestId,
+        idempotencyKey: options.idempotencyKeyPrefix ? `${options.idempotencyKeyPrefix}:bonus` : undefined
       }
     });
+    sourceLedgerEntryIds.push(entry.id);
   }
 
   if (realCharge > 0) {
-    await tx.balanceTransaction.create({
+    const entry = await tx.balanceTransaction.create({
       data: {
         userId: payerUserId,
         type: options.type ?? "commission_charge",
@@ -434,9 +438,11 @@ export async function chargeAvailableBalanceTx(
         comment: options.comment ?? "Автоматическое списание после двойного подтверждения условий",
         balanceBefore: payer.balance,
         balanceAfter: payer.balance - realCharge,
-        relatedRequestId
+        relatedRequestId,
+        idempotencyKey: options.idempotencyKeyPrefix ? `${options.idempotencyKeyPrefix}:main` : undefined
       }
     });
+    sourceLedgerEntryIds.push(entry.id);
   }
 
   await writeAudit(actorUserId, "balance.commission_charge", "request", relatedRequestId, {
@@ -446,7 +452,7 @@ export async function chargeAvailableBalanceTx(
     realCharge
   }, tx);
 
-  return { bonusCharge, realCharge };
+  return { bonusCharge, realCharge, sourceLedgerEntryIds };
 }
 
 export async function chargeAgreementFeesTx(

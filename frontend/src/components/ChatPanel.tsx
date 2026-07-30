@@ -20,6 +20,7 @@ export function ChatPanel({ chatId }: { chatId: string }) {
   const [termsDurationMinutes, setTermsDurationMinutes] = useState("");
   const [termsScheduledAt, setTermsScheduledAt] = useState("");
   const [termsComment, setTermsComment] = useState("");
+  const [visitAmounts, setVisitAmounts] = useState<Record<string, string>>({});
 
   async function load() {
     setChat(await api.chatMessages(chatId));
@@ -35,6 +36,12 @@ export function ChatPanel({ chatId }: { chatId: string }) {
     setTermsDurationMinutes(terms?.agreedDurationMinutes ? String(terms.agreedDurationMinutes) : "");
     setTermsScheduledAt(terms?.agreedScheduledAt ? toDateTimeLocal(terms.agreedScheduledAt) : "");
     setTermsComment(terms?.agreedTermsComment ?? "");
+    const pricing = chat?.request.pricing ?? parsePricing(chat?.request.pricingBreakdownJson);
+    const visits = chat?.agreementVersion?.expandedVisits ?? pricing?.expandedVisits ?? [];
+    setVisitAmounts(Object.fromEntries(visits.map((visit: any) => [
+      visit.id,
+      String(visit.agreedHelpAmount ?? visit.calculatedHelpPrice ?? visit.helpAmount ?? terms?.agreedHelperAmount ?? "")
+    ])));
   }, [chat?.agreedTerms?.termsUpdatedAt, chatId]);
 
   async function send() {
@@ -59,14 +66,15 @@ export function ChatPanel({ chatId }: { chatId: string }) {
   async function clientConfirm() {
     if (!chat) return;
     if (!chat.agreedTerms) return;
-    const { agreedHelperAmount, customerServiceFeeAmount, customerTotalAmount } = chat.agreedTerms;
+    const helpTotal = chat.agreementVersion?.totalHelpAmount ?? chat.agreedTerms.agreedHelperAmount;
+    const customerFee = chat.agreementVersion?.customerServiceFeeTotal ?? chat.agreedTerms.customerServiceFeeAmount;
     const ok = window.confirm(
       `Вы подтверждаете помощника по заявке ${chat.request.publicNumber ?? ""}.\n\n` +
         "После подтверждения помощник получит запрос на принятие заявки в работу.\n" +
         "Деньги будут списаны только после подтверждения помощником.\n\n" +
-        `Согласованная оплата за визит: ${agreedHelperAmount} ₽.\n` +
-        `Сервисный сбор заказчика: ${customerServiceFeeAmount} ₽.\n` +
-        `Итого для заказчика: ${customerTotalAmount} ₽.\n\n` +
+        `Согласованная стоимость помощи за график: ${helpTotal} ₽.\n` +
+        `Сервисный сбор Заказчика за график: ${customerFee} ₽.\n` +
+        `Ориентир общих расходов Заказчика: ${helpTotal + customerFee} ₽.\n\n` +
         "Если объём или продолжительность помощи изменились, согласуйте новую сумму в чате до начала работы.\n\n" +
         "Продолжить?"
     );
@@ -79,12 +87,14 @@ export function ChatPanel({ chatId }: { chatId: string }) {
   async function performerConfirm() {
     if (!chat) return;
     if (!chat.agreedTerms) return;
-    const { agreedHelperAmount, helperServiceFeeAmount, helperNetAmount } = chat.agreedTerms;
+    const helpTotal = chat.agreementVersion?.totalHelpAmount ?? chat.agreedTerms.agreedHelperAmount;
+    const helperFee = chat.agreementVersion?.helperServiceFeeTotal ?? chat.agreedTerms.helperServiceFeeAmount;
     const ok = window.confirm(
       `Вы подтверждаете, что принимаете заявку ${chat.request.publicNumber ?? ""} в работу на согласованных условиях.\n\n` +
-        `Согласованная оплата за визит: ${agreedHelperAmount} ₽.\n` +
-        `Сервисный сбор помощника: ${helperServiceFeeAmount} ₽.\n` +
-        `Доход помощника после сервисного сбора: ${helperNetAmount} ₽.\n` +
+        `Согласованная стоимость помощи за график: ${helpTotal} ₽.\n` +
+        `Сервисный сбор Помощника за график: ${helperFee} ₽.\n` +
+        "Оплата помощи производится Заказчиком напрямую.\n" +
+        "Сервисный сбор оплачивается Помощником сервису отдельно со внутреннего баланса.\n" +
         "После подтверждения заявка перейдёт в статус “В работе”.\n\nПодтвердить?"
     );
     if (!ok) return;
@@ -114,15 +124,22 @@ export function ChatPanel({ chatId }: { chatId: string }) {
 
   async function saveTerms() {
     if (!chat) return;
-    const agreedHelperAmount = Number(termsAmount);
+    const pricing = chat.request.pricing ?? parsePricing(chat.request.pricingBreakdownJson);
+    const sourceVisits = chat.agreementVersion?.expandedVisits ?? pricing?.expandedVisits ?? [];
+    const agreedVisits: Array<{ visitId: string; amount: number }> = sourceVisits.map((visit: any) => ({ visitId: visit.id, amount: Number(visitAmounts[visit.id]) }));
+    if (agreedVisits.some((visit: { visitId: string; amount: number }) => !Number.isInteger(visit.amount) || visit.amount <= 0 || visit.amount > 100_000)) {
+      setNotice("Укажите стоимость от 1 до 100 000 ₽ для каждого визита.");
+      return;
+    }
+    const agreedHelperAmount = agreedVisits.length ? agreedVisits[0].amount : Number(termsAmount);
     if (!Number.isInteger(agreedHelperAmount) || agreedHelperAmount <= 0 || agreedHelperAmount > 100_000) {
       setNotice("Укажите сумму помощи от 1 до 100 000 ₽.");
       return;
     }
-    const pricing = chat.request.pricing ?? parsePricing(chat.request.pricingBreakdownJson);
     try {
       const updated = await api.updateChatTerms(chat.id, {
         agreedHelperAmount,
+        agreedVisits: agreedVisits.length ? agreedVisits : undefined,
         agreedPackageId: pricing?.packageId ?? null,
         agreedAddons: pricing?.addons?.map((addon) => addon.id) ?? [],
         agreedDurationMinutes: termsDurationMinutes ? Number(termsDurationMinutes) : null,
@@ -149,7 +166,11 @@ export function ChatPanel({ chatId }: { chatId: string }) {
   }
 
   if (!chat) return <p className="empty-text">Чат загружается...</p>;
-  const previewAmount = Number(termsAmount);
+  const pricing = chat.request.pricing ?? parsePricing(chat.request.pricingBreakdownJson);
+  const editableVisits = chat.agreementVersion?.expandedVisits ?? pricing?.expandedVisits ?? [];
+  const previewAmount = editableVisits.length
+    ? editableVisits.reduce((sum, visit) => sum + Number(visitAmounts[visit.id] ?? 0), 0)
+    : Number(termsAmount);
   const hasTermsPreview = Number.isInteger(previewAmount) && previewAmount > 0 && previewAmount <= 100_000;
 
   return (
@@ -162,7 +183,25 @@ export function ChatPanel({ chatId }: { chatId: string }) {
         <span className="privacy-note">Статус: {labelStatus(chat.status)}. Телефон не раскрывается по умолчанию.</span>
       </div>
       {chat.agreedTerms ? (
-        <AgreedTermsSummary terms={chat.agreedTerms} />
+        <>
+          <AgreedTermsSummary terms={chat.agreedTerms} agreementVersion={chat.agreementVersion} />
+          {chat.agreementVersion && (
+            <section className="details-box stack agreement-schedule">
+              <h4>Согласованный график · версия {chat.agreementVersion.version}</h4>
+              <p>{chat.agreementVersion.visitCount} визитов, {formatDuration(chat.agreementVersion.totalDurationMinutes)}.</p>
+              <p>Сервисный сбор Заказчика за график: {formatRubles(chat.agreementVersion.customerServiceFeeTotal)} ₽.</p>
+              <p>Сервисный сбор Помощника за график: {formatRubles(chat.agreementVersion.helperServiceFeeTotal)} ₽.</p>
+              <div className="agreement-visit-list">
+                {chat.agreementVersion.expandedVisits.map((visit) => (
+                  <div key={`${visit.sequence}:${visit.date}:${visit.startTime}`}>
+                    <strong>Визит {visit.sequence}</strong>
+                    <span>{new Date(`${visit.date}T00:00:00`).toLocaleDateString("ru-RU")} · {visit.startTime}–{visit.endTime} · {formatDuration(visit.durationMinutes)} · {formatRubles(visit.agreedHelpAmount ?? 0)} ₽</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </>
       ) : (
         <p className="notice">Сначала согласуйте и сохраните стоимость помощи.</p>
       )}
@@ -176,10 +215,12 @@ export function ChatPanel({ chatId }: { chatId: string }) {
             <section className="details-box stack">
               <h4>Условия заявки</h4>
               <div className="auth-form-grid">
-                <label>
-                  Сумма помощи Помощника, ₽
-                  <input type="number" min="1" max="100000" step="1" value={termsAmount} onChange={(event) => setTermsAmount(event.target.value)} />
-                </label>
+                {editableVisits.length === 0 && (
+                  <label>
+                    Сумма помощи Помощника, ₽
+                    <input type="number" min="1" max="100000" step="1" value={termsAmount} onChange={(event) => setTermsAmount(event.target.value)} />
+                  </label>
+                )}
                 <label>
                   Длительность, минут
                   <input type="number" min="15" max="1440" step="15" value={termsDurationMinutes} onChange={(event) => setTermsDurationMinutes(event.target.value)} />
@@ -189,14 +230,26 @@ export function ChatPanel({ chatId }: { chatId: string }) {
                   <input type="datetime-local" value={termsScheduledAt} onChange={(event) => setTermsScheduledAt(event.target.value)} />
                 </label>
               </div>
+              {editableVisits.length > 0 && (
+                <div className="agreement-visit-prices">
+                  <h4>Стоимость каждого визита</h4>
+                  {editableVisits.map((visit: any) => (
+                    <label key={visit.id}>
+                      <span>Визит {visit.sequence}: {visit.date}, {visit.startTime}–{visit.endTime}</span>
+                      <input type="number" min="1" max="100000" step="1" value={visitAmounts[visit.id] ?? ""} onChange={(event) => setVisitAmounts((current) => ({ ...current, [visit.id]: event.target.value }))} />
+                    </label>
+                  ))}
+                </div>
+              )}
               <label>
                 Комментарий условий
                 <textarea maxLength={1000} value={termsComment} onChange={(event) => setTermsComment(event.target.value)} />
               </label>
               {hasTermsPreview && (
                 <div className="notice">
-                  <p>Итого для Заказчика: {formatRubles(previewAmount + 50)} ₽.</p>
-                  <p>Помощник получит: {formatRubles(Math.max(0, previewAmount - 50))} ₽.</p>
+                  <p>{editableVisits.length ? `Итог стоимости помощи по графику: ${formatRubles(previewAmount)} ₽.` : `Согласованная стоимость помощи: ${formatRubles(previewAmount)} ₽.`}</p>
+                  <p>Сервисный сбор каждой стороны: 50 ₽ за каждый согласованный визит.</p>
+                  <p>Оплата помощи производится напрямую между сторонами; сервисные сборы оплачиваются отдельно.</p>
                 </div>
               )}
               <button className="primary-button" type="button" onClick={saveTerms}>
@@ -280,6 +333,12 @@ function toDateTimeLocal(value: string) {
   const date = new Date(value);
   const offset = date.getTimezoneOffset() * 60_000;
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function formatDuration(minutes: number) {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return [hours ? `${hours} ч` : "", rest ? `${rest} мин` : ""].filter(Boolean).join(" ");
 }
 
 function formatRubles(value: number) {

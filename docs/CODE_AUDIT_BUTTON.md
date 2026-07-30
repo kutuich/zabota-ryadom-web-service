@@ -1,5 +1,7 @@
 # Кнопка аудита кода «Забота Рядом»
 
+> Статус: OPERATIONAL DOCUMENT.
+
 ## Как запустить
 
 1. Откройте корень проекта `web-service` в Finder.
@@ -40,9 +42,17 @@ chmod +x audit-zabota-code.command
 - demo-логины и тестовые данные;
 - mock/T-Bank оплату, отсутствие полей банковской карты во frontend, баланс и trial-настройки;
 - обязательные страницы и актуальный текст лендинга;
-- ключи CORS/payment в `.env.production.example` и нежелательные кавычки.
+- ключи CORS/payment в `.env.production.example` и нежелательные кавычки;
+- наличие `DOCUMENTATION_INDEX.md`, source of truth и workflow v2 документов;
+- per-visit pricing, immutable agreement snapshot и параметры visit reconciliation scheduler;
+- legacy single-extra-task wording;
+- противоречащие production payment flags в активной документации;
+- абсолютные локальные Markdown-ссылки на host filesystem;
+- `git diff --check` и фактические доступные npm-команды.
 
 Команда не исправляет код, не изменяет базу, не запускает контейнер и не выполняет deploy. Runtime-проверки используют безопасные HTTP-запросы без авторизации и read-only SSH-команды. Содержимое реальных `.env`, `.env.production` и `backend/.env` не читается и не попадает в отчёт.
+
+Документационный поиск анализирует только source Markdown и env examples. Исторические документы должны иметь явный статус ARCHIVED/OBSOLETE, иначе найденное противоречие считается актуальным.
 
 SSH-проверка использует ключевое подключение к production с коротким таймаутом и без запроса пароля. По умолчанию проверяется настроенный production-хост; при необходимости его можно переопределить перед запуском через `PRODUCTION_SSH_HOST`. Сырые строки production-логов не записываются в локальный отчёт: сохраняются только количества совпадений, чтобы не раскрывать персональные данные, токены или другие чувствительные значения.
 
