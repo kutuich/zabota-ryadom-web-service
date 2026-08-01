@@ -15,6 +15,7 @@ import { ManagerDashboard } from "./pages/ManagerDashboard";
 import { canRoleOpenPath, defaultPathForRole, isKnownPathForRole, legacyAdminSectionRedirectPath, legacyAppRedirectPath } from "./routes/navigation";
 import type { UserRole } from "./types";
 import { effectiveRoleForUser } from "./utils/authRole";
+import { TemporaryPasswordPage } from "./pages/TemporaryPasswordPage";
 
 const legalDocumentRoutes = [
   "/legal/privacy",
@@ -63,6 +64,7 @@ export function App() {
       <Route path="/app" element={user && effectiveRole ? <Navigate to={defaultPathForRole(effectiveRole)} replace /> : <LandingAuthPage />} />
       <Route path="/app/login" element={user && effectiveRole ? <Navigate to={defaultPathForRole(effectiveRole)} replace /> : <LandingAuthPage />} />
       <Route path="/app/oauth/complete" element={<OAuthCompletePage />} />
+      <Route path="/app/security/change-temporary-password" element={<TemporaryPasswordPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/help" element={<PublicHelpPage />} />
       <Route path="/legal" element={<LegalIndexPage />} />
@@ -77,7 +79,7 @@ export function App() {
       <Route path="/app/performer/*" element={<RoleGate allowed={["performer"]}><PerformerDashboard /></RoleGate>} />
       <Route path="/app/admin/bonuses" element={<LegacyAdminSectionRedirect />} />
       <Route path="/app/admin/bonuses/*" element={<LegacyAdminSectionRedirect />} />
-      <Route path="/app/admin/*" element={<RoleGate allowed={["admin", "superadmin"]}><AdminDashboard /></RoleGate>} />
+      <Route path="/app/admin/*" element={<RoleGate allowed={["superadmin"]}><AdminDashboard /></RoleGate>} />
       <Route path="/app/manager/*" element={<RoleGate allowed={["manager"]}><ManagerDashboard /></RoleGate>} />
       <Route path="/client" element={<LegacyAppRedirect />} />
       <Route path="/client/*" element={<LegacyAppRedirect />} />
@@ -96,6 +98,9 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
   if (!user) {
     return <Navigate to="/app" replace state={{ from: location.pathname }} />;
+  }
+  if (user.mustChangePassword && location.pathname !== "/app/security/change-temporary-password") {
+    return <Navigate to="/app/security/change-temporary-password" replace />;
   }
   return children;
 }
@@ -129,7 +134,7 @@ function LegacyAdminSectionRedirect() {
   const effectiveRole = effectiveRoleForUser(user);
 
   if (!user || !effectiveRole) return <Navigate to="/app" replace />;
-  if (!["admin", "superadmin"].includes(effectiveRole)) {
+  if (effectiveRole !== "superadmin") {
     return <Navigate to={defaultPathForRole(effectiveRole)} replace />;
   }
 

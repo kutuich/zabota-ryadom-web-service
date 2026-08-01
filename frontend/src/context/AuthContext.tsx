@@ -31,6 +31,7 @@ type AuthContextValue = {
   completeOAuthProfile: (input: Parameters<typeof api.completeOAuthProfile>[0]) => Promise<{ nextPath: string }>;
   startActing: (role: "customer" | "helper") => Promise<{ nextPath: string }>;
   stopActing: () => Promise<{ nextPath: string }>;
+  acceptReplacementToken: (token: string) => Promise<void>;
   logout: () => void;
 };
 
@@ -131,6 +132,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setToken(payload.token);
         setUser(mePayload.user);
         return { nextPath: payload.nextPath };
+      },
+      async acceptReplacementToken(nextToken) {
+        setStoredToken(nextToken);
+        setToken(nextToken);
+        const payload = await api.me();
+        setUser(payload.user);
       },
       logout() {
         setStoredToken(null);

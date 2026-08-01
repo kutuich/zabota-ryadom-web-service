@@ -101,6 +101,7 @@ export const adminNavigation: NavGroup[] = [
   {
     label: "Система",
     items: [
+      { label: "Мой профиль", path: `${APP_ADMIN_PREFIX}/profile` },
       { label: "Юридические документы", path: `${APP_ADMIN_PREFIX}/legal` },
       { label: "Архив", path: `${APP_ADMIN_PREFIX}/archive` },
       { label: "Настройки сервиса", path: `${APP_ADMIN_PREFIX}/settings` }
@@ -135,6 +136,7 @@ export function defaultPathForRole(role: UserRole) {
   if (role === "client") return `${APP_CLIENT_PREFIX}/requests`;
   if (role === "performer") return `${APP_PERFORMER_PREFIX}/requests`;
   if (role === "manager") return APP_MANAGER_PREFIX;
+  if (role === "admin") return "/app";
   return APP_ADMIN_PREFIX;
 }
 
@@ -149,11 +151,12 @@ export function roleForPath(pathname: string): UserRole | "admin_family" | null 
 export function canRoleOpenPath(role: UserRole, pathname: string) {
   const pathRole = roleForPath(pathname);
   if (!pathRole) return pathname === "/" || pathname === "/app";
-  if (pathRole === "admin_family") return role === "admin" || role === "superadmin";
+  if (pathRole === "admin_family") return role === "superadmin";
   return role === pathRole;
 }
 
 export function isKnownPathForRole(role: UserRole, pathname: string) {
+  if (role === "admin") return false;
   if (role === "oauth_pending") return pathname === "/app/oauth/complete";
   const groups = role === "client"
     ? clientNavigation

@@ -3,7 +3,6 @@ import { z } from "zod";
 import { authenticate, requireRole } from "../middleware/auth";
 import { prisma } from "../db/prisma";
 import { writeAudit } from "../services/auditService";
-import { normalizeRussianPhone } from "../services/phoneService";
 import { asyncHandler, HttpError } from "../utils/http";
 import { linkUserCityTx } from "../services/settlementService";
 
@@ -13,7 +12,6 @@ performerProfileRouter.use(authenticate, requireRole("performer"));
 
 const profileSchema = z.object({
   displayName: z.string().min(2).max(120).optional(),
-  phone: z.string().min(7).max(40).optional(),
   cityId: z.string().min(1).optional(),
   age: z.number().int().positive().max(100).optional().nullable(),
   experience: z.string().max(2000).optional(),
@@ -38,31 +36,12 @@ performerProfileRouter.patch(
   "/me",
   asyncHandler(async (req, res) => {
     const input = profileSchema.parse(req.body);
-    const normalizedPhone = input.phone ? normalizePhoneOrHttp(input.phone) : undefined;
-
     const result = await prisma.$transaction(async (tx) => {
-      if (normalizedPhone) {
-        const existingPhoneUser = await tx.user.findFirst({
-          where: {
-            id: { not: req.user!.id },
-            OR: [
-              { normalizedPhone },
-              { phone: normalizedPhone }
-            ]
-          }
-        });
-        if (existingPhoneUser) {
-          throw new HttpError(409, "Пользователь с таким телефоном уже зарегистрирован", "phone_exists");
-        }
-      }
-
-      if (input.displayName || input.phone || input.cityId) {
+      if (input.displayName || input.cityId) {
         await tx.user.update({
           where: { id: req.user!.id },
           data: {
             displayName: input.displayName,
-            phone: normalizedPhone,
-            normalizedPhone,
             cityId: input.cityId
           }
         });
@@ -125,11 +104,3 @@ performerProfileRouter.patch(
     res.json(result);
   })
 );
-
-function normalizePhoneOrHttp(input: string) {
-  try {
-    return normalizeRussianPhone(input);
-  } catch (error) {
-    throw new HttpError(400, error instanceof Error ? error.message : "Укажите корректный номер телефона", "invalid_phone");
-  }
-}

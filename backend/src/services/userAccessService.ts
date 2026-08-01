@@ -6,7 +6,7 @@ import type { UserRole } from "../types/domain";
 type Operator = { id: string; role: UserRole };
 
 export async function assignManagerRole(actor: Operator, targetUserId: string, reason?: string) {
-  if (!['admin', 'superadmin'].includes(actor.role)) {
+  if (actor.role !== 'superadmin') {
     throw new HttpError(403, "Менеджер не может менять роли пользователей", "manager_permission_denied");
   }
   if (actor.id === targetUserId) {
@@ -33,7 +33,8 @@ export async function assignManagerRole(actor: Operator, targetUserId: string, r
         managerAssignedAt: assignedAt,
         managerAssignedByAdminId: actor.id,
         managerRevokedAt: null,
-        managerRevokedByAdminId: null
+        managerRevokedByAdminId: null,
+        authTokenVersion: { increment: 1 }
       }
     });
     await writeAudit(actor.id, "admin.manager.assign", "user", user.id, {
@@ -55,7 +56,7 @@ export async function revokeManagerRole(
   restoreRole?: "client" | "performer",
   reason?: string
 ) {
-  if (!['admin', 'superadmin'].includes(actor.role)) {
+  if (actor.role !== 'superadmin') {
     throw new HttpError(403, "Менеджер не может менять роли пользователей", "manager_permission_denied");
   }
   if (actor.id === targetUserId) {
@@ -81,7 +82,8 @@ export async function revokeManagerRole(
         rolesJson: JSON.stringify([nextRole]),
         roleBeforeManager: null,
         managerRevokedAt: new Date(),
-        managerRevokedByAdminId: actor.id
+        managerRevokedByAdminId: actor.id,
+        authTokenVersion: { increment: 1 }
       }
     });
     await writeAudit(actor.id, "admin.manager.revoke", "user", user.id, {
@@ -98,7 +100,7 @@ export async function revokeManagerRole(
 }
 
 export async function blockUser(actor: Operator, targetUserId: string, reason: string) {
-  if (!['manager', 'admin', 'superadmin'].includes(actor.role)) {
+  if (!['manager', 'superadmin'].includes(actor.role)) {
     throw new HttpError(403, "Недостаточно прав для блокировки", "user_blocking_forbidden");
   }
   if (actor.id === targetUserId) {
@@ -114,6 +116,9 @@ export async function blockUser(actor: Operator, targetUserId: string, reason: s
     if (actor.role === "manager" && ['manager', 'admin', 'superadmin'].includes(current.role)) {
       throw new HttpError(403, "Менеджер не может блокировать административные роли", "manager_permission_denied");
     }
+    if (current.role === "superadmin") {
+      throw new HttpError(409, "Суперадминистратор защищён от блокировки", "last_superadmin_protected");
+    }
 
     const user = await tx.user.update({
       where: { id: current.id },
@@ -122,7 +127,8 @@ export async function blockUser(actor: Operator, targetUserId: string, reason: s
         blockedAt: new Date(),
         blockedByAdminId: actor.id,
         blockedByRole: actor.role,
-        blockReason: reason
+        blockReason: reason,
+        authTokenVersion: { increment: 1 }
       }
     });
     const managerAction = actor.role === "manager";
@@ -138,7 +144,7 @@ export async function blockUser(actor: Operator, targetUserId: string, reason: s
 }
 
 export async function unblockUser(actor: Operator, targetUserId: string) {
-  if (!['manager', 'admin', 'superadmin'].includes(actor.role)) {
+  if (!['manager', 'superadmin'].includes(actor.role)) {
     throw new HttpError(403, "Недостаточно прав для разблокировки", "user_blocking_forbidden");
   }
 

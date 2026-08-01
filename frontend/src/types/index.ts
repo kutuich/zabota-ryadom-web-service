@@ -447,6 +447,14 @@ export type User = {
   archivedAt?: string | null;
   archivedByAdminId?: string | null;
   archiveBlockedReason?: string | null;
+  mustChangePassword?: boolean;
+  temporaryPasswordExpiresAt?: string | null;
+  passwordChangedAt?: string | null;
+  passwordResetAt?: string | null;
+  passwordResetByUserId?: string | null;
+  lastLoginAt?: string | null;
+  displayNameChangedAt?: string | null;
+  hasPassword?: boolean;
   city?: City | null;
   clientProfile?: ClientProfile | null;
   performerProfile?: PerformerProfile | null;

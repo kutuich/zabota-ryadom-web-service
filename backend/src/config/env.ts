@@ -29,6 +29,11 @@ export function resolveVisitReconciliationConfig(source: NodeJS.ProcessEnv = pro
   };
 }
 
+export function resolveTemporaryPasswordTtlHours(source: NodeJS.ProcessEnv = process.env) {
+  const value = Number(source.TEMPORARY_PASSWORD_TTL_HOURS ?? 24);
+  return Number.isFinite(value) && value >= 1 && value <= 168 ? value : 24;
+}
+
 const defaultServiceFeeAmount = resolveDefaultServiceFeeAmount();
 const visitReconciliation = resolveVisitReconciliationConfig();
 
@@ -38,6 +43,7 @@ export const env = {
   databaseUrl: process.env.DATABASE_URL ?? "file:./dev.db",
   jwtSecret: process.env.JWT_SECRET ?? "local-development-secret-change-me",
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
+  temporaryPasswordTtlHours: resolveTemporaryPasswordTtlHours(),
   corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
   uploadsDir: resolveUploadsDir(),
   yandexMapsApiKey: process.env.YANDEX_MAPS_API_KEY ?? "",

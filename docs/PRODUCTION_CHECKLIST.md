@@ -68,3 +68,11 @@
 - [ ] Known limitations не выданы за готовые функции.
 - [ ] Выполнены `npm run check`, `npm test`, `npm run build`, Docker build и `git diff --check`.
 - [ ] Для rollback сохранены предыдущий image/tag, DB backup и env backup.
+# User Management & Security
+
+- [ ] В backup-копии подтверждён ровно один active `superadmin`.
+- [ ] Legacy-пользователи `admin`, если есть, проверены вручную; автоматического повышения до `superadmin` нет.
+- [ ] Существующий пользователь входит со старым bcrypt-паролем.
+- [ ] Сброс пароля отзывает старый JWT и требует обязательной смены.
+- [ ] Временный пароль отсутствует в AuditLog, логах и сервисных сообщениях.
+- [ ] `TEMPORARY_PASSWORD_TTL_HOURS` не обязателен; безопасный default равен 24 часам.

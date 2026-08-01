@@ -59,3 +59,6 @@ systemctl status caddy --no-pager
 - agreement schedule остаётся technical draft до юридического утверждения.
 
 Deploy procedure: [DEPLOY_TIMEWEB.md](DEPLOY_TIMEWEB.md). Checklist: [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md).
+# User Management & Security v1.0
+
+Целевая модель ролей: Суперадминистратор, Менеджер, Заказчик, Помощник. `admin` оставлен deprecated только на уровне совместимости. Реализованы версионный отзыв JWT, административный временный пароль с TTL, обязательная смена, самостоятельная смена пароля и никнейма. Таблица отдельных устройств/refresh-сессий не реализована.

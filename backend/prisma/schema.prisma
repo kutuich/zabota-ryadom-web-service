@@ -75,6 +75,14 @@ model User {
   normalizedPhone          String?              @unique
   email                    String?              @unique
   passwordHash             String?
+  authTokenVersion         Int                  @default(0)
+  mustChangePassword       Boolean              @default(false)
+  temporaryPasswordExpiresAt DateTime?
+  passwordChangedAt        DateTime?
+  passwordResetAt          DateTime?
+  passwordResetByUserId    String?
+  lastLoginAt              DateTime?
+  displayNameChangedAt     DateTime?
   displayName              String
   avatarUrl                String?
   cityId                   String?

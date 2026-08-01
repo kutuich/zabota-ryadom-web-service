@@ -116,6 +116,13 @@ export const api = {
   suggestSettlement: (body: { name: string; region?: string; district?: string; type?: string }) =>
     apiFetch<{ settlement: SettlementSearchResult; existing: boolean }>("/settlements/suggest", { method: "POST", body: JSON.stringify(body) }),
   myCities: () => apiFetch<MyCities>("/me/cities"),
+  myProfile: () => apiFetch<Pick<User, "id" | "displayName" | "phone" | "email" | "role" | "status" | "createdAt" | "city" | "passwordChangedAt" | "passwordResetAt" | "lastLoginAt" | "mustChangePassword">>("/me/profile"),
+  updateMyProfile: (displayName: string) => apiFetch<{ id: string; displayName: string; updatedAt: string }>("/me/profile", { method: "PATCH", body: JSON.stringify({ displayName }) }),
+  changeMyPassword: (body: { currentPassword: string; newPassword: string; newPasswordConfirmation: string }) =>
+    apiFetch<{ token: string; passwordChangedAt: string }>("/me/change-password", { method: "POST", body: JSON.stringify(body) }),
+  revokeMyOtherSessions: () => apiFetch<{ token: string; revoked: boolean }>("/me/sessions/revoke-others", { method: "POST" }),
+  changeTemporaryPassword: (body: { newPassword: string; newPasswordConfirmation: string }) =>
+    apiFetch<{ token: string; mustChangePassword: false }>("/auth/change-temporary-password", { method: "POST", body: JSON.stringify(body) }),
   addMyCity: (body: { cityId: string; roleScope: "customer" | "helper" | "both"; isPrimary?: boolean }) =>
     apiFetch<UserCity>("/me/cities", { method: "POST", body: JSON.stringify(body) }),
   updateMyCity: (id: string, body: { roleScope?: "customer" | "helper" | "both"; isPrimary?: boolean; isActive?: boolean }) =>
@@ -407,6 +414,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ restoreRole, reason })
     }),
+  adminResetUserPassword: (userId: string, body: { reasonCode: string; reasonComment?: string }) =>
+    apiFetch<{ temporaryPassword: string; temporaryPasswordExpiresAt: string }>(`/admin/users/${userId}/reset-password`, { method: "POST", body: JSON.stringify(body) }),
+  adminRevokeUserSessions: (userId: string) =>
+    apiFetch<{ revoked: boolean; userId: string }>(`/admin/users/${userId}/revoke-sessions`, { method: "POST" }),
   adminUserArchiveSafety: (userId: string) =>
     apiFetch<UserArchiveSafety>(`/admin/users/${userId}/archive-safety`),
   adminRequestUserArchive: (userId: string, reason: string) =>

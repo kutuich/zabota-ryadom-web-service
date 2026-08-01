@@ -23,6 +23,7 @@ import { buildPublicAddressFromRequest, buildYandexExactAddressFromRequest, buil
 import { formatDateRu, formatDateTimeRu, formatTimeRu } from "../utils/dateTime";
 import { useAuth } from "../context/AuthContext";
 import { VisitReservePanel } from "../components/VisitReservePanel";
+import { AccountSecurityPanel } from "../components/AccountSecurityPanel";
 
 const summaryLabels: Record<string, string> = {
   usersTotal: "Пользователей",
@@ -88,6 +89,7 @@ export function AdminDashboard() {
   const [editingArticle, setEditingArticle] = useState<KnowledgeArticle | null>(null);
   const [orderingArticleId, setOrderingArticleId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  const [passwordReset, setPasswordReset] = useState<{ target: User; reasonCode: string; reasonComment: string; temporaryPassword?: string; expiresAt?: string } | null>(null);
   const [balanceAdjustmentForm, setBalanceAdjustmentForm] = useState<AdminBalanceAdjustmentInput>(() => createBalanceAdjustmentDraft());
   const [balanceAdjustmentError, setBalanceAdjustmentError] = useState("");
   const [isAdjustingBalance, setIsAdjustingBalance] = useState(false);
@@ -316,9 +318,10 @@ export function AdminDashboard() {
 
   async function assignManager(user: User) {
     if (!window.confirm(`Назначить ${user.displayName} менеджером?`)) return;
-    const reason = window.prompt("Комментарий к назначению (необязательно):") ?? undefined;
+    const reason = window.prompt("Укажите причину назначения менеджером:")?.trim();
+    if (!reason) return setNotice("Комментарий к назначению обязателен.");
     try {
-      const updated = await api.adminAssignManager(user.id, reason?.trim() || undefined);
+      const updated = await api.adminAssignManager(user.id, reason);
       setSelectedUser(updated);
       setNotice("Пользователь назначен менеджером. Предыдущая роль сохранена.");
       await load();
@@ -338,14 +341,40 @@ export function AdminDashboard() {
       }
       restoreRole = answer;
     }
-    const reason = window.prompt("Комментарий к снятию роли (необязательно):") ?? undefined;
+    const reason = window.prompt("Укажите причину снятия роли менеджера:")?.trim();
+    if (!reason) return setNotice("Комментарий к снятию роли обязателен.");
     try {
-      const updated = await api.adminRevokeManager(user.id, restoreRole, reason?.trim() || undefined);
+      const updated = await api.adminRevokeManager(user.id, restoreRole, reason);
       setSelectedUser(updated);
       setNotice("Роль менеджера снята. Предыдущая роль восстановлена.");
       await load();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Не удалось снять роль менеджера.");
+    }
+  }
+
+  async function submitPasswordReset() {
+    if (!passwordReset) return;
+    try {
+      const result = await api.adminResetUserPassword(passwordReset.target.id, {
+        reasonCode: passwordReset.reasonCode,
+        reasonComment: passwordReset.reasonComment.trim() || undefined
+      });
+      setPasswordReset({ ...passwordReset, temporaryPassword: result.temporaryPassword, expiresAt: result.temporaryPasswordExpiresAt });
+      setNotice("Временный пароль создан. Старые сеансы завершены.");
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Не удалось сбросить пароль.");
+    }
+  }
+
+  async function revokeUserSessions(target: User) {
+    if (!window.confirm(`Завершить все сеансы пользователя ${target.displayName}?`)) return;
+    try {
+      await api.adminRevokeUserSessions(target.id);
+      setNotice("Все сеансы пользователя завершены.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Не удалось завершить сеансы.");
     }
   }
 
@@ -1253,9 +1282,22 @@ export function AdminDashboard() {
         />
       )}
 
+      {activeTab === "Мой профиль" && <AccountSecurityPanel />}
+
       {selectedUser && (
         <Modal title={`Профиль пользователя: ${selectedUser.displayName}`} onClose={() => setSelectedUser(null)}>
           <UserProfile user={selectedUser} legalStatuses={selectedUserLegalStatuses} archiveSafety={selectedUserArchiveSafety} />
+          <section className="plain-section account-security-summary">
+            <h3>Безопасность учётной записи</h3>
+            <div className="detail-grid">
+              <span>Роль</span><strong>{userRoleLabel(selectedUser.role)}</strong>
+              <span>Статус</span><strong>{labelStatus(selectedUser.status)}</strong>
+              <span>Последняя смена пароля</span><strong>{selectedUser.passwordChangedAt ? formatDateTimeRu(selectedUser.passwordChangedAt) : "нет данных"}</strong>
+              <span>Обязательная смена пароля</span><strong>{selectedUser.mustChangePassword ? "требуется" : "не требуется"}</strong>
+              <span>Последний административный сброс</span><strong>{selectedUser.passwordResetAt ? formatDateTimeRu(selectedUser.passwordResetAt) : "не выполнялся"}</strong>
+              <span>Последний вход</span><strong>{selectedUser.lastLoginAt ? formatDateTimeRu(selectedUser.lastLoginAt) : "нет данных"}</strong>
+            </div>
+          </section>
           <UserServiceCommunicationPanel userId={selectedUser.id} />
           {isArchivedIncompleteVkRegistration(selectedUser) && selectedOAuthRestoreSafety && (
             <section className="plain-section">
@@ -1294,6 +1336,16 @@ export function AdminDashboard() {
                 Снять роль менеджера
               </button>
             )}
+            {['manager', 'client', 'performer'].includes(selectedUser.role) && selectedUser.hasPassword !== false && (
+              <button className="secondary-button" type="button" onClick={() => setPasswordReset({ target: selectedUser, reasonCode: "user_request", reasonComment: "" })}>
+                Сбросить пароль
+              </button>
+            )}
+            {selectedUser.role !== "superadmin" && (
+              <button className="secondary-button" type="button" onClick={() => revokeUserSessions(selectedUser)}>
+                Завершить все сеансы
+              </button>
+            )}
             <button className="secondary-button" type="button" onClick={() => exportUserConsents(selectedUser)}>
               <Download size={18} />
               Скачать согласия пользователя Excel
@@ -1302,13 +1354,13 @@ export function AdminDashboard() {
               <Archive size={18} />
               Скачать полный legal-архив пользователя ZIP
             </button>
-            {selectedUser.status !== "archived" && selectedUser.status !== "pending_archive" && !selectedUserArchiveSafety?.canArchive && (
+            {selectedUser.role !== "superadmin" && selectedUser.status !== "archived" && selectedUser.status !== "pending_archive" && !selectedUserArchiveSafety?.canArchive && (
               <button className="secondary-button" type="button" onClick={() => requestArchive(selectedUser)}>
                 <Archive size={18} />
                 Запланировать архивирование
               </button>
             )}
-            {selectedUser.status !== "archived" && selectedUserArchiveSafety?.canArchive && (
+            {selectedUser.role !== "superadmin" && selectedUser.status !== "archived" && selectedUserArchiveSafety?.canArchive && (
               <button className="secondary-button" type="button" onClick={() => archiveUser(selectedUser)}>
                 <Archive size={18} />
                 Архивировать пользователя
@@ -1327,6 +1379,36 @@ export function AdminDashboard() {
               </button>
             )}
           </div>
+        </Modal>
+      )}
+
+      {passwordReset && (
+        <Modal title="Сбросить пароль" onClose={() => setPasswordReset(null)}>
+          {passwordReset.temporaryPassword ? (
+            <section className="plain-section one-time-password" data-one-time-password>
+              <h3>Временный пароль создан</h3>
+              <p>Показывается только один раз. После закрытия окна восстановить его нельзя.</p>
+              <output>{passwordReset.temporaryPassword}</output>
+              <p>Действует до {passwordReset.expiresAt ? formatDateTimeRu(passwordReset.expiresAt) : "указанного срока"}.</p>
+              <button className="secondary-button" type="button" onClick={() => navigator.clipboard.writeText(passwordReset.temporaryPassword!)}>Копировать пароль</button>
+            </section>
+          ) : (
+            <form className="form-grid" onSubmit={(event) => { event.preventDefault(); void submitPasswordReset(); }}>
+              <p className="span-2">Пользователь: <strong>{passwordReset.target.displayName}</strong></p>
+              <p>Телефон: {maskPhone(passwordReset.target.phone)}</p>
+              <p>Email: {passwordReset.target.email ?? "не указан"}</p>
+              <p className="span-2">После сброса пользователь выйдет со всех устройств и должен будет изменить временный пароль.</p>
+              <label>Причина<select value={passwordReset.reasonCode} onChange={(event) => setPasswordReset({ ...passwordReset, reasonCode: event.target.value })}>
+                <option value="user_forgot_password">Пользователь забыл пароль</option>
+                <option value="user_request">Обращение пользователя</option>
+                <option value="suspected_compromise">Подозрение на компрометацию</option>
+                <option value="administrative_need">Административная необходимость</option>
+                <option value="other">Другое</option>
+              </select></label>
+              <label className="span-2">Комментарий<textarea value={passwordReset.reasonComment} onChange={(event) => setPasswordReset({ ...passwordReset, reasonComment: event.target.value })} maxLength={1000} /></label>
+              <button className="primary-button span-2" type="submit">Создать временный пароль</button>
+            </form>
+          )}
         </Modal>
       )}
 
@@ -2065,9 +2147,9 @@ function userRoleLabel(role: string) {
   if (role === "client") return "Заказчик";
   if (role === "performer") return "Помощник";
   if (role === "manager") return "Менеджер";
-  if (role === "superadmin") return "Владелец";
+  if (role === "superadmin") return "Суперадминистратор";
   if (role === "oauth_pending") return "Незавершённая VK-регистрация";
-  return "Администратор";
+  return "Устаревшая техническая роль";
 }
 
 function isIncompleteVkRegistration(user: User) {
@@ -2115,6 +2197,7 @@ function formatJsonList(value?: string | null) {
 }
 
 function adminTabFromPath(pathname: string) {
+  if (pathname.startsWith("/app/admin/profile")) return "Мой профиль";
   if (pathname.startsWith("/app/admin/cities")) return "Города";
   if (pathname.startsWith("/app/admin/users")) return "Пользователи";
   if (pathname.startsWith("/app/admin/clients")) return "Заказчики";
@@ -2139,4 +2222,9 @@ function adminTabFromPath(pathname: string) {
 function chatIdFromPath(pathname: string, prefix: string) {
   const match = pathname.match(new RegExp(`^${prefix}/([^/]+)$`));
   return match?.[1] ?? null;
+}
+
+function maskPhone(phone?: string | null) {
+  if (!phone) return "не указан";
+  return phone.length > 4 ? `${phone.slice(0, 2)}••••••${phone.slice(-2)}` : "••••";
 }

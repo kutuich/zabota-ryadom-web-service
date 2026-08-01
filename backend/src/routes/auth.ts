@@ -12,6 +12,7 @@ import { signUserToken } from "../services/authTokenService";
 import { linkUserCityTx, normalizeSettlementName, sanitizeSettlementText } from "../services/settlementService";
 import { isUserRole, type UserRole } from "../types/domain";
 import { asyncHandler, HttpError } from "../utils/http";
+import { assertPasswordPolicy, normalizeDisplayName } from "../services/accountSecurityService";
 import {
   VK_OAUTH_SESSION_COOKIE,
   VK_OAUTH_TRANSACTION_COOKIE,
@@ -42,8 +43,8 @@ const registerSchema = z.object({
   role: z.enum(["client", "performer"]),
   phone: z.string().min(7),
   email: z.string().email().optional().or(z.literal("")),
-  password: z.string().min(8),
-  displayName: z.string().min(2).max(120),
+  password: z.string().min(12).max(128),
+  displayName: z.string().min(2).max(50),
   cityId: z.string().min(1).optional(),
   citySuggestion: z.object({ name: z.string().min(2).max(120), region: z.string().max(160).optional() }).optional(),
   acceptedConsentTypes: z.array(z.enum(consentTypes)).default([]),
@@ -156,7 +157,7 @@ authRouter.post(
     }
     const profileComplete = await isUserProfileComplete(user.id);
     res.json({
-      token: signUserToken(user.id, toUserRole(user.role)),
+      token: signUserToken(user.id, toUserRole(user.role), user.authTokenVersion),
       user: await getUserPayload(user.id),
       profileComplete,
       nextPath: profileComplete ? oauthNextPath(user.role) : "/app/oauth/complete"
@@ -254,6 +255,8 @@ authRouter.post(
   "/register",
   asyncHandler(async (req, res) => {
     const input = registerSchema.parse(req.body);
+    input.displayName = normalizeDisplayName(input.displayName);
+    assertPasswordPolicy(input.password, { phone: input.phone, email: input.email, displayName: input.displayName });
     const normalizedPhone = normalizePhoneOrHttp(input.phone);
     const acceptedLegalDocumentTypes = Array.from(new Set([
       ...input.acceptedLegalDocumentTypes,
@@ -394,7 +397,7 @@ authRouter.post(
     await grantTrialBalanceToUser(user.id, "registration");
 
     res.status(201).json({
-      token: signUserToken(user.id, input.role),
+      token: signUserToken(user.id, input.role, user.authTokenVersion),
       user: await getUserPayload(user.id)
     });
   })
@@ -419,6 +422,12 @@ authRouter.post(
     if (!user || !user.passwordHash || !(await bcrypt.compare(input.password, user.passwordHash))) {
       throw new HttpError(401, "Неверный логин или пароль", "invalid_credentials");
     }
+    if (user.role === "admin") {
+      throw new HttpError(403, "Роль admin выведена из бизнес-модели. Обратитесь к Суперадминистратору", "admin_role_deprecated");
+    }
+    if (user.mustChangePassword && (!user.temporaryPasswordExpiresAt || user.temporaryPasswordExpiresAt <= new Date())) {
+      throw new HttpError(401, "Срок временного пароля истёк. Обратитесь к Суперадминистратору", "temporary_password_expired");
+    }
 
     if (user.status !== "active") {
       const archived = user.status === "archived";
@@ -432,9 +441,13 @@ authRouter.post(
       actorRole: user.role,
       source: user.role === "manager" ? "manager_login" : "login"
     });
+    await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+    if (user.mustChangePassword) {
+      await writeAudit(user.id, "USER_TEMPORARY_PASSWORD_LOGIN", "user", user.id, { result: "success" });
+    }
 
     res.json({
-      token: signUserToken(user.id, toUserRole(user.role)),
+      token: signUserToken(user.id, toUserRole(user.role), user.authTokenVersion),
       user: await getUserPayload(user.id)
     });
   })
@@ -474,11 +487,12 @@ async function getUserPayload(userId: string, authState?: Express.Request["user"
     throw new HttpError(404, "Пользователь не найден", "user_not_found");
   }
 
-  const { passwordHash: _passwordHash, ...safeUser } = user;
+  const { passwordHash, authTokenVersion: _authTokenVersion, passwordResetByUserId: _passwordResetByUserId, ...safeUser } = user;
   const realRole = authState?.realRole ?? toUserRole(user.role);
   const effectiveRole = authState?.effectiveRole ?? realRole;
   return {
     ...safeUser,
+    hasPassword: Boolean(passwordHash),
     role: realRole,
     realRole,
     effectiveRole,

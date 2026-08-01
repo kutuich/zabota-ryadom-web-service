@@ -25,3 +25,9 @@
 | 2026-07-30 | Scheduler использует in-process mutex | Production сейчас одноинстансовый; distributed lock отложен до scaling | PRODUCTION_CURRENT_STATE | реализовано с ограничением |
 | 2026-08-01 | Каталог услуг объединяет версионные слои РФ, региона и города; форма строится из импортируемых задач и полей | Новые направления и локальные правила должны вводиться импортом и активацией без изменения кода | Source of truth, CATEGORY_STRUCTURES, CATEGORY_IMPORT_EXPORT | реализовано |
 | 2026-08-01 | Версии структур используют semver-строки; удаление и emergency disable защищены dependency check | Ошибочный draft должен удаляться безопасно, а исторические snapshot и опубликованные заявки не должны теряться | CATEGORY_STRUCTURES, CHANGE_MANAGEMENT | реализовано |
+# User Management & Security v1.0
+
+- Сохранить `User.role` строкой и временно оставить `admin` deprecated, чтобы не выполнять destructive migration существующих данных.
+- Production authorization административного раздела разрешить только `superadmin`; `/app/admin` остаётся совместимым названием маршрута.
+- Для текущего stateless JWT использовать `authTokenVersion`, не добавляя преждевременно таблицу refresh-сессий.
+- Административный временный пароль возвращать ровно один раз и никогда не отправлять через Service Communications.

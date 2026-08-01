@@ -38,6 +38,7 @@ import {
 import { authenticate } from "./middleware/auth";
 import { sendError } from "./utils/http";
 import { adminVisitsRouter, visitsRouter } from "./routes/visits";
+import { accountSecurityRouter, temporaryPasswordRouter } from "./routes/accountSecurity";
 
 export function createApp() {
   const app = express();
@@ -63,7 +64,9 @@ export function createApp() {
   app.use("/api/public", publicRouter);
   app.use("/api/settlements", settlementsRouter);
   app.use("/api/me/cities", meCitiesRouter);
+  app.use("/api/me", accountSecurityRouter);
   app.use("/api/auth", authRouter);
+  app.use("/api/auth", temporaryPasswordRouter);
   app.use("/api/requests", requestsRouter);
   app.use("/api/pricing", pricingRouter);
   app.use("/api/performer-documents", performerDocumentsRouter);

@@ -38,8 +38,14 @@ import {
 import { signUserToken, type ActingRole } from "../services/authTokenService";
 import { assignManagerRole, blockUser, revokeManagerRole, unblockUser } from "../services/userAccessService";
 import { createRequestCategorySnapshotTx } from "../services/categoryStructureService";
+import { passwordResetReasonCodes, resetPasswordBySuperadmin } from "../services/accountSecurityService";
 
 export const adminRouter = Router();
+
+function requestIp(req: { headers: Record<string, unknown>; socket?: { remoteAddress?: string } }) {
+  const forwarded = req.headers["x-forwarded-for"];
+  return typeof forwarded === "string" ? forwarded.split(",")[0]?.trim() : req.socket?.remoteAddress ?? null;
+}
 
 adminRouter.use(authenticate, requireAdmin);
 
@@ -49,7 +55,7 @@ adminRouter.post(
     const input = z.object({ role: z.enum(["customer", "helper"]) }).parse(req.body);
     const actingRole: ActingRole = input.role === "customer" ? "client" : "performer";
     const realRole = req.user!.realRole;
-    const token = signUserToken(req.user!.id, realRole, actingRole);
+    const token = signUserToken(req.user!.id, realRole, req.user!.authTokenVersion, actingRole);
     const metadata = {
       realUserId: req.user!.id,
       effectiveUserId: req.user!.id,
@@ -84,7 +90,7 @@ adminRouter.post(
     };
     await writeAudit(req.user!.id, "admin.acting.stop", "user", req.user!.id, metadata);
     res.json({
-      token: signUserToken(req.user!.id, realRole),
+      token: signUserToken(req.user!.id, realRole, req.user!.authTokenVersion),
       role: realRole,
       effectiveRole: realRole,
       actingRole: null,
@@ -171,7 +177,7 @@ adminRouter.get(
       take: 200
     });
 
-    res.json(users.map(({ passwordHash: _passwordHash, ...user }) => user));
+    res.json(users.map(({ passwordHash, authTokenVersion: _authTokenVersion, ...user }) => ({ ...user, hasPassword: Boolean(passwordHash) })));
   })
 );
 
@@ -180,7 +186,7 @@ adminRouter.post(
   asyncHandler(async (req, res) => {
     const input = z.object({ reason: z.string().min(3).max(500) }).parse(req.body);
     const user = await blockUser({ id: req.user!.id, role: req.user!.realRole }, req.params.id, input.reason);
-    const { passwordHash: _passwordHash, ...safeUser } = user;
+    const { passwordHash: _passwordHash, authTokenVersion: _authTokenVersion, ...safeUser } = user;
     res.json(safeUser);
   })
 );
@@ -189,7 +195,7 @@ adminRouter.post(
   "/users/:id/unblock",
   asyncHandler(async (req, res) => {
     const user = await unblockUser({ id: req.user!.id, role: req.user!.realRole }, req.params.id);
-    const { passwordHash: _passwordHash, ...safeUser } = user;
+    const { passwordHash: _passwordHash, authTokenVersion: _authTokenVersion, ...safeUser } = user;
     res.json(safeUser);
   })
 );
@@ -197,9 +203,9 @@ adminRouter.post(
 adminRouter.post(
   "/users/:id/manager/assign",
   asyncHandler(async (req, res) => {
-    const input = z.object({ reason: z.string().max(500).optional() }).parse(req.body);
+    const input = z.object({ reason: z.string().trim().min(3).max(500) }).parse(req.body);
     const user = await assignManagerRole({ id: req.user!.id, role: req.user!.realRole }, req.params.id, input.reason);
-    const { passwordHash: _passwordHash, ...safeUser } = user;
+    const { passwordHash: _passwordHash, authTokenVersion: _authTokenVersion, ...safeUser } = user;
     res.json(safeUser);
   })
 );
@@ -209,7 +215,7 @@ adminRouter.post(
   asyncHandler(async (req, res) => {
     const input = z.object({
       restoreRole: z.enum(["client", "performer"]).optional(),
-      reason: z.string().max(500).optional()
+      reason: z.string().trim().min(3).max(500)
     }).parse(req.body);
     const user = await revokeManagerRole(
       { id: req.user!.id, role: req.user!.realRole },
@@ -217,8 +223,51 @@ adminRouter.post(
       input.restoreRole,
       input.reason
     );
-    const { passwordHash: _passwordHash, ...safeUser } = user;
+    const { passwordHash: _passwordHash, authTokenVersion: _authTokenVersion, ...safeUser } = user;
     res.json(safeUser);
+  })
+);
+
+adminRouter.post(
+  "/users/:id/reset-password",
+  asyncHandler(async (req, res) => {
+    const input = z.object({
+      reasonCode: z.enum(passwordResetReasonCodes),
+      reasonComment: z.string().trim().max(1000).optional()
+    }).parse(req.body);
+    const result = await resetPasswordBySuperadmin({
+      actorId: req.user!.id,
+      actorRole: req.user!.realRole,
+      targetUserId: req.params.id,
+      reasonCode: input.reasonCode,
+      reasonComment: input.reasonComment,
+      ipAddress: requestIp(req),
+      userAgent: req.headers["user-agent"] ?? null
+    });
+    res.json(result);
+  })
+);
+
+adminRouter.post(
+  "/users/:id/revoke-sessions",
+  asyncHandler(async (req, res) => {
+    if (req.params.id === req.user!.id) throw new HttpError(400, "Собственные сеансы завершайте через профиль", "cannot_revoke_own_admin_sessions");
+    const target = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!target) throw new HttpError(404, "Пользователь не найден", "user_not_found");
+    if (target.role === "superadmin") throw new HttpError(409, "Нельзя завершить сеансы Суперадминистратора через карточку", "superadmin_sessions_protected");
+    const user = await prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({ where: { id: target.id }, data: { authTokenVersion: { increment: 1 } } });
+      await writeAudit(req.user!.id, "USER_SESSIONS_REVOKED", "user", target.id, {
+        actorId: req.user!.id,
+        actorRole: req.user!.realRole,
+        targetUserId: target.id,
+        scope: "all",
+        ipAddress: requestIp(req),
+        userAgent: req.headers["user-agent"] ?? null
+      }, tx);
+      return updated;
+    });
+    res.json({ revoked: true, userId: user.id });
   })
 );
 
@@ -268,7 +317,7 @@ adminRouter.post(
       }, tx);
       return { user, safety };
     });
-    const { passwordHash: _passwordHash, ...safeUser } = result.user;
+    const { passwordHash: _passwordHash, authTokenVersion: _authTokenVersion, ...safeUser } = result.user;
     res.json({ user: safeUser, safety: result.safety });
   })
 );
@@ -302,7 +351,7 @@ adminRouter.post(
         riskFlags: { where: { resolvedAt: null }, orderBy: { createdAt: "desc" } }
       }
     });
-    const { passwordHash: _passwordHash, ...safeUser } = updated;
+    const { passwordHash: _passwordHash, authTokenVersion: _authTokenVersion, ...safeUser } = updated;
     res.json({ user: safeUser, safety: result.safety });
   })
 );
@@ -329,6 +378,9 @@ adminRouter.post(
       if (req.user!.id === current.id) {
         throw new HttpError(400, "Нельзя архивировать текущую учётную запись", "cannot_archive_self");
       }
+      if (current.role === "superadmin") {
+        throw new HttpError(409, "Суперадминистратор защищён от архивирования", "last_superadmin_protected");
+      }
       const requestedAt = current.archiveRequestedAt ?? new Date();
       const user = await tx.user.update({
         where: { id: current.id },
@@ -347,7 +399,7 @@ adminRouter.post(
       await writeAudit(req.user!.id, "user.archive_requested", "user", user.id, { ...input, safety }, tx);
       return { user: updated, safety };
     });
-    const { passwordHash: _passwordHash, ...safeUser } = result.user;
+    const { passwordHash: _passwordHash, authTokenVersion: _authTokenVersion, ...safeUser } = result.user;
     res.json({ user: safeUser, safety: result.safety });
   })
 );
@@ -364,6 +416,9 @@ adminRouter.post(
       }
       if (req.user!.id === current.id) {
         throw new HttpError(400, "Нельзя архивировать текущую учётную запись", "cannot_archive_self");
+      }
+      if (current.role === "superadmin") {
+        throw new HttpError(409, "Суперадминистратор защищён от архивирования", "last_superadmin_protected");
       }
       const safety = await getUserArchiveSafety(current.id, tx);
       if (!safety.canArchive) {
@@ -390,7 +445,7 @@ adminRouter.post(
     if (result.blocked) {
       throw new HttpError(409, "Пользователя пока нельзя архивировать", "user_archive_blocked", result.safety);
     }
-    const { passwordHash: _passwordHash, ...safeUser } = result.user;
+    const { passwordHash: _passwordHash, authTokenVersion: _authTokenVersion, ...safeUser } = result.user;
     res.json({ user: safeUser, safety: result.safety });
   })
 );

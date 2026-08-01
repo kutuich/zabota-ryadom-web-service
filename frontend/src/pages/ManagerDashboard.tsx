@@ -13,6 +13,7 @@ import { labelStatus } from "../utils/labels";
 import { ServiceCommunicationsPage } from "./ServiceCommunicationsPage";
 import { UserServiceCommunicationPanel } from "../components/UserServiceCommunicationPanel";
 import { VisitReservePanel } from "../components/VisitReservePanel";
+import { AccountSecurityPanel } from "../components/AccountSecurityPanel";
 
 type ManagerRecord = Record<string, any>;
 
@@ -244,6 +245,7 @@ export function ManagerDashboard() {
       {activeTab === "Резерв визитов" && <VisitReservePanel canReconcile={false} />}
 
       {activeTab === "Профиль менеджера" && user && (
+        <div className="service-communications-section">
         <section className="plain-section">
           <h2>Профиль менеджера</h2>
           <div className="detail-grid">
@@ -253,6 +255,8 @@ export function ManagerDashboard() {
             <span>VK ID</span><strong>{user.identities?.some((identity) => identity.provider === "vk") ? "привязан" : "не привязан"}</strong>
           </div>
         </section>
+        <AccountSecurityPanel />
+        </div>
       )}
 
       {selectedUser && (

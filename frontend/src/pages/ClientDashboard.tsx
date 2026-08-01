@@ -20,6 +20,7 @@ import { CityCombobox } from "../components/CityCombobox";
 import { UserCitiesPanel } from "../components/UserCitiesPanel";
 import { ServiceMessagesPanel } from "../components/ServiceMessagesPanel";
 import { RequestCreationForm } from "../components/RequestCreationForm";
+import { AccountSecurityPanel } from "../components/AccountSecurityPanel";
 
 export function ClientDashboard() {
   const { bootstrap, user } = useAuth();
@@ -1018,6 +1019,7 @@ export function ClientDashboard() {
 
       {activeTab === "Мой профиль" && (
         <section className="panel-grid panel-grid--compact">
+          <AccountSecurityPanel />
           <ContactDetails user={user} />
           <div className="metric">
             <span>Имя</span>

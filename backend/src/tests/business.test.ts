@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 import { createApp } from "../app";
 import { prisma } from "../db/prisma";
 import { calculatePrice, PRICING_ADDONS } from "../services/pricingService";
@@ -590,6 +591,7 @@ async function run() {
   await runSettlementDirectoryTests();
   await runLegalBootstrapTests();
   await runAuthPhoneTests();
+  await runUserManagementSecurityTests();
   await runVkOAuthTests();
   await runOAuthPendingCancellationTests();
   await runTrialBalanceTests();
@@ -607,6 +609,145 @@ async function run() {
   await runServiceCommunicationTests();
 
   console.log("Business tests passed");
+}
+
+async function runUserManagementSecurityTests() {
+  const app = createApp();
+  const superadmin = await prisma.user.findFirstOrThrow({ where: { role: "superadmin", status: "active" } });
+  assert.equal(await prisma.user.count({ where: { role: "superadmin", status: "active" } }), 1);
+  const suffix = Date.now();
+  const passwordHash = await bcrypt.hash("Original!Pass2026", 10);
+  const target = await prisma.user.create({
+    data: {
+      role: "manager",
+      rolesJson: '["manager"]',
+      displayName: `Менеджер безопасности ${suffix}`,
+      email: `security-manager-${suffix}@zabota.local`,
+      passwordHash,
+      status: "active"
+    }
+  });
+  const deprecatedAdmin = await prisma.user.create({
+    data: {
+      role: "admin",
+      rolesJson: '["admin"]',
+      displayName: `Legacy admin ${suffix}`,
+      email: `legacy-admin-${suffix}@zabota.local`,
+      passwordHash,
+      status: "active"
+    }
+  });
+  const expiredTemporaryUser = await prisma.user.create({
+    data: {
+      role: "client",
+      rolesJson: '["client"]',
+      displayName: `Истёкший пароль ${suffix}`,
+      email: `expired-password-${suffix}@zabota.local`,
+      passwordHash,
+      mustChangePassword: true,
+      temporaryPasswordExpiresAt: new Date(Date.now() - 60_000),
+      status: "active"
+    }
+  });
+  const superadminToken = tokenFor(superadmin.id, "superadmin");
+  const managerToken = tokenFor(target.id, "manager");
+
+  let response = await apiRequest(app, `/api/admin/users/${target.id}/reset-password`, {
+    method: "POST",
+    token: managerToken,
+    body: { reasonCode: "user_request" }
+  });
+  assert.equal(response.status, 403);
+  assert.equal(response.payload.code, "manager_permission_denied");
+
+  response = await apiRequest(app, `/api/admin/users/${target.id}/reset-password`, {
+    method: "POST",
+    token: superadminToken,
+    body: { reasonCode: "user_request", reasonComment: "Проверка безопасного сброса" }
+  });
+  assert.equal(response.status, 200, JSON.stringify(response.payload));
+  assert.equal(typeof response.payload.temporaryPassword, "string");
+  assert.ok(response.payload.temporaryPassword.length >= 16);
+  assert.equal("passwordHash" in response.payload, false);
+  const temporaryPassword = response.payload.temporaryPassword as string;
+  const resetUser = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+  assert.equal(resetUser.mustChangePassword, true);
+  assert.ok(resetUser.temporaryPasswordExpiresAt && resetUser.temporaryPasswordExpiresAt > new Date());
+  assert.equal(resetUser.authTokenVersion, 1);
+  const audit = await prisma.auditLog.findFirstOrThrow({ where: { action: "USER_PASSWORD_RESET_BY_SUPERADMIN", entityId: target.id }, orderBy: { createdAt: "desc" } });
+  assert.equal(audit.payloadJson?.includes(temporaryPassword), false);
+  assert.equal(audit.payloadJson?.includes(resetUser.passwordHash ?? "impossible"), false);
+
+  response = await apiRequest(app, "/api/auth/login", { method: "POST", body: { phoneOrEmail: target.email, password: "Original!Pass2026" } });
+  assert.equal(response.status, 401);
+  response = await apiRequest(app, "/api/auth/login", { method: "POST", body: { phoneOrEmail: target.email, password: temporaryPassword } });
+  assert.equal(response.status, 200);
+  assert.equal(response.payload.user.mustChangePassword, true);
+  const temporaryToken = response.payload.token as string;
+
+  response = await apiRequest(app, "/api/requests", { method: "GET", token: temporaryToken });
+  assert.equal(response.status, 403);
+  assert.equal(response.payload.code, "password_change_required");
+  response = await apiRequest(app, "/api/auth/change-temporary-password", {
+    method: "POST",
+    token: temporaryToken,
+    body: { newPassword: "Replacement!Pass2026", newPasswordConfirmation: "Replacement!Pass2026" }
+  });
+  assert.equal(response.status, 200, JSON.stringify(response.payload));
+  const normalToken = response.payload.token as string;
+  response = await apiRequest(app, "/api/me/profile", { method: "GET", token: normalToken });
+  assert.equal(response.status, 200);
+  response = await apiRequest(app, "/api/me/profile", { method: "GET", token: temporaryToken });
+  assert.equal(response.status, 401);
+
+  response = await apiRequest(app, "/api/me/profile", {
+    method: "PATCH",
+    token: normalToken,
+    body: { displayName: "  Новый   никнейм  ", phone: "+79990000000", role: "superadmin", balance: 999999 }
+  });
+  assert.equal(response.status, 400, "Strict profile DTO must reject protected fields");
+  response = await apiRequest(app, "/api/me/profile", { method: "PATCH", token: normalToken, body: { displayName: "Новый никнейм" } });
+  assert.equal(response.status, 200);
+  const renamed = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+  assert.equal(renamed.displayName, "Новый никнейм");
+  assert.equal(renamed.role, "manager");
+  assert.equal(renamed.balance, 0);
+
+  response = await apiRequest(app, "/api/me/change-password", {
+    method: "POST",
+    token: normalToken,
+    body: { currentPassword: "Replacement!Pass2026", newPassword: "Another!Secure2026", newPasswordConfirmation: "Another!Secure2026" }
+  });
+  assert.equal(response.status, 200, JSON.stringify(response.payload));
+  const changedPasswordToken = response.payload.token as string;
+  response = await apiRequest(app, "/api/me/profile", { method: "GET", token: normalToken });
+  assert.equal(response.status, 401);
+  response = await apiRequest(app, "/api/me/sessions/revoke-others", { method: "POST", token: changedPasswordToken });
+  assert.equal(response.status, 200);
+  const revokedReplacementToken = response.payload.token as string;
+  response = await apiRequest(app, "/api/me/profile", { method: "GET", token: changedPasswordToken });
+  assert.equal(response.status, 401);
+  response = await apiRequest(app, "/api/me/profile", { method: "GET", token: revokedReplacementToken });
+  assert.equal(response.status, 200);
+
+  response = await apiRequest(app, "/api/auth/login", { method: "POST", body: { phoneOrEmail: expiredTemporaryUser.email, password: "Original!Pass2026" } });
+  assert.equal(response.status, 401);
+  assert.equal(response.payload.code, "temporary_password_expired");
+
+  response = await apiRequest(app, "/api/auth/login", { method: "POST", body: { phoneOrEmail: deprecatedAdmin.email, password: "Original!Pass2026" } });
+  assert.equal(response.status, 403);
+  assert.equal(response.payload.code, "admin_role_deprecated");
+
+  response = await apiRequest(app, `/api/admin/users/${superadmin.id}/block`, { method: "POST", token: revokedReplacementToken, body: { reason: "Недопустимая операция" } });
+  assert.equal(response.status, 403);
+  assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: superadmin.id } })).status, "active");
+  await prisma.user.delete({ where: { id: deprecatedAdmin.id } });
+  await prisma.user.delete({ where: { id: expiredTemporaryUser.id } });
+  await prisma.serviceMessage.deleteMany({ where: { userId: target.id } });
+  await prisma.serviceConversation.deleteMany({ where: { userId: target.id } });
+  await prisma.auditLog.deleteMany({ where: { OR: [{ actorUserId: target.id }, { entityType: "user", entityId: target.id }] } });
+  await prisma.user.delete({ where: { id: target.id } });
+  console.log("User management security tests passed");
 }
 
 function runRequestScheduleTests() {
@@ -661,6 +802,7 @@ async function runServiceCommunicationTests() {
   const normalizedSearchPhone = `+7922${phoneSuffix}`;
   const app = createApp();
   const city = await prisma.city.create({ data: { name: `Город сообщений ${suffix}`, normalizedName: `город сообщений ${suffix}`, slug: `messages-${suffix}`, region: "Тестовый регион", status: "active", serviceStatus: "active", isActive: true, mapCenterLat: 60, mapCenterLng: 60 } });
+  const superadmin = await prisma.user.findFirstOrThrow({ where: { role: "superadmin", status: "active" } });
   const admin = await prisma.user.create({ data: { role: "admin", rolesJson: '["admin"]', displayName: `Администратор сообщений ${suffix}`, status: "active" } });
   const manager = await prisma.user.create({ data: { role: "manager", rolesJson: '["manager"]', displayName: `Менеджер сообщений ${suffix}`, status: "active" } });
   const customer = await prisma.user.create({ data: { role: "client", rolesJson: '["client"]', displayName: `Заказчик сообщений ${suffix}`, phone: normalizedSearchPhone, normalizedPhone: normalizedSearchPhone, email: `messages-${suffix}@example.test`, status: "active", cityId: city.id } });
@@ -737,8 +879,8 @@ async function runServiceCommunicationTests() {
 
     let response = await apiRequest(app, `/api/admin/service-conversations/${customer.id}/messages`, { method: "POST", token: tokenFor(customer.id, "client"), body: { body: "Запрещено", messageType: "service_message" } });
     assert.equal(response.status, 403);
-    response = await apiRequest(app, `/api/admin/service-conversations/users/search?q=${encodeURIComponent(customer.email!)}`, { method: "GET", token: tokenFor(admin.id, "admin") });
-    assert.equal(response.status, 200);
+    response = await apiRequest(app, `/api/admin/service-conversations/users/search?q=${encodeURIComponent(customer.email!)}`, { method: "GET", token: tokenFor(superadmin.id, "superadmin") });
+    assert.equal(response.status, 200, JSON.stringify(response.payload));
     assert.equal(response.payload[0]?.id, customer.id);
     response = await apiRequest(app, `/api/admin/service-conversations/users/search?q=${encodeURIComponent(customer.email!)}`, { method: "GET", token: tokenFor(customer.id, "client") });
     assert.equal(response.status, 403);
@@ -794,7 +936,7 @@ async function runCategoryStructureTests() {
   assert.deepEqual(cityAccompaniment.formFields, federalAccompaniment.formFields);
   assert.deepEqual(cityAccompaniment.durationEffect, federalAccompaniment.durationEffect);
   assert.ok(federalV2.safetyRules.length >= 7);
-  const admin = await prisma.user.findFirstOrThrow({ where: { role: { in: ["admin", "superadmin"] } } });
+  const admin = await prisma.user.findFirstOrThrow({ where: { role: "superadmin" } });
   const helper = await prisma.user.findFirstOrThrow({ where: { role: "performer" } });
   const customer = await prisma.user.findFirstOrThrow({ where: { role: "client" } });
   const legacyCategory = await prisma.serviceCategory.findFirstOrThrow();
@@ -1303,9 +1445,10 @@ async function runCategoryStructureTests() {
 
     const manager = await prisma.user.findFirst({ where: { role: "manager" } });
     if (manager) {
-      const denied = await apiRequest(createApp(), "/api/admin/category-structures/create-from-parent", { method: "POST", token: tokenFor(manager.id, "manager"), body: { scopeType: "city", cityId: city.id } });
+      const managerAccessToken = jwt.sign({ sub: manager.id, role: "manager", tokenVersion: manager.authTokenVersion }, env.jwtSecret);
+      const denied = await apiRequest(createApp(), "/api/admin/category-structures/create-from-parent", { method: "POST", token: managerAccessToken, body: { scopeType: "city", cityId: city.id } });
       assert.equal(denied.status, 403);
-      const deniedDelete = await apiRequest(createApp(), `/api/admin/category-structures/${rollbackDraft.id}`, { method: "DELETE", token: tokenFor(manager.id, "manager"), body: { comment: "Нет прав" } });
+      const deniedDelete = await apiRequest(createApp(), `/api/admin/category-structures/${rollbackDraft.id}`, { method: "DELETE", token: managerAccessToken, body: { comment: "Нет прав" } });
       assert.equal(deniedDelete.status, 403);
     }
   } finally {
@@ -1501,14 +1644,16 @@ async function runManagerRoleTests() {
     managerAssignedAt: candidate.managerAssignedAt,
     managerAssignedByAdminId: candidate.managerAssignedByAdminId,
     managerRevokedAt: candidate.managerRevokedAt,
-    managerRevokedByAdminId: candidate.managerRevokedByAdminId
+    managerRevokedByAdminId: candidate.managerRevokedByAdminId,
+    authTokenVersion: candidate.authTokenVersion
   };
   const originalTarget = {
     status: target.status,
     blockedAt: target.blockedAt,
     blockedByAdminId: target.blockedByAdminId,
     blockedByRole: target.blockedByRole,
-    blockReason: target.blockReason
+    blockReason: target.blockReason,
+    authTokenVersion: target.authTokenVersion
   };
   const adminToken = tokenFor(admin.id, admin.role);
   let createdIdentityId: string | null = null;
@@ -1526,7 +1671,7 @@ async function runManagerRoleTests() {
     assert.equal(response.payload.roleBeforeManager, "client");
 
     const manager = await prisma.user.findUniqueOrThrow({ where: { id: candidate.id } });
-    const managerToken = tokenFor(manager.id, "manager");
+    const managerToken = jwt.sign({ sub: manager.id, role: "manager", tokenVersion: manager.authTokenVersion }, env.jwtSecret);
     const [activeCity, activeCategory] = await Promise.all([
       prisma.city.findFirstOrThrow({ where: { isActive: true, serviceStatus: "active", directoryStatus: { notIn: ["hidden", "duplicate"] } } }),
       prisma.serviceCategory.findFirstOrThrow({ where: { isActive: true } })
@@ -2659,7 +2804,7 @@ async function runSettlementDirectoryTests() {
     body: {
       role: "client",
       phone: `+7910${String(Date.now()).slice(-7)}`,
-      password: "password123",
+      password: "SafePass!2026",
       displayName: "Регистрация села",
       citySuggestion: { name: registrationSettlementName, region: "Новый регион" },
       acceptedLegalDocumentTypes: requiredDocumentTypesForRegistration("client"),
@@ -2772,7 +2917,7 @@ async function runTrialBalanceTests() {
         role: "client",
         phone: `+7901${unique}`,
         email: `trial-registration-${unique}@zabota.local`,
-        password: "password123",
+        password: "SafePass!2026",
         displayName: "Пробный Заказчик",
         cityId: client.cityId,
         acceptedConsentTypes: ["terms", "privacy", "personal_data_processing", "chat_rules", "payment_rules"],
@@ -2814,7 +2959,7 @@ async function runTrialBalanceTests() {
         role: "client",
         phone: `+7902${unique}`,
         email: `trial-disabled-${unique}@zabota.local`,
-        password: "password123",
+        password: "SafePass!2026",
         displayName: "Без пробного баланса",
         cityId: client.cityId,
         acceptedConsentTypes: ["terms", "privacy", "personal_data_processing", "chat_rules", "payment_rules"],
@@ -3051,7 +3196,7 @@ async function runBonusServiceFeeTests() {
       token: clientToken,
       body: { agreedHelperAmount: 700, agreedDurationMinutes: 120, agreedTermsComment: "Бытовая помощь по заявке" }
     });
-    assert.equal(response.status, 200);
+    assert.equal(response.status, 200, JSON.stringify(response.payload));
 
     response = await apiRequest(app, `/api/chats/${chatId}/client-confirm`, { method: "POST", token: clientToken });
     assert.equal(response.status, 200);
@@ -4926,7 +5071,7 @@ async function runAuthPhoneTests() {
         role: "client",
         phone: "+7 (922) 400-03-20",
         email: "",
-        password: "password123",
+        password: "SafePass!2026",
         displayName: "Тест телефона",
         cityId: client.cityId,
         acceptedConsentTypes: ["terms", "privacy", "personal_data_processing", "chat_rules", "payment_rules"],
@@ -4951,7 +5096,7 @@ async function runAuthPhoneTests() {
         role: "client",
         phone: `8 922 400 03 20`,
         email: `duplicate-phone-${suffix}@zabota.local`,
-        password: "password123",
+        password: "SafePass!2026",
         displayName: "Дубль телефона",
         cityId: client.cityId,
         acceptedConsentTypes: ["terms", "privacy", "personal_data_processing", "chat_rules", "payment_rules"],
@@ -4968,7 +5113,7 @@ async function runAuthPhoneTests() {
         role: "performer",
         phone: `+7 901 ${String(suffix).slice(-7, -4)} ${String(suffix).slice(-4, -2)} ${String(suffix).slice(-2)}`,
         email: `helper-legal-${suffix}@zabota.local`,
-        password: "password123",
+        password: "SafePass!2026",
         displayName: "Тест согласий помощника",
         cityId: client.cityId,
         acceptedConsentTypes: ["terms", "privacy", "personal_data_processing", "chat_rules", "payment_rules"],
@@ -4992,14 +5137,14 @@ async function runAuthPhoneTests() {
 
     response = await apiRequest(app, "/api/auth/login", {
       method: "POST",
-      body: { phoneOrEmail: "+79224000320", password: "password123" }
+      body: { phoneOrEmail: "+79224000320", password: "SafePass!2026" }
     });
     assert.equal(response.status, 200);
     assert.equal(response.payload.user.id, createdUserId);
 
     response = await apiRequest(app, "/api/auth/login", {
       method: "POST",
-      body: { phoneOrEmail: "8 922 400 03 20", password: "password123" }
+      body: { phoneOrEmail: "8 922 400 03 20", password: "SafePass!2026" }
     });
     assert.equal(response.status, 200);
     assert.equal(response.payload.user.id, createdUserId);

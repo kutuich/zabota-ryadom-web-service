@@ -22,6 +22,7 @@ import { formatDateRu, formatTimeRu } from "../utils/dateTime";
 import { CityCombobox } from "../components/CityCombobox";
 import { UserCitiesPanel } from "../components/UserCitiesPanel";
 import { ServiceMessagesPanel } from "../components/ServiceMessagesPanel";
+import { AccountSecurityPanel } from "../components/AccountSecurityPanel";
 
 export function PerformerDashboard() {
   const { bootstrap, user, refreshMe } = useAuth();
@@ -52,7 +53,6 @@ export function PerformerDashboard() {
   const [supportForm, setSupportForm] = useState({ type: "message", reason: "", description: "", requestId: "" });
   const [profileForm, setProfileForm] = useState({
     displayName: user?.displayName ?? "",
-    phone: user?.phone ?? "",
     cityId: user?.cityId ?? "",
     districts: parseJsonArray(user?.performerProfile?.districts).join(", "),
     age: user?.performerProfile?.age ? String(user.performerProfile.age) : "",
@@ -189,7 +189,6 @@ export function PerformerDashboard() {
   async function saveProfile() {
     await api.updatePerformerProfile({
       displayName: profileForm.displayName,
-      phone: profileForm.phone,
       cityId: profileForm.cityId,
       age: profileForm.age ? Number(profileForm.age) : null,
       experience: profileForm.experience,
@@ -419,6 +418,7 @@ export function PerformerDashboard() {
 
       {activeTab === "Профиль" && (
         <section className="panel-grid">
+          <AccountSecurityPanel />
           <div className="metric">
             <Star size={20} />
             <span>Рейтинг</span>
@@ -440,10 +440,7 @@ export function PerformerDashboard() {
               Имя
               <input value={profileForm.displayName} onChange={(event) => setProfileForm({ ...profileForm, displayName: event.target.value })} />
             </label>
-            <label>
-              Телефон
-              <input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value })} />
-            </label>
+            <label>Телефон<input value={user?.phone ?? "не указан"} readOnly aria-readonly="true" /></label>
             <CityCombobox cities={bootstrap?.cities ?? []} value={profileForm.cityId} onChange={(cityId) => setProfileForm({ ...profileForm, cityId })} />
             <label>
               Возраст

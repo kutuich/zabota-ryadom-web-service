@@ -12,6 +12,8 @@ declare global {
         actingRole: "client" | "performer" | null;
         realAdminUserId: string | null;
         cityId: string | null;
+        authTokenVersion: number;
+        mustChangePassword: boolean;
       };
     }
   }

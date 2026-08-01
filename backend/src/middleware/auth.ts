@@ -19,17 +19,23 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     const payload = jwt.verify(token, env.jwtSecret) as AuthTokenPayload;
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, role: true, cityId: true, status: true }
+      select: { id: true, role: true, cityId: true, status: true, authTokenVersion: true, mustChangePassword: true }
     });
 
     if (!user || user.status !== "active" || !isUserRole(user.role)) {
       return next(new HttpError(401, "Пользователь не найден или заблокирован", "auth_invalid"));
     }
+    if (user.role === "admin") {
+      return next(new HttpError(403, "Роль admin выведена из бизнес-модели. Обратитесь к Суперадминистратору", "admin_role_deprecated"));
+    }
+    if ((payload.tokenVersion ?? 0) !== user.authTokenVersion) {
+      return next(new HttpError(401, "Сессия была завершена. Войдите снова", "session_revoked"));
+    }
 
     const realRole = user.role;
     const actingRole = payload.isActingAsRole ? payload.actingRole ?? null : null;
     if (actingRole) {
-      const validAdmin = ["admin", "superadmin"].includes(realRole);
+      const validAdmin = realRole === "superadmin";
       const validPayload = payload.realRole === realRole && payload.role === realRole && ["client", "performer"].includes(actingRole);
       if (!validAdmin || !validPayload) {
         return next(new HttpError(401, "Сессия режима администратора недействительна", "acting_session_invalid"));
@@ -44,8 +50,13 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
       isActingAsRole: Boolean(actingRole),
       actingRole,
       realAdminUserId: actingRole ? user.id : null,
-      cityId: user.cityId
+      cityId: user.cityId,
+      authTokenVersion: user.authTokenVersion,
+      mustChangePassword: user.mustChangePassword
     };
+    if (user.mustChangePassword && !isTemporaryPasswordAllowedPath(req.originalUrl)) {
+      return next(new HttpError(403, "Сначала измените временный пароль", "password_change_required"));
+    }
     if (actingRole && !["GET", "HEAD", "OPTIONS"].includes(req.method.toUpperCase())) {
       await writeAudit(user.id, "admin.acting.action", "http_request", null, {
         realUserId: user.id,
@@ -59,7 +70,8 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
       });
     }
     return next();
-  } catch {
+  } catch (error) {
+    if (error instanceof HttpError) return next(error);
     return next(new HttpError(401, "Сессия недействительна", "auth_invalid"));
   }
 }
@@ -75,7 +87,7 @@ export function requireRole(...roles: UserRole[]) {
 }
 
 export function requireAdmin(req: Request, _res: Response, next: NextFunction) {
-  if (!req.user || !["admin", "superadmin"].includes(req.user.realRole)) {
+  if (!req.user || req.user.realRole !== "superadmin") {
     const code = req.user?.realRole === "manager" ? "manager_permission_denied" : "admin_required";
     return next(new HttpError(403, "Недостаточно прав администратора", code));
   }
@@ -88,10 +100,14 @@ export const requireSystemAdminOnly = requireAdmin;
 export const requireRoleManagementAccess = requireAdmin;
 
 export function requireAdminManagerOrSuperadmin(req: Request, _res: Response, next: NextFunction) {
-  if (!req.user || !["manager", "admin", "superadmin"].includes(req.user.realRole)) {
+  if (!req.user || !["manager", "superadmin"].includes(req.user.realRole)) {
     return next(new HttpError(403, "Недостаточно прав", "admin_or_manager_required"));
   }
   return next();
 }
 
 export const requireUserBlockingAccess = requireAdminManagerOrSuperadmin;
+
+function isTemporaryPasswordAllowedPath(path: string) {
+  return path.startsWith("/api/auth/me") || path.startsWith("/api/auth/change-temporary-password");
+}

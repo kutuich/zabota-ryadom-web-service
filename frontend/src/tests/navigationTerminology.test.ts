@@ -121,6 +121,7 @@ const adminPaths = [
   "/app/admin/archive",
   "/app/admin/settings",
   "/app/admin/knowledge"
+  ,"/app/admin/profile"
 ];
 
 for (const path of clientPaths) {
@@ -134,14 +135,15 @@ for (const path of performerPaths) {
 }
 
 for (const path of adminPaths) {
-  assert.equal(isKnownPathForRole("admin", path), true, `admin direct URL: ${path}`);
-  assert.equal(canRoleOpenPath("admin", path), true, `admin can open own URL: ${path}`);
+  assert.equal(isKnownPathForRole("admin", path), false, `deprecated admin has no business URL: ${path}`);
+  assert.equal(canRoleOpenPath("admin", path), false, `deprecated admin cannot open URL: ${path}`);
+  assert.equal(isKnownPathForRole("superadmin", path), true, `superadmin direct URL: ${path}`);
   assert.equal(canRoleOpenPath("superadmin", path), true, `superadmin can open admin URL: ${path}`);
 }
 
 assert.equal(defaultPathForRole("client"), "/app/client/requests");
 assert.equal(defaultPathForRole("performer"), "/app/performer/requests");
-assert.equal(defaultPathForRole("admin"), "/app/admin");
+assert.equal(defaultPathForRole("admin"), "/app");
 assert.equal(defaultPathForRole("superadmin"), "/app/admin");
 
 const adminFinanceItems = adminNavigation.find((group) => group.label === "Финансы")?.items.map((item) => item.label);
@@ -178,6 +180,22 @@ assert.match(appLayout, /Вы работаете как Заказчик в ре
 assert.match(appLayout, /Вы работаете как Помощник в режиме администратора/);
 assert.match(appLayout, /Все действия сохраняются в журнале/);
 assert.match(appLayout, /Вернуться в админку/);
+
+const accountSecurityPanel = read("components/AccountSecurityPanel.tsx");
+const temporaryPasswordPage = read("pages/TemporaryPasswordPage.tsx");
+const appRoutesForSecurity = read("App.tsx");
+const adminSecurityDashboard = read("pages/AdminDashboard.tsx");
+assert.match(accountSecurityPanel, /Настройки профиля/);
+assert.match(accountSecurityPanel, /Изменить пароль/);
+assert.match(accountSecurityPanel, /Завершить все остальные сеансы/);
+assert.match(accountSecurityPanel, /Сохранить никнейм/);
+assert.match(temporaryPasswordPage, /Создайте новый пароль/);
+assert.match(temporaryPasswordPage, /changeTemporaryPassword/);
+assert.match(appRoutesForSecurity, /user\.mustChangePassword/);
+assert.match(appRoutesForSecurity, /\/app\/security\/change-temporary-password/);
+assert.match(adminSecurityDashboard, /Сбросить пароль/);
+assert.match(adminSecurityDashboard, /Показывается только один раз/);
+assert.match(adminSecurityDashboard, /Завершить все сеансы/);
 
 const requestCreationForm = read("components/RequestCreationForm.tsx");
 assert.match(requestCreationForm, /Город и контактное лицо/);
