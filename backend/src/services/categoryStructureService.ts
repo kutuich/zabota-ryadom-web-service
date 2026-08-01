@@ -3,6 +3,7 @@ import { Prisma, type CategoryStructure } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import { HttpError } from "../utils/http";
 import { writeAudit } from "./auditService";
+import { bumpSemanticVersion, compareSemanticVersions, normalizeSemanticVersion } from "../utils/semanticVersion";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
@@ -245,11 +246,12 @@ export async function getEffectiveCategoryStructure(cityId: string, client: DbCl
 }
 
 export async function listCategoryStructures(status: "working" | "active" | "draft" | "archived" | "all" = "working") {
-  return prisma.categoryStructure.findMany({
+  const rows = await prisma.categoryStructure.findMany({
     where: status === "working" ? { status: { in: ["active", "draft"] } } : status === "all" ? undefined : { status },
     include: structureListInclude,
     orderBy: [{ scopeType: "asc" }, { updatedAt: "desc" }]
   });
+  return rows.sort((left, right) => left.scopeType.localeCompare(right.scopeType) || left.scopeKey.localeCompare(right.scopeKey) || compareSemanticVersions(right.versionNumber, left.versionNumber));
 }
 
 export async function getCategoryStructure(id: string) {
@@ -399,6 +401,9 @@ export async function publishCategoryStructure(id: string, adminId: string) {
 export async function archiveCategoryStructure(id: string, adminId: string) {
   const current = await prisma.categoryStructure.findUnique({ where: { id } });
   if (!current) throw new HttpError(404, "Структура категорий не найдена", "category_structure_not_found");
+  if (current.status === "draft") throw new HttpError(409, "Ошибочный черновик нужно удалить после проверки зависимостей, а не архивировать", "category_structure_draft_archive_forbidden");
+  if (current.status === "active") throw new HttpError(409, "Активная структура архивируется при публикации новой версии. Для срочной остановки используйте экстренное отключение", "category_structure_active_archive_requires_replacement");
+  if (current.status === "archived") return current;
   const archived = await prisma.categoryStructure.update({ where: { id }, data: { status: "archived", archivedAt: new Date() } });
   await writeAudit(adminId, "admin.category_structure.archive", "category_structure", id, { scopeKey: current.scopeKey });
   return archived;
@@ -439,7 +444,9 @@ export function validateCategoryImport(payload: CategoryImportPayload) {
   const errors: string[] = [];
   const warnings: string[] = [];
   if (!CATEGORY_SCOPE_TYPES.includes(payload.scope?.type)) errors.push("Некорректный тип структуры.");
-  if (payload.passport?.versionNumber && !/^\d+\.\d+$/.test(payload.passport.versionNumber)) errors.push("Версия структуры должна иметь формат 2.0.");
+  if (payload.passport?.versionNumber) {
+    try { normalizeSemanticVersion(payload.passport.versionNumber); } catch { errors.push("Версия структуры должна иметь формат v2.0 или v2.0.1."); }
+  }
   if (payload.scope?.type === "region" && !payload.scope.regionId && !payload.scope.regionSlug) errors.push("Для региональной структуры нужен regionId или regionSlug.");
   if (payload.scope?.type === "city" && !payload.scope.cityId && !payload.scope.citySlug) errors.push("Для городской структуры нужен cityId или citySlug.");
   if (!Array.isArray(payload.categories) || payload.categories.length === 0) errors.push("Добавьте хотя бы одну категорию.");
@@ -545,13 +552,29 @@ export function validateCategoryImport(payload: CategoryImportPayload) {
   };
 }
 
+export async function previewCategoryImport(payload: CategoryImportPayload) {
+  const preview = validateCategoryImport(payload);
+  if (!preview.valid || !payload.passport?.versionNumber) return preview;
+  const scope = await resolveTargetScope({ scopeType: payload.scope.type as "region" | "city", regionId: payload.scope.regionId ?? undefined, regionSlug: payload.scope.regionSlug ?? undefined, cityId: payload.scope.cityId ?? undefined, citySlug: payload.scope.citySlug ?? undefined }, payload.scope.type === "federal");
+  const version = normalizeSemanticVersion(payload.passport.versionNumber);
+  const deletionAudits = await prisma.auditLog.findMany({ where: { action: "admin.category_structure.delete", entityType: "category_structure" }, select: { payloadJson: true }, orderBy: { createdAt: "desc" }, take: 500 });
+  const wasDeleted = deletionAudits.some((row) => {
+    const payload = row.payloadJson ? safeJson(row.payloadJson) : null;
+    return payload?.scope === scope.scopeKey && payload?.version === version;
+  });
+  return wasDeleted ? { ...preview, warnings: [...preview.warnings, `Версия v${version} ранее удалялась. Проверьте причину удаления в AuditLog перед повторным импортом.`] } : preview;
+}
+
 export async function createDraftFromImport(payload: CategoryImportPayload, adminId: string, fileName?: string) {
   const preview = validateCategoryImport(payload);
   if (!preview.valid) throw new HttpError(400, "Импорт содержит ошибки", "category_import_invalid", preview);
   const scope = await resolveTargetScope({ scopeType: payload.scope.type as "region" | "city", regionId: payload.scope.regionId ?? undefined, regionSlug: payload.scope.regionSlug ?? undefined, cityId: payload.scope.cityId ?? undefined, citySlug: payload.scope.citySlug ?? undefined }, payload.scope.type === "federal");
-  const versionNumber = payload.passport?.versionNumber || await nextAvailableVersion(scope.scopeKey);
+  const versionNumber = payload.passport?.versionNumber ? normalizeSemanticVersion(payload.passport.versionNumber) : await nextAvailableVersion(scope.scopeKey);
   const existingVersion = await prisma.categoryStructure.findUnique({ where: { scopeKey_versionNumber: { scopeKey: scope.scopeKey, versionNumber } } });
-  if (existingVersion) throw new HttpError(409, "Такая версия структуры уже существует", "category_structure_version_exists");
+  if (existingVersion) {
+    const statusLabel = existingVersion.status === "archived" ? "Архив" : existingVersion.status === "active" ? "Опубликована" : "Черновик";
+    throw new HttpError(409, `Версия ${scopeLabel(scope.scopeKey)} v${versionNumber} уже существует и имеет статус «${statusLabel}». Повторно использовать номер нельзя. Создайте v${bumpSemanticVersion(versionNumber, "patch")} или v${bumpSemanticVersion(versionNumber, "minor")}${existingVersion.status === "draft" && !existingVersion.activatedAt ? " либо удалите никогда не публиковавшийся черновик после проверки зависимостей" : ""}.`, "category_structure_version_exists", { existingStructureId: existingVersion.id, status: existingVersion.status, suggestedPatchVersion: bumpSemanticVersion(versionNumber, "patch"), suggestedMinorVersion: bumpSemanticVersion(versionNumber, "minor") });
+  }
   const importHash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
   const duplicate = await prisma.categoryStructure.findFirst({ where: { importHash } });
   if (duplicate) throw new HttpError(409, "Этот файл уже был импортирован", "category_import_duplicate");
@@ -1003,14 +1026,14 @@ async function nextAvailableVersion(scopeKey: string, fromVersion?: string) {
   const rows = await prisma.categoryStructure.findMany({ where: { scopeKey }, select: { versionNumber: true } });
   const versions = new Set(rows.map((row) => row.versionNumber));
   if (!fromVersion && rows.length === 0) return "1.0";
-  const base = fromVersion ?? rows.map((row) => row.versionNumber.split(".").map((value) => Number(value) || 0) as [number, number])
-    .sort((left, right) => right[0] - left[0] || right[1] - left[1])[0]
-    .join(".");
-  let [major, minor] = base.split(".").map((value) => Number(value) || 0);
-  do {
-    minor += 1;
-  } while (versions.has(`${major}.${minor}`));
-  return `${major}.${minor}`;
+  const base = normalizeSemanticVersion(fromVersion ?? [...versions].sort(compareSemanticVersions).at(-1)!);
+  let candidate = bumpSemanticVersion(base, "minor");
+  while (versions.has(candidate)) candidate = bumpSemanticVersion(candidate, "minor");
+  return candidate;
+}
+
+function scopeLabel(scopeKey: string) {
+  return scopeKey === "federal" ? "РФ" : scopeKey.startsWith("region:") ? "региона" : "города";
 }
 
 async function cloneStructureTx(tx: Prisma.TransactionClient, sourceId: string, target: { scopeType: CategoryScopeType; regionId?: string | null; cityId?: string | null; scopeKey: string; versionNumber: string; title: string; comment?: string; source: string; createdByAdminId: string }) {
@@ -1357,8 +1380,7 @@ function publicHelperCategoryPreference(preference: any) {
 }
 
 function nextTemplateVersion(version: string) {
-  const [major, minor] = version.split(".").map((value) => Number(value) || 0);
-  return `${major || 1}.${minor + 1}`;
+  return bumpSemanticVersion(version, "minor");
 }
 
 function slugify(value: string) {
@@ -1379,7 +1401,7 @@ const structureListInclude = {
   scopeRegion: true,
   scopeCity: { include: { regionRecord: true } },
   parentStructure: { select: { id: true, title: true, versionNumber: true, scopeType: true } },
-  _count: { select: { categories: true, requestSnapshots: true } }
+  _count: { select: { categories: true, requestSnapshots: true, derivedStructures: true, requestUpdateRevisions: true } }
 } satisfies Prisma.CategoryStructureInclude;
 
 const structureDetailInclude = {

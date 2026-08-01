@@ -63,7 +63,6 @@ import {
   roleToLegalScope
 } from "../services/legalService";
 import {
-  archiveCategoryStructure,
   buildCityTemplateExport,
   calculateRecommendedAmount,
   calculateStructuredRequestPrice,
@@ -79,6 +78,8 @@ import {
   saveHelperCategoryPreferences,
   validateCategoryImport
 } from "../services/categoryStructureService";
+import { confirmRequestStructureUpdate, deleteCategoryStructure, emergencyDisableCategoryStructure, getCategoryStructureDependencies, startRequestStructureUpdate } from "../services/categoryStructureLifecycleService";
+import { bumpSemanticVersion, compareSemanticVersions, normalizeSemanticVersion, parseSemanticVersion } from "../utils/semanticVersion";
 import { calculateMultiTaskRequest, createMultiTaskRequestSnapshotTx, expandRequestSchedule } from "../services/requestScheduleService";
 import { openVisitDispute, reconcileDueVisits, resolveVisitDispute } from "../services/visitOperationsService";
 import { createVisitReconciliationScheduler } from "../services/visitReconciliationScheduler";
@@ -96,6 +97,13 @@ import {
 import { prepareServiceAttachments, removeSavedServiceAttachments } from "../services/serviceMessageStorage";
 
 async function run() {
+  assert.deepEqual(parseSemanticVersion("v2.0.1"), { major: 2, minor: 0, patch: 1 });
+  assert.equal(normalizeSemanticVersion("v10.12.3"), "10.12.3");
+  assert.ok(compareSemanticVersions("2.10", "2.9") > 0);
+  assert.ok(compareSemanticVersions("2.0.1", "2.0") > 0);
+  assert.ok(compareSemanticVersions("2.0.1", "2.1") < 0);
+  assert.equal(bumpSemanticVersion("2.0", "patch"), "2.0.1");
+  assert.equal(bumpSemanticVersion("2.0.1", "minor"), "2.1");
   assert.equal(resolveTbankTerminalMode({}), "test");
   assert.equal(resolveTbankTerminalMode({ TBANK_TERMINAL_MODE: "test" }), "test");
   assert.equal(resolveTbankTerminalMode({ TBANK_TERMINAL_MODE: "live" }), "live");
@@ -766,6 +774,7 @@ async function runCategoryStructureTests() {
   assert.equal(validateCategoryImport(federalV2).valid, true);
   assert.equal(validateCategoryImport(regionV2).valid, true);
   assert.equal(validateCategoryImport(cityV2).valid, true);
+  assert.equal(validateCategoryImport({ ...federalV2, passport: { ...federalV2.passport, versionNumber: "v2.0.1" } }).valid, true);
   assert.deepEqual(federalV2.categories.filter((category: any) => !category.parentSlug).map((category: any) => category.title), ["Помощь по дому", "Уход на дому", "Покупки и поручения", "Сопровождение"]);
   const federalTaskSlugs = federalV2.taskTemplates.map((task: any) => task.taskSlug);
   assert.equal(federalTaskSlugs.filter((slug: string) => slug === "stay-near").length, 1);
@@ -1231,12 +1240,26 @@ async function runCategoryStructureTests() {
     await publishCategoryStructure(importedDraft.id, admin.id);
     assert.equal((await prisma.categoryStructure.findUniqueOrThrow({ where: { id: cityDraft.id } })).status, "archived");
     assert.equal((await getEffectiveCategoryStructure(city.id)).structure?.id, importedDraft.id);
+    await prisma.userCity.upsert({ where: { userId_cityId: { userId: helper.id, cityId: city.id } }, create: { userId: helper.id, cityId: city.id, roleScope: "helper", isActive: true }, update: { roleScope: "helper", isActive: true } });
+    await prisma.clientRequest.update({ where: { id: request.id }, data: { status: "published", visibilityStatus: "city_visible" } });
+    const snapshotsBeforeUpdate = await prisma.requestCategorySnapshot.count({ where: { requestId: request.id } });
+    const pendingUpdate = await startRequestStructureUpdate(importedDraft.id, request.id, { id: admin.id, realRole: admin.role });
+    assert.equal((await prisma.clientRequest.findUniqueOrThrow({ where: { id: request.id } })).isHiddenFromPerformers, true);
+    let helperAvailable = await apiRequest(createApp(), "/api/requests", { method: "GET", token: tokenFor(helper.id, helper.role) });
+    assert.equal(helperAvailable.payload.some((row: any) => row.id === request.id), false);
+    await confirmRequestStructureUpdate(pendingUpdate.id, customer.id);
+    assert.equal((await prisma.clientRequest.findUniqueOrThrow({ where: { id: request.id } })).isHiddenFromPerformers, false);
+    assert.equal(await prisma.requestCategorySnapshot.count({ where: { requestId: request.id } }), snapshotsBeforeUpdate + 1);
+    helperAvailable = await apiRequest(createApp(), "/api/requests", { method: "GET", token: tokenFor(helper.id, helper.role) });
+    assert.equal(helperAvailable.payload.some((row: any) => row.id === request.id), true);
     const comparison = await compareCategoryStructures(cityDraft.id, importedDraft.id);
     assert.equal(comparison.left.id, cityDraft.id);
     assert.equal(comparison.right.id, importedDraft.id);
     const compareResponse = await apiRequest(createApp(), `/api/admin/category-structures/compare?leftId=${cityDraft.id}&rightId=${importedDraft.id}`, { method: "GET", token: tokenFor(admin.id, admin.role) });
     assert.equal(compareResponse.status, 200);
-    const rollbackResponse = await apiRequest(createApp(), `/api/admin/category-structures/${cityDraft.id}/rollback`, { method: "POST", token: tokenFor(admin.id, admin.role) });
+    const unconfirmedRollback = await apiRequest(createApp(), `/api/admin/category-structures/${cityDraft.id}/rollback`, { method: "POST", token: tokenFor(admin.id, admin.role) });
+    assert.equal(unconfirmedRollback.status, 400);
+    const rollbackResponse = await apiRequest(createApp(), `/api/admin/category-structures/${cityDraft.id}/rollback`, { method: "POST", token: tokenFor(admin.id, admin.role), body: { confirmed: true } });
     assert.equal(rollbackResponse.status, 201);
     const rollbackDraft = rollbackResponse.payload;
     createdStructureIds.push(rollbackDraft.id);
@@ -1254,7 +1277,26 @@ async function runCategoryStructureTests() {
     assert.equal(listResponse.status, 200);
     assert.ok(listResponse.payload.some((item: { id: string }) => item.id === cityDraft.id));
 
-    await archiveCategoryStructure(regionDraft.id, admin.id);
+    const disposablePayload = JSON.parse(JSON.stringify(exported.payload));
+    disposablePayload.passport.versionNumber = "v90.0.1";
+    disposablePayload.passport.title = "Временный черновик для удаления";
+    const disposableDraft = await createDraftFromImport(disposablePayload, admin.id, "temporary-v90.0.1.json");
+    const disposableDependencies = await getCategoryStructureDependencies(disposableDraft.id);
+    assert.equal(disposableDependencies.canDelete, true);
+    await deleteCategoryStructure(disposableDraft.id, { id: admin.id, realRole: admin.role }, { comment: "Проверка безопасного удаления черновика" });
+    assert.equal(await prisma.categoryStructure.findUnique({ where: { id: disposableDraft.id } }), null);
+    const reimportedDraft = await createDraftFromImport(disposablePayload, admin.id, "temporary-v90.0.1-fixed.json");
+    await prisma.categoryStructure.update({ where: { id: reimportedDraft.id }, data: { status: "archived", archivedAt: new Date() } });
+    await assert.rejects(createDraftFromImport(disposablePayload, admin.id, "duplicate-v90.0.1.json"), (error: any) => error?.code === "category_structure_version_exists");
+    assert.equal((await getCategoryStructureDependencies(reimportedDraft.id)).canDelete, true);
+    await deleteCategoryStructure(reimportedDraft.id, { id: admin.id, realRole: admin.role }, { comment: "Удаление архивной версии без зависимостей", confirmationPhrase: "УДАЛИТЬ ГОРОД v90.0.1" });
+    await assert.rejects(deleteCategoryStructure(importedDraft.id, { id: admin.id, realRole: admin.role }, { comment: "Активную удалять нельзя" }), (error: any) => error?.code === "category_structure_active_delete_forbidden");
+    const archivedDependencies = await getCategoryStructureDependencies(cityDraft.id);
+    assert.equal(archivedDependencies.canDelete, false);
+    assert.ok(archivedDependencies.counts.requestSnapshots > 0 || archivedDependencies.counts.childStructures > 0);
+    await assert.rejects(deleteCategoryStructure(cityDraft.id, { id: admin.id, realRole: admin.role }, { comment: "Удаление с зависимостями", confirmationPhrase: `УДАЛИТЬ ГОРОД v${cityDraft.versionNumber}` }), (error: any) => error?.code === "structure_has_dependencies");
+
+    await emergencyDisableCategoryStructure(regionDraft.id, { id: admin.id, realRole: admin.role }, "Проверка безопасного fallback региона");
     const fallbackAfterRegionArchive = await getEffectiveCategoryStructure(fallbackCity.id);
     assert.equal(fallbackAfterRegionArchive.status, "uses_federal_fallback");
     assert.notEqual(fallbackAfterRegionArchive.structure?.id, regionDraft.id);
@@ -1263,8 +1305,12 @@ async function runCategoryStructureTests() {
     if (manager) {
       const denied = await apiRequest(createApp(), "/api/admin/category-structures/create-from-parent", { method: "POST", token: tokenFor(manager.id, "manager"), body: { scopeType: "city", cityId: city.id } });
       assert.equal(denied.status, 403);
+      const deniedDelete = await apiRequest(createApp(), `/api/admin/category-structures/${rollbackDraft.id}`, { method: "DELETE", token: tokenFor(manager.id, "manager"), body: { comment: "Нет прав" } });
+      assert.equal(deniedDelete.status, 403);
     }
   } finally {
+    await prisma.userCity.deleteMany({ where: { userId: helper.id, cityId: city.id } });
+    await prisma.requestStructureUpdateRevision.deleteMany({ where: { requestId: { in: requestIds } } });
     await prisma.requestCategorySnapshot.deleteMany({ where: { requestId: { in: requestIds } } });
     await prisma.clientRequest.deleteMany({ where: { id: { in: requestIds } } });
     await prisma.helperCategoryPreference.deleteMany({ where: { cityId: city.id } });

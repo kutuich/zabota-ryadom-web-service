@@ -19,6 +19,9 @@
 - Повышать snapshot schema version при несовместимом формате.
 - Сохранять ownership guards, idempotency и AuditLog.
 - Не редактировать active category structure или published legal version скрытно.
+- Перед удалением структуры выполнять dependency check. Старые snapshots неизменяемы; актуализация заявки создаёт revision и новый snapshot только после подтверждения Заказчика.
+- Опубликованная заявка с pending structure update скрыта от общей выдачи Помощникам на backend. Финализированные условия без финансовой delta не мигрируются.
+- Экстренное отключение требует причины, AuditLog и определённого fallback.
 - Не менять live T-Bank/production flags в обычной feature-задаче.
 
 ## После изменения

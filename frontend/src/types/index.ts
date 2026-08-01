@@ -151,13 +151,34 @@ export type CategoryStructure = {
   publishedAt?: string | null;
   activatedAt?: string | null;
   archivedAt?: string | null;
+  emergencyDisabledAt?: string | null;
+  emergencyDisableReason?: string | null;
   createdAt: string;
   updatedAt: string;
   scopeRegion?: { id: string; name: string; slug: string } | null;
   scopeCity?: City | null;
   parentStructure?: Pick<CategoryStructure, "id" | "title" | "versionNumber" | "scopeType"> | null;
   categories?: StructuredCategory[];
-  _count?: { categories: number; requestSnapshots: number };
+  _count?: { categories: number; requestSnapshots: number; derivedStructures: number; requestUpdateRevisions: number };
+};
+
+export type CategoryStructureDependencies = {
+  structure: Pick<CategoryStructure, "id" | "scopeType" | "scopeKey" | "versionNumber" | "title" | "status" | "activatedAt" | "publishedAt">;
+  canDelete: boolean;
+  requiresHistoricalConfirmation: boolean;
+  blockers: Array<{ code: string; count: number }>;
+  counts: Record<string, number>;
+  requests: Array<{ id: string; publicNumber?: string | null; status: string; clientId: string; clientDisplayName: string; city: string; createdAt: string; canMigrate: boolean }>;
+};
+
+export type RequestStructureUpdateRevision = {
+  id: string;
+  requestId: string;
+  targetStructureId: string;
+  status: "pending_customer_confirmation" | "applied" | "cancelled";
+  comparisonJson?: string;
+  comparison?: Record<string, unknown>;
+  initiatedAt: string;
 };
 
 export type CategoryCityStatus = {
@@ -596,6 +617,10 @@ export type ClientRequest = {
   comment?: string | null;
   status: string;
   visibilityStatus: string;
+  isHiddenFromPerformers?: boolean;
+  hiddenReason?: string | null;
+  structureUpdatePendingAt?: string | null;
+  pendingStructureUpdate?: RequestStructureUpdateRevision | null;
   exactAddressVisible: boolean;
   phoneVisible: boolean;
   selectedPerformerId?: string | null;

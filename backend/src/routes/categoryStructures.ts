@@ -19,13 +19,22 @@ import {
   getHelperCategoryPreferences,
   listCategoryStructures,
   publishCategoryStructure,
+  previewCategoryImport,
   saveHelperCategoryPreferences,
   updateDraftStructure,
-  validateCategoryImport,
   type CategoryImportPayload
 } from "../services/categoryStructureService";
 import { asyncHandler, HttpError } from "../utils/http";
 import { flattenRequestCatalog } from "../services/requestScheduleService";
+import {
+  cancelRequestStructureUpdate,
+  confirmRequestStructureUpdate,
+  deleteCategoryStructure,
+  emergencyDisableCategoryStructure,
+  getEmergencyDisablePreview,
+  getCategoryStructureDependencies,
+  startRequestStructureUpdate
+} from "../services/categoryStructureLifecycleService";
 
 export const categoryStructuresRouter = Router();
 export const categoriesRouter = Router();
@@ -53,6 +62,11 @@ categoryStructuresRouter.get(
       layers: effective.layers.map((layer) => ({ id: layer.id, scopeType: layer.scopeType, versionNumber: layer.versionNumber, title: layer.title, qualityStatus: layer.qualityStatus }))
     });
   })
+);
+categoryStructuresRouter.post(
+  "/request-updates/:id/confirm",
+  requireRole("client"),
+  asyncHandler(async (req, res) => res.json(await confirmRequestStructureUpdate(req.params.id, req.user!.id)))
 );
 
 categoriesRouter.use(authenticate);
@@ -115,7 +129,7 @@ adminCategoryStructuresRouter.post(
   "/import/preview",
   asyncHandler(async (req, res) => {
     const input = parseImportRequest(req.body);
-    res.json(validateCategoryImport(input.payload));
+    res.json(await previewCategoryImport(input.payload));
   })
 );
 adminCategoryStructuresRouter.post(
@@ -164,6 +178,39 @@ adminCategoryStructuresRouter.get(
   })
 );
 adminCategoryStructuresRouter.get(
+  "/:id/dependencies",
+  asyncHandler(async (req, res) => res.json(await getCategoryStructureDependencies(req.params.id)))
+);
+adminCategoryStructuresRouter.delete(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    const input = z.object({ comment: z.string().trim().min(3).max(1000), confirmationPhrase: z.string().max(200).optional() }).parse(req.body);
+    res.json(await deleteCategoryStructure(req.params.id, { id: req.user!.id, realRole: req.user!.realRole }, input));
+  })
+);
+adminCategoryStructuresRouter.post(
+  "/:id/emergency-disable",
+  asyncHandler(async (req, res) => {
+    const input = z.object({ reason: z.string().trim().min(5).max(1000) }).parse(req.body);
+    res.json(await emergencyDisableCategoryStructure(req.params.id, { id: req.user!.id, realRole: req.user!.realRole }, input.reason));
+  })
+);
+adminCategoryStructuresRouter.get(
+  "/:id/emergency-disable-preview",
+  asyncHandler(async (req, res) => res.json(await getEmergencyDisablePreview(req.params.id)))
+);
+adminCategoryStructuresRouter.post(
+  "/:id/requests/:requestId/start-update",
+  asyncHandler(async (req, res) => res.status(201).json(await startRequestStructureUpdate(req.params.id, req.params.requestId, { id: req.user!.id, realRole: req.user!.realRole })))
+);
+adminCategoryStructuresRouter.post(
+  "/request-updates/:id/cancel",
+  asyncHandler(async (req, res) => {
+    const input = z.object({ reason: z.string().trim().min(3).max(1000) }).parse(req.body);
+    res.json(await cancelRequestStructureUpdate(req.params.id, { id: req.user!.id, realRole: req.user!.realRole }, input.reason));
+  })
+);
+adminCategoryStructuresRouter.get(
   "/:id",
   asyncHandler(async (req, res) => res.json(await getCategoryStructure(req.params.id)))
 );
@@ -176,7 +223,10 @@ adminCategoryStructuresRouter.post(
 );
 adminCategoryStructuresRouter.post(
   "/:id/rollback",
-  asyncHandler(async (req, res) => res.status(201).json(await createRollbackDraft(req.params.id, req.user!.id)))
+  asyncHandler(async (req, res) => {
+    z.object({ confirmed: z.literal(true) }).parse(req.body);
+    res.status(201).json(await createRollbackDraft(req.params.id, req.user!.id));
+  })
 );
 adminCategoryStructuresRouter.patch(
   "/:id",

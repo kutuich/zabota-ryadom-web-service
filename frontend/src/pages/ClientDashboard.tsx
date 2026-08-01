@@ -153,6 +153,15 @@ export function ClientDashboard() {
     setArticles(articleRows);
   }
 
+  async function confirmStructureUpdate(request: ClientRequest) {
+    if (!request.pendingStructureUpdate) return;
+    try {
+      await api.confirmRequestStructureUpdate(request.pendingStructureUpdate.id);
+      setMessage("Обновлённые данные подтверждены. Заявка снова доступна Помощникам.");
+      await load();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Не удалось подтвердить обновление заявки."); }
+  }
+
   useEffect(() => {
     load().catch((error) => setMessage(error.message));
   }, []);
@@ -520,6 +529,7 @@ export function ClientDashboard() {
         <div className="list">
           {requests.filter((request) => request.status !== "completed").map((request) => (
             <RequestCard key={request.id} request={request} onTitleClick={() => openRequestEditor(request)}>
+              {request.isHiddenFromPerformers && request.pendingStructureUpdate && <div className="notice"><strong>Заявка временно скрыта от Помощников.</strong><p>Проверьте изменения структуры и подтвердите обновлённые данные.</p><button className="primary-button" type="button" onClick={() => confirmStructureUpdate(request)}>Подтвердить обновлённые данные</button></div>}
               <button className="secondary-button" type="button" onClick={() => openRequestEditor(request)}>
                 Редактировать
               </button>

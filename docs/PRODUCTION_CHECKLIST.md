@@ -12,6 +12,10 @@
 - [ ] `SEED_DEMO_DATA=false`; demo users/data не создаются.
 - [ ] SQLite backup проверен восстановлением на отдельном пути.
 - [ ] Rollback не удаляет `/opt/zabota/data`.
+- [ ] Перед lifecycle-действиями проверить `/api/admin/category-structures/:id/dependencies` и сделать backup БД.
+- [ ] Не удалять active или историческую структуру ради повторного использования номера.
+- [ ] После emergency disable проверить effective fallback и список временно скрытых заявок.
+- [ ] Pending structure update отсутствует в общей выдаче Помощников и возвращается после подтверждения Заказчиком.
 
 ## Production flags
 

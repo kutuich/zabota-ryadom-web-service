@@ -81,7 +81,8 @@ const requestInclude = {
     },
     orderBy: { createdAt: "desc" as const }
   },
-  categorySnapshots: { orderBy: { createdAt: "desc" as const }, take: 1 }
+  categorySnapshots: { orderBy: { createdAt: "desc" as const }, take: 1 },
+  structureUpdateRevisions: { where: { status: "pending_customer_confirmation" }, orderBy: { createdAt: "desc" as const }, take: 1 }
 };
 
 const createRequestSchema = z.object({
@@ -271,6 +272,7 @@ requestsRouter.get(
       prisma.clientRequest.findMany({
       where: {
         cityId: { in: helperCityIds },
+        isHiddenFromPerformers: false,
         visibilityStatus: "city_visible",
         status: { in: ["published", "waiting_for_responses", "has_responses"] },
         responses: { none: { performerId: viewer.id } }
@@ -734,6 +736,9 @@ requestsRouter.post(
     if (!request || (!cityAccess && request.cityId !== req.user!.cityId)) {
       throw new HttpError(404, "Заявка не найдена", "request_not_found");
     }
+    if (request.isHiddenFromPerformers) {
+      throw new HttpError(409, "Заявка временно скрыта до подтверждения обновлённых данных Заказчиком", "request_structure_update_pending");
+    }
     if (!["published", "waiting_for_responses", "has_responses"].includes(request.status)) {
       throw new HttpError(400, "На эту заявку нельзя откликнуться", "request_not_available");
     }
@@ -969,11 +974,16 @@ requestsRouter.post(
 );
 
 async function ensureCanViewRequest(
-  request: { clientId: string; selectedPerformerId: string | null; cityId: string; visibilityStatus: string },
+  request: { clientId: string; selectedPerformerId: string | null; cityId: string; visibilityStatus: string; isHiddenFromPerformers: boolean; responses?: Array<{ performerId: string }>; chats?: Array<{ performerId: string }> },
   viewer: { id: string; role: string; cityId: string | null }
 ) {
   if (["admin", "superadmin"].includes(viewer.role)) return;
   if (request.clientId === viewer.id || request.selectedPerformerId === viewer.id) return;
+  if (viewer.role === "performer" && request.isHiddenFromPerformers) {
+    const alreadyInterested = request.responses?.some((row) => row.performerId === viewer.id) || request.chats?.some((row) => row.performerId === viewer.id);
+    if (alreadyInterested) return;
+    throw new HttpError(404, "Заявка не найдена", "request_not_found");
+  }
   if (viewer.role === "performer" && request.visibilityStatus === "city_visible") {
     const relation = await prisma.userCity.findFirst({
       where: { userId: viewer.id, cityId: request.cityId, isActive: true, roleScope: { in: ["helper", "both"] } }

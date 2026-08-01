@@ -3736,6 +3736,49 @@ summary:focus-visible {
   font-size: 13px;
 }
 
+.danger-button {
+  border: 1px solid #b42318;
+  background: #fff;
+  color: #b42318;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.danger-button:hover { background: #fef3f2; }
+.danger-button:disabled { cursor: not-allowed; opacity: .55; }
+
+.category-structure-dependencies,
+.category-structure-danger-zone,
+.category-structure-request-list {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+}
+
+.category-structure-dependencies {
+  margin-top: 20px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 20px;
+}
+
+.category-structure-request-list article {
+  display: grid;
+  gap: 8px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.category-structure-danger-zone {
+  border: 1px solid #fecdca;
+  background: #fffbfa;
+  padding: 16px;
+  border-radius: 6px;
+}
+
 .category-structure-details {
   width: 100%;
   min-width: 0;

@@ -2,7 +2,7 @@ import { Download, FileJson, Plus, RefreshCw, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
-import type { CategoryCityStatus, CategoryImportPreview, CategoryStructure, CategoryStructureComparison } from "../types";
+import type { CategoryCityStatus, CategoryImportPreview, CategoryStructure, CategoryStructureComparison, CategoryStructureDependencies } from "../types";
 import { readCategoryImportFile } from "../utils/categoryImport";
 import { downloadXlsx } from "../utils/xlsx";
 
@@ -22,6 +22,8 @@ export function AdminCategoryStructuresPage() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importPayload, setImportPayload] = useState<unknown>(null);
   const [importPreview, setImportPreview] = useState<CategoryImportPreview | null>(null);
+  const [dependencies, setDependencies] = useState<CategoryStructureDependencies | null>(null);
+  const [rollbackConfirmation, setRollbackConfirmation] = useState<CategoryStructure | null>(null);
 
   async function load() {
     const [structureRows, cityRows] = await Promise.all([api.adminCategoryStructures("all"), api.adminCategoryCityStatuses()]);
@@ -52,7 +54,7 @@ export function AdminCategoryStructuresPage() {
 
   async function openStructure(id: string) {
     setBusy(true);
-    try { setSelected(await api.adminCategoryStructure(id)); } catch (error) { showError(error); } finally { setBusy(false); }
+    try { setSelected(await api.adminCategoryStructure(id)); setDependencies(null); } catch (error) { showError(error); } finally { setBusy(false); }
   }
 
   async function createFromParent(input: { scopeType: "region" | "city"; regionId?: string; cityId?: string }) {
@@ -118,8 +120,9 @@ export function AdminCategoryStructuresPage() {
     } catch (error) { showError(error); } finally { setBusy(false); }
   }
 
-  async function structureAction(action: "version" | "publish" | "archive" | "rollback") {
+  async function structureAction(action: "version" | "publish" | "archive" | "rollback", confirmed = false) {
     if (!selected) return;
+    if (action === "rollback" && !confirmed) { setRollbackConfirmation(selected); return; }
     setBusy(true);
     try {
       const result = action === "version"
@@ -132,6 +135,45 @@ export function AdminCategoryStructuresPage() {
       setNotice(action === "publish" ? "Структура активирована; предыдущая активная версия архивирована." : action === "archive" ? "Структура архивирована." : action === "rollback" ? "Создан черновик отката. Проверьте и активируйте его отдельно." : "Создана новая черновая версия.");
       await load();
       await openStructure(result.id);
+    } catch (error) { showError(error); } finally { setBusy(false); }
+  }
+
+  async function checkDependencies() {
+    if (!selected) return;
+    setBusy(true);
+    try { setDependencies(await api.adminCategoryStructureDependencies(selected.id)); } catch (error) { showError(error); } finally { setBusy(false); }
+  }
+
+  async function deleteStructure() {
+    if (!selected) return;
+    const checked = dependencies ?? await api.adminCategoryStructureDependencies(selected.id);
+    setDependencies(checked);
+    if (!checked.canDelete) return setNotice("Удаление запрещено: структура имеет зависимости. Проверьте список ниже.");
+    const comment = window.prompt("Укажите причину удаления структуры:");
+    if (!comment?.trim()) return;
+    const confirmationPhrase = selected.status === "archived" ? window.prompt(`Введите фразу: УДАЛИТЬ ${scopeDeleteLabel(selected)} v${selected.versionNumber}`) ?? undefined : undefined;
+    setBusy(true);
+    try {
+      await api.adminDeleteCategoryStructure(selected.id, { comment, confirmationPhrase });
+      setNotice(`Версия v${selected.versionNumber} удалена. История административного действия сохранена.`);
+      setSelected(null); setDependencies(null); await load();
+    } catch (error) { showError(error); } finally { setBusy(false); }
+  }
+
+  async function emergencyDisable() {
+    if (!selected) return;
+    const checked = dependencies ?? await api.adminCategoryStructureDependencies(selected.id);
+    setDependencies(checked);
+    const preview = await api.adminCategoryStructureEmergencyPreview(selected.id);
+    if (!preview.canDisable) return setNotice("Экстренное отключение невозможно: безопасный effective fallback отсутствует.");
+    const reason = window.prompt(`Экстренное отключение прекратит использование v${selected.versionNumber} для новых заявок. Укажите обязательную причину:`);
+    if (!reason?.trim()) return;
+    if (!window.confirm(`Отключить ${scopeLabel(selected)} v${selected.versionNumber}? Effective станет «${preview.fallbackStructure?.title} v${preview.fallbackStructure?.versionNumber}». Затронуто заявок: ${preview.affectedRequests}; будет скрыто: ${preview.publishedRequestsToHide}; согласованных без автоматической миграции: ${preview.agreedRequestsBlocked}.`)) return;
+    setBusy(true);
+    try {
+      const result = await api.adminEmergencyDisableCategoryStructure(selected.id, reason);
+      setNotice(`Структура отключена. Затронуто заявок: ${result.affectedRequests}; скрыто от Помощников: ${result.hiddenPublishedRequests}.`);
+      setSelected(null); setDependencies(null); await load();
     } catch (error) { showError(error); } finally { setBusy(false); }
   }
 
@@ -152,7 +194,7 @@ export function AdminCategoryStructuresPage() {
     setActiveTab(tab);
     setSelected(null);
     if (tab === "Структуры") setStatusFilter("working");
-    if (tab === "Версии") setStatusFilter("all");
+    if (tab === "Версии") setStatusFilter("working");
   }
 
   return (
@@ -165,6 +207,7 @@ export function AdminCategoryStructuresPage() {
         <button className="secondary-button" type="button" onClick={() => load().catch(showError)} disabled={busy}><RefreshCw size={17} /> Обновить</button>
       </div>
       {notice && <p className="notice">{notice}</p>}
+      {rollbackConfirmation && <div className="modal-backdrop" role="dialog" aria-modal="true" data-structure-version-confirmation onClick={() => setRollbackConfirmation(null)}><section className="modal-panel" onClick={(event) => event.stopPropagation()}><div className="card__head"><h3>Создать новую версию на основе этой</h3><button className="secondary-button" type="button" onClick={() => setRollbackConfirmation(null)}>Закрыть</button></div><p>Старая версия не будет активирована повторно. Система создаст новый черновик {scopeLabel(rollbackConfirmation)} v{nextMinorVersion(rollbackConfirmation.versionNumber)} на основе v{rollbackConfirmation.versionNumber}.</p><p>Текущая active-версия не изменится до отдельной публикации черновика.</p><div className="button-row"><button className="primary-button" type="button" onClick={() => { setRollbackConfirmation(null); structureAction("rollback", true); }}>Создать черновик v{nextMinorVersion(rollbackConfirmation.versionNumber)}</button><button className="secondary-button" type="button" onClick={() => setRollbackConfirmation(null)}>Отмена</button></div></section></div>}
       {missingCities.length > 0 && <p className="notice">Есть города, где применяется региональная или базовая структура. Рекомендуется создать локальные структуры городов.</p>}
       <div className="segmented-control category-structure-tabs" role="tablist">
         {tabs.map((tab) => <button type="button" role="tab" aria-selected={activeTab === tab} key={tab} className={activeTab === tab ? "is-active" : ""} onClick={() => changeTab(tab)}>{tab}</button>)}
@@ -185,7 +228,7 @@ export function AdminCategoryStructuresPage() {
         <>
           <div className="filter-bar">
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск по структурам" />
-            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StructureStatusFilter)}><option value="working">Рабочие: опубликованные и черновики</option><option value="active">Опубликованные</option><option value="draft">Черновики</option><option value="archived">Архивные</option><option value="all">Все, включая архивные</option></select>
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StructureStatusFilter)}><option value="working">Рабочие: опубликованные и черновики</option><option value="active">Опубликованные</option><option value="draft">Черновики</option><option value="archived">Показать архивные версии</option><option value="all">Все, включая архивные</option></select>
           </div>
           {structures.length === 0 ? (
             <div className="empty-state"><h3>Структуры услуг пока не настроены</h3><p>Базовая структура РФ создаётся безопасным bootstrap при запуске backend.</p></div>
@@ -195,7 +238,7 @@ export function AdminCategoryStructuresPage() {
                 {filteredStructures.map((item) => <StructureRow key={item.id} item={item} showVersionHistory={activeTab === "Версии"} onOpen={() => openStructure(item.id)} onExport={exportStructure} />)}
                 {filteredStructures.length === 0 && <div className="empty-state"><p>Структуры с выбранными параметрами не найдены.</p></div>}
               </div>
-              {selected && <StructureDetails item={selected} versions={structures.filter((item) => item.scopeKey === selected.scopeKey && item.id !== selected.id)} busy={busy} onClose={() => setSelected(null)} onAction={structureAction} onExport={exportStructure} onUpdate={updateDraft} />}
+              {selected && <StructureDetails item={selected} versions={structures.filter((item) => item.scopeKey === selected.scopeKey && item.id !== selected.id)} dependencies={dependencies} busy={busy} onClose={() => setSelected(null)} onAction={structureAction} onExport={exportStructure} onUpdate={updateDraft} onCheckDependencies={checkDependencies} onDelete={deleteStructure} onEmergencyDisable={emergencyDisable} onStartUpdate={async (requestId) => { await api.adminStartRequestStructureUpdate(selected.id, requestId); setNotice("Актуализация создана. Заявка скрыта от Помощников до подтверждения Заказчиком."); await checkDependencies(); }} />}
             </div>
           )}
         </>
@@ -229,15 +272,33 @@ export function AdminCategoryStructuresPage() {
 function Metric({ label, value }: { label: string; value: number }) { return <div className="metric"><span>{label}</span><strong>{value}</strong></div>; }
 
 function StructureRow({ item, showVersionHistory, onOpen, onExport }: { item: CategoryStructure; showVersionHistory: boolean; onOpen: () => void; onExport: (item: CategoryStructure, format: "xlsx" | "json") => void }) {
-  return <article className={item.status === "archived" ? "category-structure-row is-archived" : "category-structure-row"} data-category-structure-card data-structure-status={item.status}><div className="category-structure-row__main"><strong>{item.title}</strong><span>{scopeLabel(item)} · v{item.versionNumber}</span><small>Категорий: {item._count?.categories ?? 0}{item.publishedAt ? ` · Опубликована: ${formatDate(item.publishedAt)}` : ""}</small>{showVersionHistory && <small>Создана: {formatDate(item.createdAt)}{item.archivedAt ? ` · В архиве с: ${formatDate(item.archivedAt)}` : ""} · Источник: {item.source}{item.parentStructure ? ` · Основа: ${item.parentStructure.title} v${item.parentStructure.versionNumber}` : ""}</small>}{item.status === "archived" && <p className="category-structure-archive-note">Архивная версия сохранена для истории и не применяется пользователям.</p>}</div><div className="category-structure-row__meta"><StatusBadge tone={item.status === "active" ? "success" : item.status === "draft" ? "warning" : "neutral"}>{statusLabel(item.status)}</StatusBadge><span>Качество: {item.qualityStatus}</span></div><div className="category-structure-row__actions"><button className="secondary-button" type="button" onClick={onOpen}>Открыть</button>{showVersionHistory && <><button className="secondary-button" type="button" onClick={() => onExport(item, "xlsx")}><Download size={15} /> Excel</button><button className="secondary-button" type="button" onClick={() => onExport(item, "json")}><FileJson size={15} /> JSON</button></>}</div></article>;
+  return <article className={item.status === "archived" ? "category-structure-row is-archived" : "category-structure-row"} data-category-structure-card data-structure-status={item.status}><div className="category-structure-row__main"><strong>{item.title}</strong><span>{scopeLabel(item)} · v{item.versionNumber}</span><small>Категорий: {item._count?.categories ?? 0} · связанных заявок: {item._count?.requestSnapshots ?? 0} · дочерних структур: {item._count?.derivedStructures ?? 0}{item.publishedAt ? ` · Опубликована: ${formatDate(item.publishedAt)}` : ""}</small>{showVersionHistory && <small>Создана: {formatDate(item.createdAt)}{item.archivedAt ? ` · В архиве с: ${formatDate(item.archivedAt)}` : ""} · Источник: {item.source}{item.parentStructure ? ` · Основа: ${item.parentStructure.title} v${item.parentStructure.versionNumber}` : ""}</small>}{item.status === "archived" && <p className="category-structure-archive-note">Архивная версия сохранена для истории и не применяется пользователям.</p>}</div><div className="category-structure-row__meta"><StatusBadge tone={item.status === "active" ? "success" : item.status === "draft" ? "warning" : "neutral"}>{statusLabel(item.status)}</StatusBadge><span>Качество: {item.qualityStatus}</span>{(item._count?.requestUpdateRevisions ?? 0) > 0 && <span>Есть актуализации заявок</span>}</div><div className="category-structure-row__actions"><button className="secondary-button" type="button" onClick={onOpen}>Открыть</button>{showVersionHistory && <><button className="secondary-button" type="button" onClick={() => onExport(item, "xlsx")}><Download size={15} /> Excel</button><button className="secondary-button" type="button" onClick={() => onExport(item, "json")}><FileJson size={15} /> JSON</button></>}</div></article>;
 }
 
-function StructureDetails({ item, versions, busy, onClose, onAction, onExport, onUpdate }: { item: CategoryStructure; versions: CategoryStructure[]; busy: boolean; onClose: () => void; onAction: (action: "version" | "publish" | "archive" | "rollback") => void; onExport: (item: CategoryStructure, format: "xlsx" | "json") => void; onUpdate: (body: Partial<Pick<CategoryStructure, "title" | "description" | "qualityStatus" | "comment">>) => void }) {
+function StructureDetails({ item, versions, dependencies, busy, onClose, onAction, onExport, onUpdate, onCheckDependencies, onDelete, onEmergencyDisable, onStartUpdate }: { item: CategoryStructure; versions: CategoryStructure[]; dependencies: CategoryStructureDependencies | null; busy: boolean; onClose: () => void; onAction: (action: "version" | "publish" | "archive" | "rollback") => void; onExport: (item: CategoryStructure, format: "xlsx" | "json") => void; onUpdate: (body: Partial<Pick<CategoryStructure, "title" | "description" | "qualityStatus" | "comment">>) => void; onCheckDependencies: () => void; onDelete: () => void; onEmergencyDisable: () => void; onStartUpdate: (requestId: string) => Promise<void> }) {
   const [draft, setDraft] = useState({ title: item.title, description: item.description ?? "", qualityStatus: item.qualityStatus, comment: item.comment ?? "" });
   const [compareId, setCompareId] = useState("");
   const [comparison, setComparison] = useState<CategoryStructureComparison | null>(null);
   useEffect(() => setDraft({ title: item.title, description: item.description ?? "", qualityStatus: item.qualityStatus, comment: item.comment ?? "" }), [item.id, item.updatedAt]);
-  return <section className="plain-section category-structure-details" data-open-category-structure><div className="card__head"><div><h3>{item.title}</h3><p>{scopeLabel(item)} · версия {item.versionNumber} · {statusLabel(item.status)}</p></div><div className="button-row"><button type="button" className="secondary-button" onClick={() => onExport(item, "xlsx")}><Download size={15} /> Excel</button><button type="button" className="secondary-button" onClick={() => onExport(item, "json")}><FileJson size={15} /> JSON</button><button type="button" className="secondary-button" onClick={onClose}>Свернуть</button></div></div>{item.status === "archived" && <p className="notice category-structure-archive-note">Архивная версия сохранена для истории.</p>}<dl className="details-list"><div><dt>Качество</dt><dd>{item.qualityStatus}</dd></div><div><dt>Основа</dt><dd>{item.parentStructure ? `${item.parentStructure.title} v${item.parentStructure.versionNumber}` : "нет"}</dd></div><div><dt>Комментарий</dt><dd>{item.comment || "не указан"}</dd></div></dl>{item.status === "draft" && <form className="form-grid category-draft-form" onSubmit={(event) => { event.preventDefault(); onUpdate(draft); }}><h4 className="span-2">Редактировать черновик</h4><label className="span-2">Название<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label><label className="span-2">Описание<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label><label>Качество<select value={draft.qualityStatus} onChange={(event) => setDraft({ ...draft, qualityStatus: event.target.value as CategoryStructure["qualityStatus"] })}><option value="draft">Черновик</option><option value="estimated">Оценено</option><option value="reviewed">Проверено</option><option value="tested">Протестировано</option><option value="approved">Утверждено</option></select></label><label>Комментарий<input value={draft.comment} onChange={(event) => setDraft({ ...draft, comment: event.target.value })} /></label><button type="submit" className="secondary-button span-2" disabled={busy}>Сохранить черновик</button></form>}<div className="button-row">{["active", "archived"].includes(item.status) && <button type="button" className="primary-button" disabled={busy} onClick={() => onAction("version")}>Создать новую версию</button>}{item.status === "archived" && <button type="button" className="secondary-button" disabled={busy} onClick={() => onAction("rollback")}>Подготовить откат</button>}{item.status === "draft" && <button type="button" className="primary-button" disabled={busy} onClick={() => onAction("publish")}>Активировать структуру</button>}{item.status !== "archived" && <button type="button" className="secondary-button" disabled={busy} onClick={() => onAction("archive")}>Архивировать</button>}</div>{versions.length > 0 && <section className="category-version-compare"><h4>Сравнение версий</h4><div className="button-row"><select value={compareId} onChange={(event) => { setCompareId(event.target.value); setComparison(null); }}><option value="">Выберите версию</option>{versions.map((version) => <option key={version.id} value={version.id}>v{version.versionNumber} · {statusLabel(version.status)}</option>)}</select><button type="button" className="secondary-button" disabled={!compareId} onClick={() => api.adminCompareCategoryStructures(compareId, item.id).then(setComparison)}>Сравнить</button></div>{comparison && <ComparisonSummary comparison={comparison} />}</section>}<div className="category-tree">{item.categories?.filter((category) => !category.parentId).map((category) => <article key={category.id} className="category-tree-item"><h4>{category.title}</h4><p>{category.descriptionForCustomer}</p><ul>{item.categories?.filter((child) => child.parentId === category.id).map((child) => <li key={child.id}>{child.title}</li>)}</ul>{category.pricingRules?.map((rule) => <p key={rule.id} className="privacy-note">Ориентир: {priceRange(rule.recommendedMinPrice, rule.recommendedMaxPrice)}. {rule.priceComment}</p>)}</article>)}</div></section>;
+  return <section className="plain-section category-structure-details" data-open-category-structure>
+    <div className="card__head"><div><h3>{item.title}</h3><p>{scopeLabel(item)} · версия v{item.versionNumber} · {statusLabel(item.status)}</p></div><div className="button-row"><button type="button" className="secondary-button" onClick={() => onExport(item, "xlsx")}><Download size={15} /> Excel</button><button type="button" className="secondary-button" onClick={() => onExport(item, "json")}><FileJson size={15} /> JSON</button><button type="button" className="secondary-button" onClick={onClose}>Свернуть</button></div></div>
+    {item.status === "archived" && <p className="notice category-structure-archive-note">Архивная версия сохранена для истории и скрыта из обычного списка.</p>}
+    {item.emergencyDisabledAt && <p className="error-box">Структура экстренно отключена. Причина: {item.emergencyDisableReason}</p>}
+    <dl className="details-list"><div><dt>Качество</dt><dd>{item.qualityStatus}</dd></div><div><dt>Основа</dt><dd>{item.parentStructure ? `${item.parentStructure.title} v${item.parentStructure.versionNumber}` : "нет"}</dd></div><div><dt>Комментарий</dt><dd>{item.comment || "не указан"}</dd></div></dl>
+    {item.status === "draft" && <form className="form-grid category-draft-form" onSubmit={(event) => { event.preventDefault(); onUpdate(draft); }}><h4 className="span-2">Редактировать черновик</h4><label className="span-2">Название<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label><label className="span-2">Описание<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label><label>Качество<select value={draft.qualityStatus} onChange={(event) => setDraft({ ...draft, qualityStatus: event.target.value as CategoryStructure["qualityStatus"] })}><option value="draft">Черновик</option><option value="estimated">Оценено</option><option value="reviewed">Проверено</option><option value="tested">Протестировано</option><option value="approved">Утверждено</option></select></label><label>Комментарий<input value={draft.comment} onChange={(event) => setDraft({ ...draft, comment: event.target.value })} /></label><button type="submit" className="secondary-button span-2" disabled={busy}>Сохранить черновик</button></form>}
+    <div className="button-row category-structure-context-actions">
+      {item.status === "draft" && <><button type="button" className="primary-button" disabled={busy} onClick={() => onAction("publish")}>Активировать структуру</button><button type="button" className="danger-button" disabled={busy} onClick={onDelete}>Удалить черновик</button></>}
+      {item.status === "active" && <><button type="button" className="primary-button" disabled={busy} onClick={() => onAction("version")}>Создать новую версию</button><button type="button" className="danger-button" disabled={busy} onClick={onEmergencyDisable}>Экстренно отключить структуру</button></>}
+      {item.status === "archived" && <><button type="button" className="primary-button" disabled={busy} onClick={() => onAction("rollback")}>Создать новую версию на основе этой</button><button type="button" className="secondary-button" disabled={busy} onClick={onCheckDependencies}>Проверить зависимости</button></>}
+    </div>
+    {dependencies && <DependencyPanel dependencies={dependencies} item={item} busy={busy} onDelete={onDelete} onStartUpdate={onStartUpdate} />}
+    {versions.length > 0 && <section className="category-version-compare"><h4>Сравнение версий</h4><div className="button-row"><select value={compareId} onChange={(event) => { setCompareId(event.target.value); setComparison(null); }}><option value="">Выберите версию</option>{versions.map((version) => <option key={version.id} value={version.id}>v{version.versionNumber} · {statusLabel(version.status)}</option>)}</select><button type="button" className="secondary-button" disabled={!compareId} onClick={() => api.adminCompareCategoryStructures(compareId, item.id).then(setComparison)}>Сравнить</button></div>{comparison && <ComparisonSummary comparison={comparison} />}</section>}
+    <div className="category-tree">{item.categories?.filter((category) => !category.parentId).map((category) => <article key={category.id} className="category-tree-item"><h4>{category.title}</h4><p>{category.descriptionForCustomer}</p><ul>{item.categories?.filter((child) => child.parentId === category.id).map((child) => <li key={child.id}>{child.title}</li>)}</ul>{category.pricingRules?.map((rule) => <p key={rule.id} className="privacy-note">Ориентир: {priceRange(rule.recommendedMinPrice, rule.recommendedMaxPrice)}. {rule.priceComment}</p>)}</article>)}</div>
+  </section>;
+}
+
+function DependencyPanel({ dependencies, item, busy, onDelete, onStartUpdate }: { dependencies: CategoryStructureDependencies; item: CategoryStructure; busy: boolean; onDelete: () => void; onStartUpdate: (requestId: string) => Promise<void> }) {
+  return <section className="category-structure-dependencies"><div className="card__head"><div><h4>Зависимости структуры</h4><p>{dependencies.canDelete ? "Критичных зависимостей не найдено." : "Физическое удаление заблокировано."}</p></div><button className="secondary-button" type="button" onClick={() => downloadDependenciesCsv(item, dependencies)}>Экспорт CSV</button></div><div className="metrics-grid">{Object.entries(dependencies.counts).map(([key, count]) => <Metric key={key} label={dependencyLabel(key)} value={count} />)}</div>{dependencies.blockers.length > 0 && <div className="error-box">{dependencies.blockers.map((blocker) => <p key={blocker.code}>{dependencyLabel(blocker.code)}: {blocker.count}</p>)}</div>}{dependencies.requests.length > 0 && <div className="category-structure-request-list">{dependencies.requests.map((request) => <article key={request.id}><strong>Заявка {request.publicNumber ?? request.id}</strong><span>{request.city} · {request.status}</span><span>Заказчик: {request.clientDisplayName}</span><div className="button-row"><a className="secondary-button" href={`/app/admin/requests?requestId=${request.id}`}>Открыть заявку</a><a className="secondary-button" href={`/app/admin/chats?userId=${request.clientId}`}>Написать пользователю</a>{request.canMigrate && item.status === "active" && <button type="button" className="primary-button" disabled={busy} onClick={() => onStartUpdate(request.id)}>Начать актуализацию</button>}</div></article>)}</div>}{item.status === "archived" && dependencies.canDelete && <div className="category-structure-danger-zone"><h4>Опасная зона</h4><p>Удаление необратимо. Для ранее опубликованной версии потребуется точная подтверждающая фраза.</p><button type="button" className="danger-button" disabled={busy} onClick={onDelete}>Удалить окончательно</button></div>}</section>;
 }
 
 function ComparisonSummary({ comparison }: { comparison: CategoryStructureComparison }) { return <div className="notice"><strong>v{comparison.left.versionNumber} → v{comparison.right.versionNumber}</strong><p>Категории: +{comparison.categories.added.length} /−{comparison.categories.removed.length} / изменено {comparison.categories.changed.length}</p><p>Задачи: +{comparison.tasks.added.length} /−{comparison.tasks.removed.length} / изменено {comparison.tasks.changed.length}</p><p>Цены: +{comparison.pricingRules.added.length} /−{comparison.pricingRules.removed.length} / изменено {comparison.pricingRules.changed.length}</p></div>; }
@@ -247,6 +308,10 @@ function ActionGroup({ label, children }: { label: string; children: React.React
 function ImportPreview({ preview }: { preview: CategoryImportPreview }) { return <div className={preview.valid ? "notice" : "error-box"}><strong>{preview.valid ? "Файл готов к импорту" : "Найдены ошибки"}</strong><p>Категорий: {preview.summary.categories ?? 0}; подкатегорий: {preview.summary.subcategories ?? 0}; задач: {preview.summary.taskTemplates ?? 0}.</p>{preview.errors.map((error) => <p key={error}>{error}</p>)}{preview.warnings.map((warning) => <p key={warning}>Предупреждение: {warning}</p>)}</div>; }
 
 function scopeLabel(item: CategoryStructure) { return item.scopeType === "federal" ? "РФ" : item.scopeType === "region" ? `Регион: ${item.scopeRegion?.name ?? "не указан"}` : `Город: ${item.scopeCity?.name ?? "не указан"}`; }
+function scopeDeleteLabel(item: CategoryStructure) { return item.scopeType === "federal" ? "РФ" : item.scopeType === "region" ? "РЕГИОН" : "ГОРОД"; }
+function nextMinorVersion(version: string) { const parts = version.replace(/^v/i, "").split(".").map(Number); return `${parts[0] || 1}.${(parts[1] || 0) + 1}`; }
+function dependencyLabel(key: string) { return ({ draftRequests: "Черновики заявок", publishedRequests: "Опубликованные заявки", requestsWithResponses: "Заявки с откликами", requestsWithChats: "Заявки с чатами", requestsWithAgreedTerms: "Заявки с условиями", agreementVersions: "Версии соглашений", requestSnapshots: "Snapshot заявок", requestVisits: "Визиты", financialBatches: "Финансовые batch", childStructures: "Дочерние структуры", helperPreferences: "Настройки Помощников", requestUpdateRevisions: "Ревизии актуализации", publicationAudits: "Записи публикации", activeStructure: "Активная структура" } as Record<string, string>)[key] ?? key; }
+function downloadDependenciesCsv(item: CategoryStructure, dependencies: CategoryStructureDependencies) { const rows = [["requestId", "publicNumber", "status", "city", "canMigrate"], ...dependencies.requests.map((request) => [request.id, request.publicNumber ?? "", request.status, request.city, String(request.canMigrate)])]; const csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n"); const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = `structure_${item.scopeKey.replaceAll(":", "-")}_v${item.versionNumber}_dependencies.csv`; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); }
 function statusLabel(status: CategoryStructure["status"]) { return status === "active" ? "Опубликована" : status === "draft" ? "Черновик" : "Архив"; }
 function formatDate(value: string) { return new Date(value).toLocaleDateString("ru-RU"); }
 function priceRange(min?: number | null, max?: number | null) { if (min != null && max != null) return `${min.toLocaleString("ru-RU")}–${max.toLocaleString("ru-RU")} ₽`; if (min != null) return `от ${min.toLocaleString("ru-RU")} ₽`; return "по согласованию"; }

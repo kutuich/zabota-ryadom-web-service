@@ -24,3 +24,4 @@
 | 2026-07-30 | Reconciliation запускается автоматически, вручную и при чтении как safety fallback | Нужен catch-up без отдельного worker container | REQUEST_WORKFLOW_V2 | реализовано для одного instance |
 | 2026-07-30 | Scheduler использует in-process mutex | Production сейчас одноинстансовый; distributed lock отложен до scaling | PRODUCTION_CURRENT_STATE | реализовано с ограничением |
 | 2026-08-01 | Каталог услуг объединяет версионные слои РФ, региона и города; форма строится из импортируемых задач и полей | Новые направления и локальные правила должны вводиться импортом и активацией без изменения кода | Source of truth, CATEGORY_STRUCTURES, CATEGORY_IMPORT_EXPORT | реализовано |
+| 2026-08-01 | Версии структур используют semver-строки; удаление и emergency disable защищены dependency check | Ошибочный draft должен удаляться безопасно, а исторические snapshot и опубликованные заявки не должны теряться | CATEGORY_STRUCTURES, CHANGE_MANAGEMENT | реализовано |

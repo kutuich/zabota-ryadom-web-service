@@ -58,6 +58,13 @@ type RequestWithRelations = ClientRequest & {
     snapshotJson: string;
     createdAt: Date;
   }>;
+  structureUpdateRevisions?: Array<{
+    id: string;
+    targetStructureId: string;
+    status: string;
+    comparisonJson: string;
+    initiatedAt: Date;
+  }>;
 };
 
 export function serializeRequestForUser(
@@ -149,6 +156,9 @@ export function serializeRequestForUser(
     completedAt: request.completedAt,
     cancelledAt: request.cancelledAt,
     archivedAt: request.archivedAt,
+    isHiddenFromPerformers: Boolean(request.isHiddenFromPerformers),
+    hiddenReason: request.hiddenReason ?? null,
+    structureUpdatePendingAt: request.structureUpdatePendingAt ?? null,
     exactAddressVisible: canSeeExactAddress,
     phoneVisible: false,
     pricing: safeJsonObject(request.pricingBreakdownJson),
@@ -161,6 +171,13 @@ export function serializeRequestForUser(
     city: request.city,
     category: request.category,
     categorySnapshot: serializeRequestCategorySnapshot(request.categorySnapshots?.[0]),
+    pendingStructureUpdate: request.structureUpdateRevisions?.[0] ? {
+      id: request.structureUpdateRevisions[0].id,
+      targetStructureId: request.structureUpdateRevisions[0].targetStructureId,
+      status: request.structureUpdateRevisions[0].status,
+      comparison: safeJsonObject(request.structureUpdateRevisions[0].comparisonJson),
+      initiatedAt: request.structureUpdateRevisions[0].initiatedAt
+    } : null,
     client: request.client ? { id: request.client.id, displayName: request.client.displayName } : undefined,
     selectedPerformer: request.selectedPerformer
       ? { id: request.selectedPerformer.id, displayName: request.selectedPerformer.displayName }

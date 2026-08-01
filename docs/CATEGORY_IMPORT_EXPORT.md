@@ -6,6 +6,8 @@
 
 JSON использует `version`, `scope`, `passport`, `categories`, `taskTemplates`, `safetyRules`, `pricingRules`. Scope можно адресовать через `regionId/regionSlug` или `cityId/citySlug`. Excel содержит листы «Паспорт структуры», «Категории», «Типовые задачи», «Ограничения», «Рекомендуемые цены», «Инструкция».
 
+`passport.versionNumber` принимает `v2.0`, `2.0`, `v2.0.1` или `10.12.3`; в БД сохраняется строка без `v`. Архивирование не освобождает номер. После физического удаления никогда не публиковавшейся версии без зависимостей номер можно использовать повторно; для обычного исправления предпочтительна patch-версия.
+
 Task contract включает `taskKind`, `aliases`, `durationEffect`, `priceEffect`, `requiresComment`, `allowedRegions`, `formFields`, `recommendations` и `constraints`. Pricing rule может содержать `taskSlug`, `packageCode` и `coveredTaskSlugs`. Safety rule использует стабильный `ruleKey`, `isBlocking` и optional `applicability`: `appliesToTaskSlugs`, `appliesToCategorySlugs`, `conditions`, `forbiddenValues`, `numericLimits`, `requiredConfirmation`. Готовые expanded visits не экспортируются: они принадлежат заявке, а не структуре.
 
 ## Безопасный импорт

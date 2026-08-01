@@ -305,7 +305,19 @@ export const api = {
   adminCreateCategoryStructureVersion: (id: string, comment?: string) =>
     apiFetch<CategoryStructure>(`/admin/category-structures/${id}/new-version`, { method: "POST", body: JSON.stringify({ comment }) }),
   adminCreateCategoryStructureRollback: (id: string) =>
-    apiFetch<CategoryStructure>(`/admin/category-structures/${id}/rollback`, { method: "POST" }),
+    apiFetch<CategoryStructure>(`/admin/category-structures/${id}/rollback`, { method: "POST", body: JSON.stringify({ confirmed: true }) }),
+  adminCategoryStructureDependencies: (id: string) =>
+    apiFetch<import("../types").CategoryStructureDependencies>(`/admin/category-structures/${id}/dependencies`),
+  adminDeleteCategoryStructure: (id: string, body: { comment: string; confirmationPhrase?: string }) =>
+    apiFetch<{ deleted: boolean; structureId: string; versionNumber: string }>(`/admin/category-structures/${id}`, { method: "DELETE", body: JSON.stringify(body) }),
+  adminEmergencyDisableCategoryStructure: (id: string, reason: string) =>
+    apiFetch<{ disabled: boolean; fallbackStructure?: CategoryStructure | null; affectedRequests: number; hiddenPublishedRequests: number; usesParentFallback: boolean }>(`/admin/category-structures/${id}/emergency-disable`, { method: "POST", body: JSON.stringify({ reason }) }),
+  adminCategoryStructureEmergencyPreview: (id: string) =>
+    apiFetch<{ fallbackStructure: Pick<CategoryStructure, "id" | "title" | "scopeType" | "versionNumber"> | null; affectedRequests: number; publishedRequestsToHide: number; agreedRequestsBlocked: number; canDisable: boolean }>(`/admin/category-structures/${id}/emergency-disable-preview`),
+  adminStartRequestStructureUpdate: (structureId: string, requestId: string) =>
+    apiFetch<import("../types").RequestStructureUpdateRevision>(`/admin/category-structures/${structureId}/requests/${requestId}/start-update`, { method: "POST" }),
+  confirmRequestStructureUpdate: (revisionId: string) =>
+    apiFetch(`/category-structures/request-updates/${revisionId}/confirm`, { method: "POST" }),
   adminCompareCategoryStructures: (leftId: string, rightId: string) =>
     apiFetch<import("../types").CategoryStructureComparison>(`/admin/category-structures/compare?leftId=${encodeURIComponent(leftId)}&rightId=${encodeURIComponent(rightId)}`),
   adminUpdateCategoryStructure: (id: string, body: Partial<Pick<CategoryStructure, "title" | "description" | "qualityStatus" | "comment">>) =>

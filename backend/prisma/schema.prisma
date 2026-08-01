@@ -282,6 +282,9 @@ model CategoryStructure {
   publishedAt          DateTime?
   activatedAt          DateTime?
   archivedAt           DateTime?
+  emergencyDisabledAt  DateTime?
+  emergencyDisabledByAdminId String?
+  emergencyDisableReason String?
   comment              String?
   importFileName       String?
   importHash           String?
@@ -294,6 +297,7 @@ model CategoryStructure {
   publishedByAdmin     User?               @relation("CategoryStructurePublishedBy", fields: [publishedByAdminId], references: [id], onDelete: SetNull)
   categories           Category[]
   requestSnapshots     RequestCategorySnapshot[]
+  requestUpdateRevisions RequestStructureUpdateRevision[]
 
   @@unique([scopeKey, versionNumber])
   @@index([scopeType, status])
@@ -515,6 +519,9 @@ model ClientRequest {
   completedAt            DateTime?
   cancelledAt            DateTime?
   archivedAt             DateTime?
+  isHiddenFromPerformers Boolean              @default(false)
+  hiddenReason           String?
+  structureUpdatePendingAt DateTime?
   client                 User                 @relation("ClientRequests", fields: [clientId], references: [id])
   createdByManager       User?                @relation("ManagerCreatedRequests", fields: [createdByManagerId], references: [id], onDelete: SetNull)
   city                   City                 @relation(fields: [cityId], references: [id])
@@ -532,12 +539,38 @@ model ClientRequest {
   visitDisputes          RequestVisitDispute[]
   serviceMessages        ServiceMessage[]
   serviceAttachments     ServiceMessageAttachment[]
+  structureUpdateRevisions RequestStructureUpdateRevision[]
 
   @@index([cityId, status])
   @@index([publicNumber])
   @@index([clientId])
   @@index([createdByManagerId])
   @@index([selectedPerformerId])
+}
+
+model RequestStructureUpdateRevision {
+  id                    String            @id @default(cuid())
+  requestId             String
+  targetStructureId     String
+  previousSnapshotId    String?
+  status                String            @default("pending_customer_confirmation")
+  previousSnapshotJson  String
+  proposedSnapshotJson  String
+  comparisonJson        String            @default("{}")
+  initiatedByAdminId    String
+  initiatedAt           DateTime          @default(now())
+  customerConfirmedAt   DateTime?
+  cancelledAt           DateTime?
+  cancelledByAdminId    String?
+  cancellationReason    String?
+  appliedSnapshotId     String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  request               ClientRequest     @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  targetStructure       CategoryStructure @relation(fields: [targetStructureId], references: [id])
+
+  @@index([requestId, status])
+  @@index([targetStructureId, status])
 }
 
 model RequestResponse {
@@ -585,6 +618,7 @@ model Chat {
   termsUpdatedAt DateTime?
   termsUpdatedByUserId String?
   agreementFinalizedAt DateTime?
+  structureTermsStaleAt DateTime?
   conditionsJson String?
   notAgreedAt DateTime?
   reopenedAt  DateTime?
