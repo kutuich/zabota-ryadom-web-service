@@ -685,9 +685,20 @@ async function runUserManagementSecurityTests() {
   assert.equal(response.payload.user.mustChangePassword, true);
   const temporaryToken = response.payload.token as string;
 
+  response = await apiRequest(app, "/api/auth/me", { method: "GET", token: temporaryToken });
+  assert.equal(response.status, 200);
+  assert.equal(response.payload.user.mustChangePassword, true);
+
   response = await apiRequest(app, "/api/requests", { method: "GET", token: temporaryToken });
   assert.equal(response.status, 403);
-  assert.equal(response.payload.code, "password_change_required");
+  assert.equal(response.payload.code, "temporary_password_change_required");
+  response = await apiRequest(app, "/api/me/change-password", {
+    method: "POST",
+    token: temporaryToken,
+    body: { currentPassword: temporaryPassword, newPassword: "Blocked!Password2026", newPasswordConfirmation: "Blocked!Password2026" }
+  });
+  assert.equal(response.status, 403);
+  assert.equal(response.payload.code, "temporary_password_change_required");
   response = await apiRequest(app, "/api/auth/change-temporary-password", {
     method: "POST",
     token: temporaryToken,
@@ -695,10 +706,46 @@ async function runUserManagementSecurityTests() {
   });
   assert.equal(response.status, 200, JSON.stringify(response.payload));
   const normalToken = response.payload.token as string;
+  const afterTemporaryChange = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+  assert.equal(afterTemporaryChange.mustChangePassword, false);
+  assert.equal(afterTemporaryChange.temporaryPasswordExpiresAt, null);
+  assert.ok(afterTemporaryChange.passwordChangedAt);
+  assert.equal(afterTemporaryChange.authTokenVersion, 2);
+  const temporaryChangeAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "USER_TEMPORARY_PASSWORD_CHANGED", entityId: target.id }, orderBy: { createdAt: "desc" } });
+  assert.equal(temporaryChangeAudit.payloadJson?.includes(temporaryPassword), false);
+  assert.equal(temporaryChangeAudit.payloadJson?.includes("Replacement!Pass2026"), false);
   response = await apiRequest(app, "/api/me/profile", { method: "GET", token: normalToken });
   assert.equal(response.status, 200);
   response = await apiRequest(app, "/api/me/profile", { method: "GET", token: temporaryToken });
   assert.equal(response.status, 401);
+  response = await apiRequest(app, "/api/auth/login", { method: "POST", body: { phoneOrEmail: target.email, password: temporaryPassword } });
+  assert.equal(response.status, 401);
+  response = await apiRequest(app, "/api/auth/login", { method: "POST", body: { phoneOrEmail: target.email, password: "Replacement!Pass2026" } });
+  assert.equal(response.status, 200);
+  response = await apiRequest(app, "/api/auth/change-temporary-password", {
+    method: "POST",
+    token: normalToken,
+    body: { newPassword: "NotAllowed!Pass2026", newPasswordConfirmation: "NotAllowed!Pass2026" }
+  });
+  assert.equal(response.status, 409);
+  assert.equal(response.payload.code, "temporary_password_not_required");
+
+  const otherUserBefore = await prisma.user.findUniqueOrThrow({ where: { id: superadmin.id } });
+  response = await apiRequest(app, "/api/auth/change-temporary-password", {
+    method: "POST",
+    token: normalToken,
+    body: { userId: superadmin.id, newPassword: "NotAllowed!Pass2026", newPasswordConfirmation: "NotAllowed!Pass2026" }
+  });
+  assert.equal(response.status, 400);
+  assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: superadmin.id } })).passwordHash, otherUserBefore.passwordHash);
+
+  response = await apiRequest(app, "/api/auth/change-temporary-password", {
+    method: "POST",
+    token: tokenFor(expiredTemporaryUser.id, "client"),
+    body: { newPassword: "Replacement!Pass2026", newPasswordConfirmation: "Replacement!Pass2026" }
+  });
+  assert.equal(response.status, 401);
+  assert.equal(response.payload.code, "temporary_password_expired");
 
   response = await apiRequest(app, "/api/me/profile", {
     method: "PATCH",

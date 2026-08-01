@@ -22,6 +22,7 @@ import {
 } from "../routes/navigation";
 import { formatDateRu, formatTimeRu, parseDateRu } from "../utils/dateTime";
 import { effectiveRoleForUser } from "../utils/authRole";
+import { TEMPORARY_PASSWORD_PATH, temporaryPasswordRedirectPath } from "../routes/security";
 import {
   adminPaymentDisplayStatus,
   adminPaymentProviderLabel,
@@ -184,6 +185,7 @@ assert.match(appLayout, /Вернуться в админку/);
 const accountSecurityPanel = read("components/AccountSecurityPanel.tsx");
 const temporaryPasswordPage = read("pages/TemporaryPasswordPage.tsx");
 const appRoutesForSecurity = read("App.tsx");
+const securityRoutes = read("routes/security.ts");
 const adminSecurityDashboard = read("pages/AdminDashboard.tsx");
 assert.match(accountSecurityPanel, /Настройки профиля/);
 assert.match(accountSecurityPanel, /Изменить пароль/);
@@ -191,8 +193,16 @@ assert.match(accountSecurityPanel, /Завершить все остальные
 assert.match(accountSecurityPanel, /Сохранить никнейм/);
 assert.match(temporaryPasswordPage, /Создайте новый пароль/);
 assert.match(temporaryPasswordPage, /changeTemporaryPassword/);
+assert.doesNotMatch(temporaryPasswordPage, /temporaryPassword|currentPassword/);
 assert.match(appRoutesForSecurity, /user\.mustChangePassword/);
-assert.match(appRoutesForSecurity, /\/app\/security\/change-temporary-password/);
+assert.match(securityRoutes, /\/app\/security\/change-temporary-password/);
+assert.match(appRoutesForSecurity, /location\.pathname !== TEMPORARY_PASSWORD_PATH/);
+assert.match(accountSecurityPanel, /user\.mustChangePassword/);
+assert.match(accountSecurityPanel, /Navigate to=\{TEMPORARY_PASSWORD_PATH\}/);
+assert.equal(temporaryPasswordRedirectPath({ mustChangePassword: true }, "/app/client/profile"), TEMPORARY_PASSWORD_PATH);
+assert.equal(temporaryPasswordRedirectPath({ mustChangePassword: true }, "/app"), TEMPORARY_PASSWORD_PATH);
+assert.equal(temporaryPasswordRedirectPath({ mustChangePassword: true }, TEMPORARY_PASSWORD_PATH), null);
+assert.equal(temporaryPasswordRedirectPath({ mustChangePassword: false }, "/app/client/profile"), null);
 assert.match(adminSecurityDashboard, /Сбросить пароль/);
 assert.match(adminSecurityDashboard, /Показывается только один раз/);
 assert.match(adminSecurityDashboard, /Завершить все сеансы/);

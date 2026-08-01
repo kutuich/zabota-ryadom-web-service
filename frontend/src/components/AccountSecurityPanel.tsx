@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Eye, EyeOff, KeyRound, LogOut, Save } from "lucide-react";
+import { Navigate } from "react-router-dom";
 import { api, setStoredToken } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import { TEMPORARY_PASSWORD_PATH } from "../routes/security";
 import { formatDateTimeRu } from "../utils/dateTime";
 
 export function AccountSecurityPanel() {
@@ -13,6 +15,7 @@ export function AccountSecurityPanel() {
 
   useEffect(() => setDisplayName(user?.displayName ?? ""), [user?.displayName]);
   if (!user) return null;
+  if (user.mustChangePassword) return <Navigate to={TEMPORARY_PASSWORD_PATH} replace />;
 
   async function saveName() {
     try {

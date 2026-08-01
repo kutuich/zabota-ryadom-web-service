@@ -72,7 +72,7 @@ accountSecurityRouter.post("/sessions/revoke-others", asyncHandler(async (req, r
 }));
 
 temporaryPasswordRouter.post("/change-temporary-password", authenticate, asyncHandler(async (req, res) => {
-  const input = z.object({ newPassword: z.string(), newPasswordConfirmation: z.string() }).parse(req.body);
+  const input = z.object({ newPassword: z.string(), newPasswordConfirmation: z.string() }).strict().parse(req.body);
   if (input.newPassword !== input.newPasswordConfirmation) throw new HttpError(400, "Пароли не совпадают", "password_confirmation_mismatch");
   const current = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.id } });
   if (!current.mustChangePassword) throw new HttpError(409, "Обязательная смена пароля не требуется", "temporary_password_not_required");
@@ -81,7 +81,30 @@ temporaryPasswordRouter.post("/change-temporary-password", authenticate, asyncHa
   if (current.passwordHash && await bcrypt.compare(input.newPassword, current.passwordHash)) throw new HttpError(400, "Новый пароль должен отличаться от временного", "password_unchanged");
   const passwordHash = await bcrypt.hash(input.newPassword, 10);
   const user = await prisma.$transaction(async (tx) => {
-    const updated = await tx.user.update({ where: { id: current.id }, data: { passwordHash, mustChangePassword: false, temporaryPasswordExpiresAt: null, passwordChangedAt: new Date(), authTokenVersion: { increment: 1 } } });
+    const changedAt = new Date();
+    const claimed = await tx.user.updateMany({
+      where: {
+        id: current.id,
+        mustChangePassword: true,
+        authTokenVersion: current.authTokenVersion,
+        temporaryPasswordExpiresAt: { gt: changedAt }
+      },
+      data: {
+        passwordHash,
+        mustChangePassword: false,
+        temporaryPasswordExpiresAt: null,
+        passwordChangedAt: changedAt,
+        authTokenVersion: { increment: 1 }
+      }
+    });
+    if (claimed.count !== 1) {
+      const latest = await tx.user.findUnique({ where: { id: current.id }, select: { mustChangePassword: true, temporaryPasswordExpiresAt: true } });
+      if (latest?.mustChangePassword && (!latest.temporaryPasswordExpiresAt || latest.temporaryPasswordExpiresAt <= changedAt)) {
+        throw new HttpError(401, "Срок временного пароля истёк. Обратитесь к Суперадминистратору", "temporary_password_expired");
+      }
+      throw new HttpError(409, "Обязательная смена пароля уже завершена", "temporary_password_not_required");
+    }
+    const updated = await tx.user.findUniqueOrThrow({ where: { id: current.id } });
     await createSecurityNotice(tx, current.id, null, "Временный пароль заменён", "Пароль вашей учётной записи изменён. Если это сделали не вы, обратитесь в сервис.");
     await writeAudit(current.id, "USER_TEMPORARY_PASSWORD_CHANGED", "user", current.id, { ipAddress: requestIp(req), userAgent: req.headers["user-agent"] ?? null }, tx);
     return updated;

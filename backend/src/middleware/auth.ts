@@ -55,7 +55,7 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
       mustChangePassword: user.mustChangePassword
     };
     if (user.mustChangePassword && !isTemporaryPasswordAllowedPath(req.originalUrl)) {
-      return next(new HttpError(403, "Сначала измените временный пароль", "password_change_required"));
+      return next(new HttpError(403, "Необходимо создать новый пароль", "temporary_password_change_required"));
     }
     if (actingRole && !["GET", "HEAD", "OPTIONS"].includes(req.method.toUpperCase())) {
       await writeAudit(user.id, "admin.acting.action", "http_request", null, {
@@ -109,5 +109,6 @@ export function requireAdminManagerOrSuperadmin(req: Request, _res: Response, ne
 export const requireUserBlockingAccess = requireAdminManagerOrSuperadmin;
 
 function isTemporaryPasswordAllowedPath(path: string) {
-  return path.startsWith("/api/auth/me") || path.startsWith("/api/auth/change-temporary-password");
+  const pathname = path.split("?", 1)[0];
+  return pathname === "/api/auth/me" || pathname === "/api/auth/change-temporary-password";
 }

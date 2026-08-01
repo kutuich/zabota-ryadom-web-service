@@ -13,6 +13,7 @@ import { VisualAuditShowcasePage } from "./pages/VisualAuditShowcasePage";
 import { OAuthCompletePage } from "./pages/OAuthCompletePage";
 import { ManagerDashboard } from "./pages/ManagerDashboard";
 import { canRoleOpenPath, defaultPathForRole, isKnownPathForRole, legacyAdminSectionRedirectPath, legacyAppRedirectPath } from "./routes/navigation";
+import { TEMPORARY_PASSWORD_PATH, temporaryPasswordRedirectPath } from "./routes/security";
 import type { UserRole } from "./types";
 import { effectiveRoleForUser } from "./utils/authRole";
 import { TemporaryPasswordPage } from "./pages/TemporaryPasswordPage";
@@ -47,7 +48,9 @@ export function VisualAuditRoutes() {
 
 export function App() {
   const { user, isLoading } = useAuth();
+  const location = useLocation();
   const effectiveRole = effectiveRoleForUser(user);
+  const temporaryPasswordRedirect = temporaryPasswordRedirectPath(user, location.pathname);
 
   if (isLoading) {
     return (
@@ -58,13 +61,17 @@ export function App() {
     );
   }
 
+  if (temporaryPasswordRedirect) {
+    return <Navigate to={temporaryPasswordRedirect} replace />;
+  }
+
   return (
     <Routes>
       <Route path="/" element={user && effectiveRole ? <Navigate to={defaultPathForRole(effectiveRole)} replace /> : <LandingAuthPage />} />
       <Route path="/app" element={user && effectiveRole ? <Navigate to={defaultPathForRole(effectiveRole)} replace /> : <LandingAuthPage />} />
       <Route path="/app/login" element={user && effectiveRole ? <Navigate to={defaultPathForRole(effectiveRole)} replace /> : <LandingAuthPage />} />
       <Route path="/app/oauth/complete" element={<OAuthCompletePage />} />
-      <Route path="/app/security/change-temporary-password" element={<TemporaryPasswordPage />} />
+      <Route path={TEMPORARY_PASSWORD_PATH} element={<TemporaryPasswordPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/help" element={<PublicHelpPage />} />
       <Route path="/legal" element={<LegalIndexPage />} />
@@ -99,8 +106,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   if (!user) {
     return <Navigate to="/app" replace state={{ from: location.pathname }} />;
   }
-  if (user.mustChangePassword && location.pathname !== "/app/security/change-temporary-password") {
-    return <Navigate to="/app/security/change-temporary-password" replace />;
+  if (user.mustChangePassword && location.pathname !== TEMPORARY_PASSWORD_PATH) {
+    return <Navigate to={TEMPORARY_PASSWORD_PATH} replace />;
   }
   return children;
 }
