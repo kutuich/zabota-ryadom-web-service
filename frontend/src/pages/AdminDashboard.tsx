@@ -1075,7 +1075,7 @@ export function AdminDashboard() {
         />
       )}
 
-      {activeTab === "Структуры категорий" && <AdminCategoryStructuresPage />}
+      {activeTab === "Структуры услуг" && <AdminCategoryStructuresPage />}
 
       {activeTab === "Архив" && (
         <section className="plain-section">
@@ -2128,7 +2128,7 @@ function adminTabFromPath(pathname: string) {
   if (pathname.startsWith("/app/admin/payments")) return "Платежи";
   if (pathname.startsWith("/app/admin/visit-reserve")) return "Резерв визитов";
   if (pathname.startsWith("/app/admin/blocked")) return "Блокировки";
-  if (pathname.startsWith("/app/admin/categories")) return "Структуры категорий";
+  if (pathname.startsWith("/app/admin/categories")) return "Структуры услуг";
   if (pathname.startsWith("/app/admin/legal")) return "Юридические документы";
   if (pathname.startsWith("/app/admin/archive")) return "Архив";
   if (pathname.startsWith("/app/admin/settings")) return "Настройки сервиса";

@@ -1,0 +1,15 @@
+{
+  "version": "2",
+  "scope": { "type": "region", "regionSlug": "hmao-yugra" },
+  "passport": { "title": "Структура услуг ХМАО — Югра", "versionNumber": "2.0", "qualityStatus": "reviewed", "description": "Региональные ценовые ориентиры." },
+  "categories": [
+    { "slug": "shopping-delivery", "title": "Покупки и поручения", "sortOrder": 30 },
+    { "slug": "shopping-pickup", "parentSlug": "shopping-delivery", "title": "Получить заказ", "descriptionForCustomer": "Получение небольшого заказа в ближайшем пункте выдачи.", "sortOrder": 40 }
+  ],
+  "taskTemplates": [
+    { "categorySlug": "shopping-pickup", "taskSlug": "pickup-order", "title": "Получить заказ", "formFields": [{ "id": "order_description", "label": "Что нужно получить?", "type": "textarea", "required": true }, { "id": "pickup_point", "label": "Пункт получения", "type": "text", "required": true }, { "id": "related_to_beneficiary_help", "label": "Подтверждаю, что заказ связан с помощью Подопечному", "type": "checkbox", "required": true }, { "id": "approximate_weight_kg", "label": "Примерный вес, кг", "type": "number", "min": 0 }, { "id": "approximate_size_comment", "label": "Примерный размер", "type": "text" }, { "id": "contains_restricted_items", "label": "В заказе есть товары с ограничениями на продажу", "type": "checkbox" }, { "id": "customer_comment", "label": "Комментарий Заказчика", "type": "textarea" }], "constraints": { "maxWalkingMinutes": 5, "maxCarryWeightKg": 7, "bulkyItems": false, "mustRelateToBeneficiaryHelp": true }, "sortOrder": 10 }
+  ],
+  "pricingRules": [
+    { "categorySlug": "shopping-pickup", "taskSlug": "pickup-order", "recommendedMinPrice": 450, "recommendedMaxPrice": 750, "defaultDurationMinutes": 60, "priceComment": "Региональный ориентир ХМАО — Югра." }
+  ]
+}

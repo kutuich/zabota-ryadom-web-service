@@ -8,8 +8,10 @@ import {
   buildStructureExport,
   CATEGORY_IMPORT_MAX_BYTES,
   categoriesForCity,
+  compareCategoryStructures,
   createDraftFromImport,
   createNewStructureVersion,
+  createRollbackDraft,
   createStructureFromParent,
   getCategoryCityStatuses,
   getCategoryStructure,
@@ -47,7 +49,8 @@ categoryStructuresRouter.get(
             title: effective.structure.title,
             qualityStatus: effective.structure.qualityStatus
           }
-        : null
+        : null,
+      layers: effective.layers.map((layer) => ({ id: layer.id, scopeType: layer.scopeType, versionNumber: layer.versionNumber, title: layer.title, qualityStatus: layer.qualityStatus }))
     });
   })
 );
@@ -143,6 +146,13 @@ adminCategoryStructuresRouter.get(
   })
 );
 adminCategoryStructuresRouter.get(
+  "/compare",
+  asyncHandler(async (req, res) => {
+    const input = z.object({ leftId: z.string().min(1), rightId: z.string().min(1) }).parse(req.query);
+    res.json(await compareCategoryStructures(input.leftId, input.rightId));
+  })
+);
+adminCategoryStructuresRouter.get(
   "/:id/export.xlsx",
   asyncHandler(async (req, res) => res.json(await buildStructureExport(req.params.id, req.user!.id)))
 );
@@ -163,6 +173,10 @@ adminCategoryStructuresRouter.post(
     const input = z.object({ comment: z.string().max(1000).optional() }).parse(req.body);
     res.status(201).json(await createNewStructureVersion(req.params.id, req.user!.id, input.comment));
   })
+);
+adminCategoryStructuresRouter.post(
+  "/:id/rollback",
+  asyncHandler(async (req, res) => res.status(201).json(await createRollbackDraft(req.params.id, req.user!.id)))
 );
 adminCategoryStructuresRouter.patch(
   "/:id",

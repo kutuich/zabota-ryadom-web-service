@@ -94,7 +94,7 @@ export const adminNavigation: NavGroup[] = [
     label: "Справочники",
     items: [
       { label: "Города", path: `${APP_ADMIN_PREFIX}/cities` },
-      { label: "Структуры категорий", path: `${APP_ADMIN_PREFIX}/categories` },
+      { label: "Структуры услуг", path: `${APP_ADMIN_PREFIX}/categories` },
       { label: "База знаний", path: `${APP_ADMIN_PREFIX}/knowledge` }
     ]
   },

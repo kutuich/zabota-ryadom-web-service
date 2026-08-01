@@ -192,6 +192,13 @@ assert.match(requestCreationForm, /request-quote__visits/);
 assert.match(requestCreationForm, /Визиты не должны пересекаться/);
 assert.match(requestCreationForm, /scrollIntoView/);
 assert.match(requestCreationForm, /focus\(\{ preventScroll: true \}\)/);
+assert.match(requestCreationForm, /dynamic-task-fields/);
+assert.match(requestCreationForm, /Также часто требуется/);
+assert.match(requestCreationForm, /taskFieldValues/);
+assert.match(requestCreationForm, /task\.aliases/);
+assert.match(requestCreationForm, /isDynamicFieldVisible/);
+assert.match(requestCreationForm, /isDynamicFieldRequired/);
+assert.doesNotMatch(requestCreationForm, /Побыть рядом 1–2 часа|Побыть рядом 3–4 часа|Доставить вещи/);
 assert.doesNotMatch(requestCreationForm, /Создать и опубликовать/);
 
 const visitReservePanel = read("components/VisitReservePanel.tsx");
@@ -814,8 +821,10 @@ const managerDashboardPayments = read("pages/ManagerDashboard.tsx");
 assert.doesNotMatch(managerDashboardPayments, /syncAdminTbankPayment|Сверить с T-Bank/);
 
 const categoryStructuresPage = read("pages/AdminCategoryStructuresPage.tsx");
-assert.equal(adminNavigation.flatMap((group) => group.items).some((item) => item.label === "Структуры категорий"), true);
-assert.match(categoryStructuresPage, /Структуры категорий/);
+assert.equal(adminNavigation.flatMap((group) => group.items).some((item) => item.label === "Структуры услуг"), true);
+assert.match(categoryStructuresPage, /Структуры услуг/);
+assert.match(categoryStructuresPage, /Сравнение версий/);
+assert.match(categoryStructuresPage, /Подготовить откат/);
 assert.match(categoryStructuresPage, /Города без локальной структуры/);
 assert.match(categoryStructuresPage, /Требуется локальная структура|statusLabel/);
 assert.match(categoryStructuresPage, /adminExportCategoryCityTemplate/);

@@ -1,0 +1,15 @@
+{
+  "version": "2",
+  "scope": { "type": "city", "citySlug": "yugorsk" },
+  "passport": { "title": "Структура услуг Югорска", "versionNumber": "2.0", "qualityStatus": "reviewed", "description": "Локальные ограничения и ценовые ориентиры Югорска." },
+  "categories": [
+    { "slug": "accompaniment", "title": "Сопровождение", "sortOrder": 40 },
+    { "slug": "accompaniment-standard", "parentSlug": "accompaniment", "title": "Сопроводить Подопечного", "descriptionForCustomer": "Сопровождение по Югорску и в другие места по согласованию.", "sortOrder": 10 }
+  ],
+  "taskTemplates": [
+    { "categorySlug": "accompaniment-standard", "taskSlug": "accompany", "title": "Сопроводить Подопечного", "aliases": ["МФЦ", "аптека", "больница", "парк", "сквер"], "formFields": [{ "id": "destination_type", "label": "Куда нужно сопроводить?", "type": "select", "required": true, "options": [{ "value": "clinic_or_hospital", "label": "Поликлиника или больница" }, { "value": "pharmacy", "label": "Аптека" }, { "value": "mfc", "label": "МФЦ" }, { "value": "bank", "label": "Банк" }, { "value": "shop", "label": "Магазин" }, { "value": "park_or_square", "label": "Парк или сквер" }, { "value": "other", "label": "Другое место" }] }, { "id": "destination_details", "label": "Уточните другое место", "type": "text", "requiredWhen": { "fieldId": "destination_type", "equals": "other" } }, { "id": "destination_address_or_name", "label": "Название или адрес места", "type": "text" }, { "id": "transport_method", "label": "Как добраться?", "type": "select", "options": [{ "value": "walking", "label": "Пешком" }, { "value": "public_transport", "label": "Общественный транспорт" }, { "value": "customer_taxi", "label": "Такси Заказчика" }] }, { "id": "return_home_required", "label": "Нужно сопроводить обратно домой", "type": "checkbox" }, { "id": "accompaniment_duration_minutes", "label": "Продолжительность сопровождения, минут", "type": "number", "required": true, "min": 15, "max": 480, "helpText": "Время сопровождения учитывается один раз в общей длительности визита." }], "durationEffect": { "fieldId": "accompaniment_duration_minutes", "modeWhenOnlyTask": "replace_visit_duration", "modeWithOtherTasks": "add_to_visit_duration" }, "sortOrder": 10 }
+  ],
+  "pricingRules": [
+    { "categorySlug": "accompaniment-standard", "taskSlug": "accompany", "recommendedMinPrice": 800, "recommendedMaxPrice": 1500, "defaultDurationMinutes": null, "priceComment": "Ориентир для Югорска; точная сумма согласуется в чате." }
+  ]
+}

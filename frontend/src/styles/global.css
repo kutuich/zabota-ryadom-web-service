@@ -4021,6 +4021,53 @@ summary:focus-visible {
   margin-top: 12px;
 }
 
+.task-options label > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.task-options label small {
+  color: var(--muted-color, #5d6b75);
+  line-height: 1.45;
+}
+
+.task-recommendations,
+.dynamic-task-fields {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--border-color, #dfe5e8);
+  border-radius: 8px;
+}
+
+.task-recommendations .secondary-button {
+  justify-self: start;
+}
+
+.dynamic-task-fields section {
+  display: grid;
+  gap: 10px;
+}
+
+.dynamic-task-fields h4 {
+  margin: 0;
+}
+
+.category-version-compare {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-color, #dfe5e8);
+}
+
+.category-version-compare h4,
+.category-version-compare p {
+  margin: 0;
+}
+
 .task-option,
 .visit-slot,
 .contact-summary {

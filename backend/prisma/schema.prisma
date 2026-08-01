@@ -280,6 +280,7 @@ model CategoryStructure {
   createdAt            DateTime            @default(now())
   updatedAt            DateTime            @updatedAt
   publishedAt          DateTime?
+  activatedAt          DateTime?
   archivedAt           DateTime?
   comment              String?
   importFileName       String?
@@ -347,11 +348,21 @@ model CategoryTaskTemplate {
   helperHint     String?
   managerHint    String?
   safetyNote     String?
+  taskKind       String                    @default("standard")
+  aliasesJson    String                    @default("[]")
+  durationEffectJson String                @default("{}")
+  priceEffectJson String                   @default("{}")
+  requiresComment Boolean                 @default(false)
+  allowedRegionsJson String               @default("[]")
+  formFieldsJson String                   @default("[]")
+  recommendationsJson String              @default("[]")
+  constraintsJson String                  @default("{}")
   sortOrder      Int                       @default(100)
   isActive       Boolean                   @default(true)
   createdAt      DateTime                  @default(now())
   updatedAt      DateTime                  @updatedAt
   category       Category                  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  pricingRules   CategoryPricingRule[]
   requestSnapshots RequestCategorySnapshot[]
 
   @@unique([categoryId, slug])
@@ -361,10 +372,13 @@ model CategoryTaskTemplate {
 model CategorySafetyRule {
   id              String   @id @default(cuid())
   categoryId      String
+  ruleKey         String   @default("")
   title           String
   description     String
   severity        String   @default("warning")
   isBlocking      Boolean  @default(false)
+  applicabilityJson String @default("{}")
+  isActive        Boolean  @default(true)
   showToCustomer  Boolean  @default(true)
   showToHelper    Boolean  @default(true)
   showToManager   Boolean  @default(true)
@@ -374,22 +388,27 @@ model CategorySafetyRule {
   category        Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
   @@index([categoryId, sortOrder])
+  @@index([categoryId, ruleKey, isActive])
 }
 
 model CategoryPricingRule {
   id                     String   @id @default(cuid())
   categoryId             String
+  taskTemplateId         String?
   recommendedPackageCode String?
   recommendedMinPrice    Int?
   recommendedMaxPrice    Int?
   defaultDurationMinutes Int?
   priceComment           String?
+  coveredTaskSlugsJson   String   @default("[]")
   isActive               Boolean  @default(true)
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
   category               Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  taskTemplate           CategoryTaskTemplate? @relation(fields: [taskTemplateId], references: [id], onDelete: Cascade)
 
   @@index([categoryId, isActive])
+  @@index([taskTemplateId, isActive])
 }
 
 model HelperCategoryPreference {

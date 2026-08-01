@@ -65,14 +65,10 @@ const forbiddenImportTerms = ["клиент", "исполнитель", "ком�
 const repairCategoryTerms = ["электрик", "электрика", "сантехник", "сантехника", "газ", "ремонт", "бытовая техника", "строительные работы"];
 
 const federalCategories = [
-  ["home-help", "Помощь по дому", 700, 1100, ["Лёгкая уборка", "Мытьё посуды", "Вынос мусора", "Полив растений", "Помощь с вещами", "Простая подготовка еды"]],
-  ["shopping-delivery", "Покупки и доставка", 400, 700, ["Купить продукты", "Купить товары для дома", "Купить в аптеке по готовому списку", "Получить заказ", "Доставить вещи"]],
-  ["accompaniment", "Сопровождение", 800, 1500, ["В поликлинику без медицинских процедур", "В магазин", "В МФЦ, банк или организацию", "На прогулку", "До транспорта или такси", "Встреча или проводы"]],
-  ["supervision", "Уход на дому без медицинских процедур", 700, 1200, ["Побыть рядом", "Помощь с гигиеной", "Смена подгузника", "Помощь переодеться", "Помощь с приёмом пищи", "Прогулка и присмотр", "Регулярный уход без медицинских процедур"]],
-  ["documents-household", "Помощь с документами и организацией быта", null, null, ["Записаться на приём", "Распечатать или отсканировать документы", "Помочь разобраться с квитанцией", "Сопроводить в организацию", "Помочь заполнить простую форму"]],
-  ["regular-help", "Регулярная помощь", 700, null, ["Регулярные покупки", "Регулярная помощь по дому", "Регулярное сопровождение", "Регулярный присмотр без медицинских процедур"]],
-  ["urgent-help", "Срочная помощь", null, null, ["Срочные покупки", "Срочное сопровождение", "Срочная бытовая помощь", "Срочно забрать или передать вещь"]],
-  ["other", "Другое", null, null, ["Задача по описанию Заказчика"]]
+  ["home-help", "Помощь по дому", 700, 1100, ["Лёгкая уборка", "Мытьё посуды", "Вынос мусора", "Полив растений", "Помочь разобрать и убрать вещи", "Приготовить простую еду"]],
+  ["supervision", "Уход на дому", 700, 1200, ["Побыть рядом", "Присмотр во время отсутствия родственников", "Прогулка и присмотр", "Бытовая поддержка рядом"]],
+  ["shopping-delivery", "Покупки и поручения", 400, 700, ["Купить продукты", "Купить товары для дома", "Купить в аптеке по готовому списку", "Получить заказ"]],
+  ["accompaniment", "Сопровождение", 800, 1500, ["Сопроводить Подопечного"]]
 ] as const;
 
 const commonSafetyRules = [
@@ -87,7 +83,7 @@ const commonSafetyRules = [
 
 export type CategoryImportPayload = {
   version?: string;
-  scope: { type: CategoryScopeType; regionId?: string | null; cityId?: string | null };
+  scope: { type: CategoryScopeType; regionId?: string | null; regionSlug?: string | null; cityId?: string | null; citySlug?: string | null };
   passport?: {
     title?: string;
     description?: string | null;
@@ -113,9 +109,56 @@ export type CategoryImportPayload = {
     visibleForManager?: boolean;
     visibleForAdmin?: boolean;
   }>;
-  taskTemplates?: Array<{ categorySlug: string; taskSlug: string; title: string; description?: string | null; customerHint?: string | null; helperHint?: string | null; managerHint?: string | null; safetyNote?: string | null; sortOrder?: number; active?: boolean }>;
-  safetyRules?: Array<{ categorySlug: string; title: string; description: string; severity?: string; isBlocking?: boolean; showToCustomer?: boolean; showToHelper?: boolean; showToManager?: boolean; sortOrder?: number }>;
-  pricingRules?: Array<{ categorySlug: string; packageCode?: string | null; recommendedMinPrice?: number | null; recommendedMaxPrice?: number | null; defaultDurationMinutes?: number | null; priceComment?: string | null; active?: boolean }>;
+  taskTemplates?: Array<{
+    categorySlug: string;
+    taskSlug: string;
+    title: string;
+    description?: string | null;
+    shortDescription?: string | null;
+    customerHint?: string | null;
+    helperHint?: string | null;
+    managerHint?: string | null;
+    safetyNote?: string | null;
+    taskKind?: "standard" | "additional" | "both";
+    aliases?: string[];
+    durationEffect?: Record<string, unknown> | null;
+    priceEffect?: Record<string, unknown> | null;
+    requiresComment?: boolean;
+    allowedRegions?: string[];
+    formFields?: Array<{
+      id: string;
+      label: string;
+      type: "text" | "textarea" | "number" | "select" | "checkbox" | "time";
+      required?: boolean;
+      requiredWhen?: { fieldId: string; equals: string | number | boolean };
+      placeholder?: string | null;
+      helpText?: string | null;
+      options?: Array<{ value: string; label: string }>;
+      min?: number | null;
+      max?: number | null;
+    }>;
+    recommendations?: Array<{ taskSlug: string; label?: string | null }>;
+    constraints?: Record<string, unknown> | null;
+    sortOrder?: number;
+    active?: boolean;
+  }>;
+  safetyRules?: Array<{ categorySlug: string; ruleKey?: string; title: string; description: string; severity?: string; isBlocking?: boolean; applicability?: SafetyRuleApplicability; active?: boolean; showToCustomer?: boolean; showToHelper?: boolean; showToManager?: boolean; sortOrder?: number }>;
+  pricingRules?: Array<{ categorySlug: string; taskSlug?: string | null; packageCode?: string | null; coveredTaskSlugs?: string[]; recommendedMinPrice?: number | null; recommendedMaxPrice?: number | null; defaultDurationMinutes?: number | null; priceComment?: string | null; active?: boolean }>;
+};
+
+export type SafetyRuleCondition = {
+  fieldId: string;
+  operator: "equals" | "not_equals" | "in" | "not_in" | "gt" | "gte" | "lt" | "lte" | "truthy" | "falsy";
+  value?: unknown;
+};
+
+export type SafetyRuleApplicability = {
+  appliesToTaskSlugs?: string[];
+  appliesToCategorySlugs?: string[];
+  conditions?: SafetyRuleCondition[];
+  forbiddenValues?: Array<{ fieldId: string; values: unknown[] }>;
+  numericLimits?: Array<{ fieldId: string; minValue?: number; maxValue?: number }>;
+  requiredConfirmation?: Array<{ fieldId: string; value?: boolean }>;
 };
 
 export async function ensureFederalCategoryStructure(client: DbClient = prisma) {
@@ -169,17 +212,13 @@ export async function ensureFederalCategoryStructure(client: DbClient = prisma) 
       const [ruleTitle, description, severity, isBlocking] = commonSafetyRules[index];
       const existing = await client.categorySafetyRule.findFirst({ where: { categoryId: root.id, title: ruleTitle } });
       if (!existing) {
-        await client.categorySafetyRule.create({ data: { categoryId: root.id, title: ruleTitle, description, severity, isBlocking, sortOrder: (index + 1) * 10 } });
+        await client.categorySafetyRule.create({ data: { categoryId: root.id, ruleKey: slugify(ruleTitle), title: ruleTitle, description, severity, isBlocking, applicabilityJson: "{}", sortOrder: (index + 1) * 10 } });
       }
     }
 
-    const priceComment = rootSlug === "regular-help"
-      ? "По согласованию, обычно от 700 ₽ за выход. Федеральный ориентир требует регионального уточнения."
-      : rootSlug === "urgent-help"
-        ? "Зависит от задачи; ориентир доплаты за срочность 200–500 ₽."
-        : minPrice === null
-          ? "По согласованию. Федеральный ориентир требует регионального уточнения."
-          : "Федеральный ориентир. Точная сумма согласуется в чате.";
+    const priceComment = minPrice === null
+      ? "По согласованию. Федеральный ориентир требует регионального уточнения."
+      : "Федеральный ориентир. Точная сумма согласуется в чате.";
     const existingPricing = await client.categoryPricingRule.findFirst({ where: { categoryId: root.id, isActive: true } });
     if (existingPricing) {
       await client.categoryPricingRule.update({ where: { id: existingPricing.id }, data: { recommendedMinPrice: minPrice, recommendedMaxPrice: maxPrice, priceComment } });
@@ -193,18 +232,16 @@ export async function ensureFederalCategoryStructure(client: DbClient = prisma) 
 export async function getEffectiveCategoryStructure(cityId: string, client: DbClient = prisma) {
   const city = await client.city.findUnique({ where: { id: cityId }, include: { regionRecord: true } });
   if (!city) throw new HttpError(404, "Город не найден", "city_not_found");
-
-  const local = await findActiveStructure({ scopeCityId: city.id }, client);
-  if (local) return effectiveResult(local, "local_ready", city);
-
-  if (city.regionId) {
-    const regional = await findActiveStructure({ scopeRegionId: city.regionId, scopeType: "region" }, client);
-    if (regional) return effectiveResult(regional, "uses_region_fallback", city);
-  }
-
-  const federal = await findActiveStructure({ scopeKey: "federal" }, client);
-  if (federal) return effectiveResult(federal, "uses_federal_fallback", city);
-  return { status: "missing_structure" as const, statusLabel: effectiveStatusLabel("missing_structure"), structure: null, city };
+  const [federal, regional, local] = await Promise.all([
+    findActiveStructure({ scopeKey: "federal" }, client),
+    city.regionId ? findActiveStructure({ scopeRegionId: city.regionId, scopeType: "region" }, client) : null,
+    findActiveStructure({ scopeCityId: city.id, scopeType: "city" }, client)
+  ]);
+  const layers = [federal, regional, local].filter((item): item is NonNullable<typeof item> => Boolean(item));
+  if (local) return effectiveResult(local, "local_ready", city, layers);
+  if (regional) return effectiveResult(regional, "uses_region_fallback", city, layers);
+  if (federal) return effectiveResult(federal, "uses_federal_fallback", city, layers);
+  return { status: "missing_structure" as const, statusLabel: effectiveStatusLabel("missing_structure"), structure: null, layers: [], city };
 }
 
 export async function listCategoryStructures(status: "working" | "active" | "draft" | "archived" | "all" = "working") {
@@ -277,6 +314,58 @@ export async function createNewStructureVersion(id: string, adminId: string, com
   return getCategoryStructure(structure.id);
 }
 
+export async function createRollbackDraft(id: string, adminId: string) {
+  const source = await getCategoryStructure(id);
+  const versionNumber = await nextAvailableVersion(source.scopeKey);
+  const structure = await prisma.$transaction(async (tx) => {
+    const created = await cloneStructureTx(tx, source.id, {
+      scopeType: source.scopeType as CategoryScopeType,
+      regionId: source.scopeRegionId,
+      cityId: source.scopeCityId,
+      scopeKey: source.scopeKey,
+      versionNumber,
+      title: source.title,
+      comment: `Черновик отката на основе v${source.versionNumber}`,
+      source: "rollback",
+      createdByAdminId: adminId
+    });
+    await writeAudit(adminId, "admin.category_structure.rollback_draft", "category_structure", created.id, { sourceStructureId: source.id, sourceVersion: source.versionNumber }, tx);
+    return created;
+  });
+  return getCategoryStructure(structure.id);
+}
+
+export async function compareCategoryStructures(leftId: string, rightId: string) {
+  const [left, right] = await Promise.all([getCategoryStructure(leftId), getCategoryStructure(rightId)]);
+  if (left.scopeKey !== right.scopeKey) throw new HttpError(400, "Сравнивать можно только версии одной области действия", "category_structure_scope_mismatch");
+  const summarize = (structure: any) => {
+    const categoryById = new Map(structure.categories.map((category: any) => [category.id, category]));
+    return {
+      categories: new Map<string, string>(structure.categories.map((category: any) => [category.slug, JSON.stringify({ parentSlug: category.parentId ? (categoryById.get(category.parentId) as any)?.slug : null, title: category.title, status: category.status, visible: category.isVisibleForCustomer })])),
+      tasks: new Map<string, string>(structure.categories.flatMap((category: any) => category.taskTemplates.map((task: any) => [`${category.slug}:${task.slug}`, JSON.stringify({ title: task.title, active: task.isActive, taskKind: task.taskKind, formFields: safeJson(task.formFieldsJson), constraints: safeJson(task.constraintsJson) })]))),
+      prices: new Map<string, string>(structure.categories.flatMap((category: any) => category.pricingRules.map((rule: any) => [`${category.slug}:${rule.taskTemplate?.slug ?? "category"}:${rule.recommendedPackageCode ?? "single"}`, JSON.stringify({ min: rule.recommendedMinPrice, max: rule.recommendedMaxPrice, duration: rule.defaultDurationMinutes, active: rule.isActive })])))
+    };
+  };
+  const leftSummary = summarize(left);
+  const rightSummary = summarize(right);
+  return {
+    left: publicStructurePassport(left),
+    right: publicStructurePassport(right),
+    categories: diffMap(leftSummary.categories, rightSummary.categories),
+    tasks: diffMap(leftSummary.tasks, rightSummary.tasks),
+    pricingRules: diffMap(leftSummary.prices, rightSummary.prices)
+  };
+}
+
+function diffMap(left: Map<string, string>, right: Map<string, string>) {
+  const keys = [...new Set([...left.keys(), ...right.keys()])].sort();
+  return {
+    added: keys.filter((key) => !left.has(key) && right.has(key)),
+    removed: keys.filter((key) => left.has(key) && !right.has(key)),
+    changed: keys.filter((key) => left.has(key) && right.has(key) && left.get(key) !== right.get(key))
+  };
+}
+
 export async function updateDraftStructure(id: string, input: { title?: string; description?: string | null; qualityStatus?: string; comment?: string | null }, adminId: string) {
   const current = await prisma.categoryStructure.findUnique({ where: { id } });
   if (!current) throw new HttpError(404, "Структура категорий не найдена", "category_structure_not_found");
@@ -300,7 +389,7 @@ export async function publishCategoryStructure(id: string, adminId: string) {
     });
     const published = await tx.categoryStructure.update({
       where: { id },
-      data: { status: "active", publishedAt: new Date(), publishedByAdminId: adminId, archivedAt: null }
+      data: { status: "active", publishedAt: new Date(), activatedAt: new Date(), publishedByAdminId: adminId, archivedAt: null }
     });
     await writeAudit(adminId, "admin.category_structure.publish", "category_structure", id, { scopeKey: current.scopeKey, versionNumber: current.versionNumber }, tx);
     return published;
@@ -350,8 +439,9 @@ export function validateCategoryImport(payload: CategoryImportPayload) {
   const errors: string[] = [];
   const warnings: string[] = [];
   if (!CATEGORY_SCOPE_TYPES.includes(payload.scope?.type)) errors.push("Некорректный тип структуры.");
-  if (payload.scope?.type === "region" && !payload.scope.regionId) errors.push("Для региональной структуры нужен regionId.");
-  if (payload.scope?.type === "city" && !payload.scope.cityId) errors.push("Для городской структуры нужен cityId.");
+  if (payload.passport?.versionNumber && !/^\d+\.\d+$/.test(payload.passport.versionNumber)) errors.push("Версия структуры должна иметь формат 2.0.");
+  if (payload.scope?.type === "region" && !payload.scope.regionId && !payload.scope.regionSlug) errors.push("Для региональной структуры нужен regionId или regionSlug.");
+  if (payload.scope?.type === "city" && !payload.scope.cityId && !payload.scope.citySlug) errors.push("Для городской структуры нужен cityId или citySlug.");
   if (!Array.isArray(payload.categories) || payload.categories.length === 0) errors.push("Добавьте хотя бы одну категорию.");
 
   const slugs = new Set<string>();
@@ -367,14 +457,63 @@ export function validateCategoryImport(payload: CategoryImportPayload) {
   for (const row of [...(payload.taskTemplates ?? []), ...(payload.safetyRules ?? []), ...(payload.pricingRules ?? [])]) {
     if (!slugs.has(row.categorySlug)) errors.push(`Категория ${row.categorySlug} не найдена.`);
   }
+  const taskKeys = new Set<string>();
+  const taskSlugs = new Set<string>();
+  for (const task of payload.taskTemplates ?? []) {
+    const key = `${task.categorySlug}:${task.taskSlug}`;
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(task.taskSlug ?? "")) errors.push(`Некорректный slug задачи: ${task.taskSlug || "пусто"}.`);
+    if (taskKeys.has(key)) errors.push(`Задача повторяется: ${key}.`);
+    taskKeys.add(key);
+    taskSlugs.add(task.taskSlug);
+    if (task.taskKind && !["standard", "additional", "both"].includes(task.taskKind)) errors.push(`Некорректный тип задачи ${task.taskSlug}.`);
+    const fieldIds = new Set<string>();
+    for (const field of task.formFields ?? []) {
+      if (!/^[a-z][a-z0-9_]*$/.test(field.id ?? "")) errors.push(`Некорректное id поля ${field.id || "пусто"} для ${task.taskSlug}.`);
+      if (fieldIds.has(field.id)) errors.push(`Поле ${field.id} повторяется в ${task.taskSlug}.`);
+      fieldIds.add(field.id);
+      if (!["text", "textarea", "number", "select", "checkbox", "time"].includes(field.type)) errors.push(`Некорректный тип поля ${field.id} для ${task.taskSlug}.`);
+      if (field.type === "select" && !(field.options?.length)) errors.push(`Для поля ${field.id} нужны options.`);
+      if (field.requiredWhen && !fieldIds.has(field.requiredWhen.fieldId) && !(task.formFields ?? []).some((candidate) => candidate.id === field.requiredWhen!.fieldId)) {
+        errors.push(`Условие поля ${field.id} ссылается на неизвестное поле ${field.requiredWhen.fieldId}.`);
+      }
+    }
+  }
+  for (const task of payload.taskTemplates ?? []) {
+    for (const recommendation of task.recommendations ?? []) {
+      if (!taskSlugs.has(recommendation.taskSlug)) errors.push(`Рекомендуемая задача ${recommendation.taskSlug} не найдена.`);
+    }
+  }
+  const safetyRuleKeys = new Set<string>();
   for (const row of payload.safetyRules ?? []) {
+    const normalizedRuleKey = row.ruleKey || slugify(row.title);
+    const safetyKey = `${row.categorySlug}:${normalizedRuleKey}`;
+    if (safetyRuleKeys.has(safetyKey)) errors.push(`Ограничение повторяется: ${safetyKey}.`);
+    safetyRuleKeys.add(safetyKey);
     if (row.severity && !["info", "warning", "forbidden"].includes(row.severity)) errors.push(`Некорректная важность ограничения для ${row.categorySlug}.`);
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedRuleKey)) errors.push(`Некорректный ruleKey ограничения для ${row.categorySlug}.`);
+    const applicability = row.applicability ?? {};
+    const hasMachineCondition = Boolean(
+      applicability.conditions?.length
+      || applicability.forbiddenValues?.length
+      || applicability.numericLimits?.length
+      || applicability.requiredConfirmation?.length
+    );
+    if (row.isBlocking && !hasMachineCondition) errors.push(`Для блокирующего правила ${row.ruleKey || row.title} необходимо указать машиночитаемое условие применимости.`);
+    for (const slug of applicability.appliesToTaskSlugs ?? []) if (!taskSlugs.has(slug)) errors.push(`Задача ${slug} для ограничения ${row.ruleKey} не найдена.`);
+    for (const slug of applicability.appliesToCategorySlugs ?? []) if (!slugs.has(slug)) errors.push(`Категория ${slug} для ограничения ${row.ruleKey} не найдена.`);
+    for (const condition of applicability.conditions ?? []) {
+      if (!condition.fieldId || !["equals", "not_equals", "in", "not_in", "gt", "gte", "lt", "lte", "truthy", "falsy"].includes(condition.operator)) errors.push(`Некорректное условие ограничения ${row.ruleKey}.`);
+    }
+    for (const limit of applicability.numericLimits ?? []) {
+      if (!limit.fieldId || (limit.minValue == null && limit.maxValue == null) || (limit.minValue != null && limit.maxValue != null && limit.minValue > limit.maxValue)) errors.push(`Некорректный числовой предел ограничения ${row.ruleKey}.`);
+    }
   }
   for (const row of payload.pricingRules ?? []) {
     const min = row.recommendedMinPrice;
     const max = row.recommendedMaxPrice;
     if ((min ?? 0) < 0 || (max ?? 0) < 0) errors.push(`Рекомендуемые цены для ${row.categorySlug} не могут быть отрицательными.`);
     if (min != null && max != null && min > max) errors.push(`Минимальная цена больше максимальной для ${row.categorySlug}.`);
+    if (row.taskSlug && !taskKeys.has(`${row.categorySlug}:${row.taskSlug}`)) errors.push(`Задача ${row.taskSlug} для ценового правила не найдена в ${row.categorySlug}.`);
   }
 
   const searchableText = JSON.stringify(payload).toLocaleLowerCase("ru-RU");
@@ -409,8 +548,10 @@ export function validateCategoryImport(payload: CategoryImportPayload) {
 export async function createDraftFromImport(payload: CategoryImportPayload, adminId: string, fileName?: string) {
   const preview = validateCategoryImport(payload);
   if (!preview.valid) throw new HttpError(400, "Импорт содержит ошибки", "category_import_invalid", preview);
-  const scope = await resolveTargetScope({ scopeType: payload.scope.type as "region" | "city", regionId: payload.scope.regionId ?? undefined, cityId: payload.scope.cityId ?? undefined }, payload.scope.type === "federal");
+  const scope = await resolveTargetScope({ scopeType: payload.scope.type as "region" | "city", regionId: payload.scope.regionId ?? undefined, regionSlug: payload.scope.regionSlug ?? undefined, cityId: payload.scope.cityId ?? undefined, citySlug: payload.scope.citySlug ?? undefined }, payload.scope.type === "federal");
   const versionNumber = payload.passport?.versionNumber || await nextAvailableVersion(scope.scopeKey);
+  const existingVersion = await prisma.categoryStructure.findUnique({ where: { scopeKey_versionNumber: { scopeKey: scope.scopeKey, versionNumber } } });
+  if (existingVersion) throw new HttpError(409, "Такая версия структуры уже существует", "category_structure_version_exists");
   const importHash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
   const duplicate = await prisma.categoryStructure.findFirst({ where: { importHash } });
   if (duplicate) throw new HttpError(409, "Этот файл уже был импортирован", "category_import_duplicate");
@@ -441,33 +582,131 @@ export async function createDraftFromImport(payload: CategoryImportPayload, admi
   return getCategoryStructure(structure.id);
 }
 
-export async function categoriesForCity(cityId: string, audience: "customer" | "helper") {
-  const effective = await getEffectiveCategoryStructure(cityId);
+export async function categoriesForCity(cityId: string, audience: "customer" | "helper", client: DbClient = prisma) {
+  const effective = await getEffectiveCategoryStructure(cityId, client);
   if (!effective.structure) return { ...effective, categories: [] };
-  const visibilityField = audience === "customer" ? "isVisibleForCustomer" : "isVisibleForHelper";
-  const categories = await prisma.category.findMany({
-    where: { structureId: effective.structure.id, parentId: null, status: "active", [visibilityField]: true },
-    include: {
-      children: {
-        where: { status: "active", [visibilityField]: true },
-        orderBy: { sortOrder: "asc" },
-        include: {
-          taskTemplates: { where: { isActive: true }, orderBy: { sortOrder: "asc" } },
-          pricingRules: { where: { isActive: true } },
-          safetyRules: { where: audience === "customer" ? { showToCustomer: true } : { showToHelper: true }, orderBy: { sortOrder: "asc" } }
-        }
-      },
-      taskTemplates: { where: { isActive: true }, orderBy: { sortOrder: "asc" } },
-      safetyRules: { where: audience === "customer" ? { showToCustomer: true } : { showToHelper: true }, orderBy: { sortOrder: "asc" } },
-      pricingRules: { where: { isActive: true } }
-    },
-    orderBy: { sortOrder: "asc" }
-  });
+  const categories = await buildEffectiveCategories(effective.layers, audience, effective.city, client);
   return {
     status: effective.status,
     statusLabel: effective.statusLabel,
     structure: publicStructurePassport(effective.structure),
-    categories: categories.map((category) => publicCategory(category, audience))
+    layers: effective.layers.map(publicStructurePassport),
+    categories
+  };
+}
+
+async function buildEffectiveCategories(layers: any[], audience: "customer" | "helper", city: any, client: DbClient) {
+  if (!layers.length) return [];
+  const rows = await client.category.findMany({
+    where: { structureId: { in: layers.map((layer) => layer.id) } },
+    include: {
+      taskTemplates: { orderBy: { sortOrder: "asc" } },
+      pricingRules: { orderBy: { createdAt: "asc" }, include: { taskTemplate: true } },
+      safetyRules: { orderBy: { sortOrder: "asc" } }
+    },
+    orderBy: [{ level: "asc" }, { sortOrder: "asc" }]
+  });
+  const byStructure = new Map<string, any[]>();
+  for (const row of rows) byStructure.set(row.structureId, [...(byStructure.get(row.structureId) ?? []), row]);
+  const categoryMap = new Map<string, any>();
+  const taskMap = new Map<string, any>();
+  const pricingMap = new Map<string, any[]>();
+  const safetyMap = new Map<string, any>();
+
+  for (const layer of layers) {
+    const layerRows = byStructure.get(layer.id) ?? [];
+    const rowById = new Map(layerRows.map((row) => [row.id, row]));
+    for (const row of layerRows) {
+      const parent = row.parentId ? rowById.get(row.parentId) : null;
+      const logicalKey = parent ? `${parent.slug}/${row.slug}` : row.slug;
+      categoryMap.set(logicalKey, { ...row, logicalKey, parentLogicalKey: parent?.slug ?? null, sourceStructure: publicStructurePassport(layer) });
+      if (row.pricingRules.length) pricingMap.set(logicalKey, row.pricingRules.filter((rule: any) => rule.isActive).map((rule: any) => ({ ...rule, sourceStructure: publicStructurePassport(layer) })));
+      for (const rule of row.safetyRules) {
+        const ruleKey = rule.ruleKey || slugify(rule.title);
+        safetyMap.set(`${logicalKey}/${ruleKey}`, { ...rule, ruleKey, logicalCategoryKey: logicalKey, categorySlug: row.slug, sourceStructure: publicStructurePassport(layer) });
+      }
+      for (const task of row.taskTemplates) taskMap.set(`${logicalKey}/${task.slug}`, { ...task, logicalCategoryKey: logicalKey, sourceStructure: publicStructurePassport(layer) });
+    }
+  }
+
+  const visible = (category: any) => category.status === "active" && (audience === "customer" ? category.isVisibleForCustomer : category.isVisibleForHelper);
+  const taskAllowed = (task: any) => {
+    if (!task.isActive) return false;
+    const allowed = jsonArray(task.allowedRegionsJson);
+    if (!allowed.length) return true;
+    return [city.regionId, city.regionRecord?.slug, city.region, city.id, city.slug, city.name].filter(Boolean).some((value) => allowed.includes(value));
+  };
+  const roots = [...categoryMap.values()].filter((row) => !row.parentLogicalKey && visible(row));
+  return roots.sort((a, b) => a.sortOrder - b.sortOrder).map((root) => {
+    const children = [...categoryMap.values()]
+      .filter((row) => row.parentLogicalKey === root.slug && visible(row))
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((child) => effectivePublicCategory(child, root.id, audience, taskMap, pricingMap, safetyMap, taskAllowed));
+    return {
+      ...effectivePublicCategory(root, null, audience, taskMap, pricingMap, safetyMap, taskAllowed),
+      children
+    };
+  });
+}
+
+function effectivePublicCategory(category: any, parentId: string | null, audience: "customer" | "helper", taskMap: Map<string, any>, pricingMap: Map<string, any[]>, safetyMap: Map<string, any>, taskAllowed: (task: any) => boolean) {
+  const descriptionField = audience === "customer" ? "descriptionForCustomer" : "descriptionForHelper";
+  const hintField = audience === "customer" ? "customerHint" : "helperHint";
+  const tasks = [...taskMap.values()]
+    .filter((task) => task.logicalCategoryKey === category.logicalKey && taskAllowed(task))
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((task) => ({
+      id: task.id,
+      slug: task.slug,
+      title: task.title,
+      description: task.description,
+      [hintField]: task[hintField],
+      safetyNote: task.safetyNote,
+      taskKind: task.taskKind,
+      aliases: jsonArray(task.aliasesJson),
+      durationEffect: safeJson(task.durationEffectJson) ?? {},
+      priceEffect: safeJson(task.priceEffectJson) ?? {},
+      requiresComment: task.requiresComment,
+      allowedRegions: jsonArray(task.allowedRegionsJson),
+      formFields: safeJson(task.formFieldsJson) ?? [],
+      recommendations: safeJson(task.recommendationsJson) ?? [],
+      constraints: safeJson(task.constraintsJson) ?? {},
+      sortOrder: task.sortOrder,
+      sourceStructure: task.sourceStructure
+    }));
+  const rules = (pricingMap.get(category.logicalKey) ?? []).map((price) => ({
+    id: price.id,
+    taskTemplateId: price.taskTemplateId,
+    taskSlug: price.taskTemplate?.slug ?? null,
+    recommendedPackageCode: price.recommendedPackageCode,
+    recommendedMinPrice: price.recommendedMinPrice,
+    recommendedMaxPrice: price.recommendedMaxPrice,
+    defaultDurationMinutes: price.defaultDurationMinutes,
+    priceComment: price.priceComment,
+    coveredTaskSlugs: jsonArray(price.coveredTaskSlugsJson),
+    sourceStructure: price.sourceStructure
+  }));
+  const safetyRules = [...safetyMap.values()]
+    .filter((rule) => rule.logicalCategoryKey === category.logicalKey && rule.isActive && (audience === "customer" ? rule.showToCustomer : rule.showToHelper))
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.ruleKey.localeCompare(right.ruleKey))
+    .map((rule) => ({ id: rule.id, ruleKey: rule.ruleKey, title: rule.title, description: rule.description, severity: rule.severity, isBlocking: rule.isBlocking, applicability: safeJson(rule.applicabilityJson) ?? {}, categorySlug: rule.categorySlug, sourceStructure: rule.sourceStructure, sortOrder: rule.sortOrder }));
+  return {
+    id: category.id,
+    structureId: category.structureId,
+    sourceStructure: category.sourceStructure,
+    logicalKey: category.logicalKey,
+    parentId,
+    slug: category.slug,
+    title: category.title,
+    shortTitle: category.shortTitle,
+    [descriptionField]: category[descriptionField],
+    icon: category.icon,
+    level: parentId ? 1 : 0,
+    sortOrder: category.sortOrder,
+    status: category.status,
+    taskTemplates: tasks,
+    safetyRules,
+    pricingRules: rules
   };
 }
 
@@ -506,9 +745,10 @@ export async function calculateStructuredRequestPrice(input: StructuredRequestPr
     };
   }
 
-  const main = await resolveStructuredSelection(client, effective.structure.id, input);
+  const effectiveStructureIds = effective.layers.map((layer) => layer.id);
+  const main = await resolveStructuredSelection(client, effectiveStructureIds, input);
   const additional = input.additionalTask
-    ? await resolveStructuredSelection(client, effective.structure.id, input.additionalTask)
+    ? await resolveStructuredSelection(client, effectiveStructureIds, input.additionalTask)
     : null;
   if (additional && additional.category.id === main.category.id) {
     throw new HttpError(400, "Дополнительная задача должна относиться к другому направлению", "request_additional_category_mismatch");
@@ -616,8 +856,8 @@ export async function createRequestCategorySnapshotTx(client: Prisma.Transaction
   const effective = await getEffectiveCategoryStructure(input.cityId, client);
   if (!effective.structure) return null;
   const [category, subcategory, taskTemplate] = await Promise.all([
-    input.categoryId ? client.category.findFirst({ where: { id: input.categoryId, structureId: effective.structure.id } }) : null,
-    input.subcategoryId ? client.category.findFirst({ where: { id: input.subcategoryId, structureId: effective.structure.id } }) : null,
+    input.categoryId ? client.category.findFirst({ where: { id: input.categoryId, structureId: { in: effective.layers.map((layer) => layer.id) } } }) : null,
+    input.subcategoryId ? client.category.findFirst({ where: { id: input.subcategoryId, structureId: { in: effective.layers.map((layer) => layer.id) } } }) : null,
     input.taskTemplateId ? client.categoryTaskTemplate.findUnique({ where: { id: input.taskTemplateId }, include: { category: true } }) : null
   ]);
   if (input.categoryId && !category) throw new HttpError(400, "Выбрана недоступная категория", "request_category_invalid");
@@ -625,7 +865,7 @@ export async function createRequestCategorySnapshotTx(client: Prisma.Transaction
   if (subcategory && category && subcategory.parentId !== category.id) {
     throw new HttpError(400, "Подкатегория не относится к выбранной категории", "request_subcategory_mismatch");
   }
-  if (input.taskTemplateId && (!taskTemplate || taskTemplate.category.structureId !== effective.structure.id)) {
+  if (input.taskTemplateId && (!taskTemplate || !effective.layers.some((layer) => layer.id === taskTemplate.category.structureId))) {
     throw new HttpError(400, "Выбран недоступный шаблон задачи", "request_task_template_invalid");
   }
   const expectedTaskCategoryId = subcategory?.id ?? category?.id;
@@ -633,9 +873,11 @@ export async function createRequestCategorySnapshotTx(client: Prisma.Transaction
     throw new HttpError(400, "Шаблон задачи не относится к выбранной категории", "request_task_template_mismatch");
   }
   const selectedCategory = category ?? (subcategory?.parentId ? await client.category.findUnique({ where: { id: subcategory.parentId } }) : null);
-  const pricing = subcategory
-    ? await client.categoryPricingRule.findFirst({ where: { categoryId: subcategory.id, isActive: true } })
-    : selectedCategory ? await client.categoryPricingRule.findFirst({ where: { categoryId: selectedCategory.id, isActive: true } }) : null;
+  const [categoryPricingRules, subcategoryPricingRules] = selectedCategory ? await Promise.all([
+    client.categoryPricingRule.findMany({ where: { categoryId: selectedCategory.id, isActive: true }, include: { taskTemplate: true } }),
+    subcategory ? client.categoryPricingRule.findMany({ where: { categoryId: subcategory.id, isActive: true }, include: { taskTemplate: true } }) : Promise.resolve([])
+  ]) : [[], []];
+  const pricing = selectStructuredPricingRule(categoryPricingRules, subcategoryPricingRules, taskTemplate);
   const safetyRules = selectedCategory ? await client.categorySafetyRule.findMany({ where: { categoryId: selectedCategory.id, showToCustomer: true }, orderBy: { sortOrder: "asc" } }) : [];
   const city = effective.city;
   const calculation = selectedCategory ? await calculateStructuredRequestPrice({
@@ -659,6 +901,7 @@ export async function createRequestCategorySnapshotTx(client: Prisma.Transaction
     taskTemplateId: taskTemplate?.id,
     snapshotJson: JSON.stringify({
       structure: publicStructurePassport(effective.structure),
+      structureLayers: effective.layers.map(publicStructurePassport),
       effectiveStatus: effective.status,
       category: selectedCategory ? { id: selectedCategory.id, slug: selectedCategory.slug, title: selectedCategory.title } : null,
       subcategory: subcategory ? { id: subcategory.id, slug: subcategory.slug, title: subcategory.title } : null,
@@ -718,8 +961,8 @@ function findActiveStructure(where: Prisma.CategoryStructureWhereInput, client: 
   return client.categoryStructure.findFirst({ where: { ...where, status: "active" }, include: structureListInclude, orderBy: { publishedAt: "desc" } });
 }
 
-function effectiveResult(structure: any, status: EffectiveCategoryStructureStatus, city: any) {
-  return { status, statusLabel: effectiveStatusLabel(status), structure, city };
+function effectiveResult(structure: any, status: EffectiveCategoryStructureStatus, city: any, layers: any[]) {
+  return { status, statusLabel: effectiveStatusLabel(status), structure, layers, city };
 }
 
 function effectiveStatusLabel(status: EffectiveCategoryStructureStatus) {
@@ -736,14 +979,14 @@ function cityFallbackMessage(city: any, effective: any) {
   return "Справочник категорий не настроен.";
 }
 
-async function resolveTargetScope(input: { scopeType: "region" | "city"; regionId?: string; cityId?: string }, allowFederal = false) {
+async function resolveTargetScope(input: { scopeType: "region" | "city"; regionId?: string; regionSlug?: string; cityId?: string; citySlug?: string }, allowFederal = false) {
   if (allowFederal && (input.scopeType as string) === "federal") return { regionId: null, cityId: null, scopeKey: "federal", defaultTitle: "Базовая структура РФ" };
   if (input.scopeType === "region") {
-    const region = input.regionId ? await prisma.region.findUnique({ where: { id: input.regionId } }) : null;
+    const region = input.regionId ? await prisma.region.findUnique({ where: { id: input.regionId } }) : input.regionSlug ? await prisma.region.findUnique({ where: { slug: input.regionSlug } }) : null;
     if (!region) throw new HttpError(400, "Выберите регион", "region_required");
     return { regionId: region.id, cityId: null, scopeKey: `region:${region.id}`, defaultTitle: `Структура региона ${region.name}` };
   }
-  const city = input.cityId ? await prisma.city.findUnique({ where: { id: input.cityId }, include: { regionRecord: true } }) : null;
+  const city = input.cityId ? await prisma.city.findUnique({ where: { id: input.cityId }, include: { regionRecord: true } }) : input.citySlug ? await prisma.city.findUnique({ where: { slug: input.citySlug }, include: { regionRecord: true } }) : null;
   if (!city) throw new HttpError(400, "Выберите город", "city_required");
   return { regionId: city.regionId, cityId: city.id, scopeKey: `city:${city.id}`, defaultTitle: `Структура города ${city.name}` };
 }
@@ -760,7 +1003,10 @@ async function nextAvailableVersion(scopeKey: string, fromVersion?: string) {
   const rows = await prisma.categoryStructure.findMany({ where: { scopeKey }, select: { versionNumber: true } });
   const versions = new Set(rows.map((row) => row.versionNumber));
   if (!fromVersion && rows.length === 0) return "1.0";
-  let [major, minor] = (fromVersion ?? "1.0").split(".").map((value) => Number(value) || 0);
+  const base = fromVersion ?? rows.map((row) => row.versionNumber.split(".").map((value) => Number(value) || 0) as [number, number])
+    .sort((left, right) => right[0] - left[0] || right[1] - left[1])[0]
+    .join(".");
+  let [major, minor] = base.split(".").map((value) => Number(value) || 0);
   do {
     minor += 1;
   } while (versions.has(`${major}.${minor}`));
@@ -807,15 +1053,28 @@ async function cloneStructureTx(tx: Prisma.TransactionClient, sourceId: string, 
       isVisibleForAdmin: category.isVisibleForAdmin
     } });
     categoryIdMap.set(category.id, created.id);
-    for (const task of category.taskTemplates) await tx.categoryTaskTemplate.create({ data: { categoryId: created.id, slug: task.slug, title: task.title, description: task.description, customerHint: task.customerHint, helperHint: task.helperHint, managerHint: task.managerHint, safetyNote: task.safetyNote, sortOrder: task.sortOrder, isActive: task.isActive } });
-    for (const rule of category.safetyRules) await tx.categorySafetyRule.create({ data: { categoryId: created.id, title: rule.title, description: rule.description, severity: rule.severity, isBlocking: rule.isBlocking, showToCustomer: rule.showToCustomer, showToHelper: rule.showToHelper, showToManager: rule.showToManager, sortOrder: rule.sortOrder } });
-    for (const price of category.pricingRules) await tx.categoryPricingRule.create({ data: { categoryId: created.id, recommendedPackageCode: price.recommendedPackageCode, recommendedMinPrice: price.recommendedMinPrice, recommendedMaxPrice: price.recommendedMaxPrice, defaultDurationMinutes: price.defaultDurationMinutes, priceComment: price.priceComment, isActive: price.isActive } });
+    const taskIdMap = new Map<string, string>();
+    for (const task of category.taskTemplates) {
+      const clonedTask = await tx.categoryTaskTemplate.create({ data: {
+        categoryId: created.id, slug: task.slug, title: task.title, description: task.description,
+        customerHint: task.customerHint, helperHint: task.helperHint, managerHint: task.managerHint,
+        safetyNote: task.safetyNote, taskKind: task.taskKind, aliasesJson: task.aliasesJson,
+        durationEffectJson: task.durationEffectJson, priceEffectJson: task.priceEffectJson,
+        requiresComment: task.requiresComment, allowedRegionsJson: task.allowedRegionsJson,
+        formFieldsJson: task.formFieldsJson, recommendationsJson: task.recommendationsJson,
+        constraintsJson: task.constraintsJson, sortOrder: task.sortOrder, isActive: task.isActive
+      } });
+      taskIdMap.set(task.id, clonedTask.id);
+    }
+    for (const rule of category.safetyRules) await tx.categorySafetyRule.create({ data: { categoryId: created.id, ruleKey: rule.ruleKey, title: rule.title, description: rule.description, severity: rule.severity, isBlocking: rule.isBlocking, applicabilityJson: rule.applicabilityJson, isActive: rule.isActive, showToCustomer: rule.showToCustomer, showToHelper: rule.showToHelper, showToManager: rule.showToManager, sortOrder: rule.sortOrder } });
+    for (const price of category.pricingRules) await tx.categoryPricingRule.create({ data: { categoryId: created.id, taskTemplateId: price.taskTemplateId ? taskIdMap.get(price.taskTemplateId) : null, recommendedPackageCode: price.recommendedPackageCode, recommendedMinPrice: price.recommendedMinPrice, recommendedMaxPrice: price.recommendedMaxPrice, defaultDurationMinutes: price.defaultDurationMinutes, priceComment: price.priceComment, coveredTaskSlugsJson: price.coveredTaskSlugsJson, isActive: price.isActive } });
   }
   return structure;
 }
 
 async function populateStructureFromImportTx(tx: Prisma.TransactionClient, structureId: string, payload: CategoryImportPayload) {
   const bySlug = new Map<string, string>();
+  const taskByKey = new Map<string, string>();
   const pending = [...payload.categories];
   while (pending.length) {
     const index = pending.findIndex((item) => !item.parentSlug || bySlug.has(item.parentSlug));
@@ -842,9 +1101,21 @@ async function populateStructureFromImportTx(tx: Prisma.TransactionClient, struc
     } });
     bySlug.set(row.slug, created.id);
   }
-  for (const row of payload.taskTemplates ?? []) await tx.categoryTaskTemplate.create({ data: { categoryId: bySlug.get(row.categorySlug)!, slug: row.taskSlug, title: row.title, description: row.description, customerHint: row.customerHint, helperHint: row.helperHint, managerHint: row.managerHint, safetyNote: row.safetyNote, sortOrder: row.sortOrder ?? 100, isActive: row.active ?? true } });
-  for (const row of payload.safetyRules ?? []) await tx.categorySafetyRule.create({ data: { categoryId: bySlug.get(row.categorySlug)!, title: row.title, description: row.description, severity: row.severity ?? "warning", isBlocking: row.isBlocking ?? false, showToCustomer: row.showToCustomer ?? true, showToHelper: row.showToHelper ?? true, showToManager: row.showToManager ?? true, sortOrder: row.sortOrder ?? 100 } });
-  for (const row of payload.pricingRules ?? []) await tx.categoryPricingRule.create({ data: { categoryId: bySlug.get(row.categorySlug)!, recommendedPackageCode: row.packageCode, recommendedMinPrice: row.recommendedMinPrice, recommendedMaxPrice: row.recommendedMaxPrice, defaultDurationMinutes: row.defaultDurationMinutes, priceComment: row.priceComment, isActive: row.active ?? true } });
+  for (const row of payload.taskTemplates ?? []) {
+    const task = await tx.categoryTaskTemplate.create({ data: {
+      categoryId: bySlug.get(row.categorySlug)!, slug: row.taskSlug, title: row.title,
+      description: row.description ?? row.shortDescription, customerHint: row.customerHint,
+      helperHint: row.helperHint, managerHint: row.managerHint, safetyNote: row.safetyNote,
+      taskKind: row.taskKind ?? "standard", aliasesJson: JSON.stringify(row.aliases ?? []),
+      durationEffectJson: JSON.stringify(row.durationEffect ?? {}), priceEffectJson: JSON.stringify(row.priceEffect ?? {}),
+      requiresComment: row.requiresComment ?? false, allowedRegionsJson: JSON.stringify(row.allowedRegions ?? []),
+      formFieldsJson: JSON.stringify(row.formFields ?? []), recommendationsJson: JSON.stringify(row.recommendations ?? []),
+      constraintsJson: JSON.stringify(row.constraints ?? {}), sortOrder: row.sortOrder ?? 100, isActive: row.active ?? true
+    } });
+    taskByKey.set(`${row.categorySlug}:${row.taskSlug}`, task.id);
+  }
+  for (const row of payload.safetyRules ?? []) await tx.categorySafetyRule.create({ data: { categoryId: bySlug.get(row.categorySlug)!, ruleKey: row.ruleKey || slugify(row.title), title: row.title, description: row.description, severity: row.severity ?? "warning", isBlocking: row.isBlocking ?? false, applicabilityJson: JSON.stringify(row.applicability ?? {}), isActive: row.active ?? true, showToCustomer: row.showToCustomer ?? true, showToHelper: row.showToHelper ?? true, showToManager: row.showToManager ?? true, sortOrder: row.sortOrder ?? 100 } });
+  for (const row of payload.pricingRules ?? []) await tx.categoryPricingRule.create({ data: { categoryId: bySlug.get(row.categorySlug)!, taskTemplateId: row.taskSlug ? taskByKey.get(`${row.categorySlug}:${row.taskSlug}`) : null, recommendedPackageCode: row.packageCode, recommendedMinPrice: row.recommendedMinPrice, recommendedMaxPrice: row.recommendedMaxPrice, defaultDurationMinutes: row.defaultDurationMinutes, priceComment: row.priceComment, coveredTaskSlugsJson: JSON.stringify(row.coveredTaskSlugs ?? []), isActive: row.active ?? true } });
 }
 
 function exportBundle(structure: any, options: { targetCity?: any; targetRegion?: any; warning?: string; generatedBy: string }) {
@@ -877,9 +1148,9 @@ function structureToImportPayload(structure: any, options: { targetCity?: any; t
     scope: { type: options.targetCity ? "city" : options.targetRegion ? "region" : structure.scopeType, regionId: options.targetRegion?.id ?? options.targetCity?.regionId ?? structure.scopeRegionId, cityId: options.targetCity?.id ?? structure.scopeCityId },
     passport: { title: options.targetCity ? `Структура города ${options.targetCity.name}` : options.targetRegion ? `Структура региона ${options.targetRegion.name}` : structure.title, description: structure.description, versionNumber: nextTemplateVersion(structure.versionNumber), qualityStatus: "draft", parentStructureId: structure.id, comment: options.warning },
     categories: structure.categories.map((category: any) => ({ slug: category.slug, parentSlug: category.parentId ? (categoryById.get(category.parentId) as any)?.slug : null, title: category.title, shortTitle: category.shortTitle, descriptionForCustomer: category.descriptionForCustomer, descriptionForHelper: category.descriptionForHelper, descriptionForManager: category.descriptionForManager, descriptionForAdmin: category.descriptionForAdmin, icon: category.icon, sortOrder: category.sortOrder, status: category.status, visibleForCustomer: category.isVisibleForCustomer, visibleForHelper: category.isVisibleForHelper, visibleForManager: category.isVisibleForManager, visibleForAdmin: category.isVisibleForAdmin })),
-    taskTemplates: structure.categories.flatMap((category: any) => category.taskTemplates.map((task: any) => ({ categorySlug: category.slug, taskSlug: task.slug, title: task.title, description: task.description, customerHint: task.customerHint, helperHint: task.helperHint, managerHint: task.managerHint, safetyNote: task.safetyNote, sortOrder: task.sortOrder, active: task.isActive }))),
-    safetyRules: structure.categories.flatMap((category: any) => category.safetyRules.map((rule: any) => ({ categorySlug: category.slug, title: rule.title, description: rule.description, severity: rule.severity, isBlocking: rule.isBlocking, showToCustomer: rule.showToCustomer, showToHelper: rule.showToHelper, showToManager: rule.showToManager, sortOrder: rule.sortOrder }))),
-    pricingRules: structure.categories.flatMap((category: any) => category.pricingRules.map((price: any) => ({ categorySlug: category.slug, packageCode: price.recommendedPackageCode, recommendedMinPrice: price.recommendedMinPrice, recommendedMaxPrice: price.recommendedMaxPrice, defaultDurationMinutes: price.defaultDurationMinutes, priceComment: price.priceComment, active: price.isActive })))
+    taskTemplates: structure.categories.flatMap((category: any) => category.taskTemplates.map((task: any) => ({ categorySlug: category.slug, taskSlug: task.slug, title: task.title, description: task.description, customerHint: task.customerHint, helperHint: task.helperHint, managerHint: task.managerHint, safetyNote: task.safetyNote, taskKind: task.taskKind, aliases: safeJson(task.aliasesJson) ?? [], durationEffect: safeJson(task.durationEffectJson) ?? {}, priceEffect: safeJson(task.priceEffectJson) ?? {}, requiresComment: task.requiresComment, allowedRegions: safeJson(task.allowedRegionsJson) ?? [], formFields: safeJson(task.formFieldsJson) ?? [], recommendations: safeJson(task.recommendationsJson) ?? [], constraints: safeJson(task.constraintsJson) ?? {}, sortOrder: task.sortOrder, active: task.isActive }))),
+    safetyRules: structure.categories.flatMap((category: any) => category.safetyRules.map((rule: any) => ({ categorySlug: category.slug, ruleKey: rule.ruleKey || slugify(rule.title), title: rule.title, description: rule.description, severity: rule.severity, isBlocking: rule.isBlocking, applicability: safeJson(rule.applicabilityJson) ?? {}, active: rule.isActive, showToCustomer: rule.showToCustomer, showToHelper: rule.showToHelper, showToManager: rule.showToManager, sortOrder: rule.sortOrder }))),
+    pricingRules: structure.categories.flatMap((category: any) => category.pricingRules.map((price: any) => ({ categorySlug: category.slug, taskSlug: price.taskTemplate?.slug ?? category.taskTemplates.find((task: any) => task.id === price.taskTemplateId)?.slug ?? null, packageCode: price.recommendedPackageCode, coveredTaskSlugs: safeJson(price.coveredTaskSlugsJson) ?? [], recommendedMinPrice: price.recommendedMinPrice, recommendedMaxPrice: price.recommendedMaxPrice, defaultDurationMinutes: price.defaultDurationMinutes, priceComment: price.priceComment, active: price.isActive })))
   };
 }
 
@@ -888,9 +1159,9 @@ function exportSheets(payload: CategoryImportPayload, structure: any, options: a
   return [
     { name: "Паспорт структуры", rows: [["Поле", "Значение"], ...passportRows] },
     { name: "Категории", rows: [["slug", "parentSlug", "title", "shortTitle", "descriptionForCustomer", "descriptionForHelper", "descriptionForManager", "descriptionForAdmin", "icon", "sortOrder", "status", "visibleForCustomer", "visibleForHelper", "visibleForManager", "visibleForAdmin"], ...payload.categories.map((row) => [row.slug, row.parentSlug ?? "", row.title, row.shortTitle ?? "", row.descriptionForCustomer ?? "", row.descriptionForHelper ?? "", row.descriptionForManager ?? "", row.descriptionForAdmin ?? "", row.icon ?? "", row.sortOrder ?? 100, row.status ?? "active", row.visibleForCustomer ?? true, row.visibleForHelper ?? true, row.visibleForManager ?? true, row.visibleForAdmin ?? true])] },
-    { name: "Типовые задачи", rows: [["categorySlug", "taskSlug", "title", "description", "customerHint", "helperHint", "managerHint", "safetyNote", "sortOrder", "active"], ...(payload.taskTemplates ?? []).map((row) => [row.categorySlug, row.taskSlug, row.title, row.description ?? "", row.customerHint ?? "", row.helperHint ?? "", row.managerHint ?? "", row.safetyNote ?? "", row.sortOrder ?? 100, row.active ?? true])] },
-    { name: "Ограничения", rows: [["categorySlug", "title", "description", "severity", "isBlocking", "showToCustomer", "showToHelper", "showToManager", "sortOrder"], ...(payload.safetyRules ?? []).map((row) => [row.categorySlug, row.title, row.description, row.severity ?? "warning", row.isBlocking ?? false, row.showToCustomer ?? true, row.showToHelper ?? true, row.showToManager ?? true, row.sortOrder ?? 100])] },
-    { name: "Рекомендуемые цены", rows: [["categorySlug", "packageCode", "recommendedMinPrice", "recommendedMaxPrice", "defaultDurationMinutes", "priceComment", "active"], ...(payload.pricingRules ?? []).map((row) => [row.categorySlug, row.packageCode ?? "", row.recommendedMinPrice ?? "", row.recommendedMaxPrice ?? "", row.defaultDurationMinutes ?? "", row.priceComment ?? "", row.active ?? true])] },
+    { name: "Типовые задачи", rows: [["categorySlug", "taskSlug", "title", "description", "customerHint", "helperHint", "managerHint", "safetyNote", "taskKind", "aliases", "durationEffect", "priceEffect", "requiresComment", "allowedRegions", "formFields", "recommendations", "constraints", "sortOrder", "active"], ...(payload.taskTemplates ?? []).map((row) => [row.categorySlug, row.taskSlug, row.title, row.description ?? "", row.customerHint ?? "", row.helperHint ?? "", row.managerHint ?? "", row.safetyNote ?? "", row.taskKind ?? "standard", JSON.stringify(row.aliases ?? []), JSON.stringify(row.durationEffect ?? {}), JSON.stringify(row.priceEffect ?? {}), row.requiresComment ?? false, JSON.stringify(row.allowedRegions ?? []), JSON.stringify(row.formFields ?? []), JSON.stringify(row.recommendations ?? []), JSON.stringify(row.constraints ?? {}), row.sortOrder ?? 100, row.active ?? true])] },
+    { name: "Ограничения", rows: [["categorySlug", "ruleKey", "title", "description", "severity", "isBlocking", "applicability", "active", "showToCustomer", "showToHelper", "showToManager", "sortOrder"], ...(payload.safetyRules ?? []).map((row) => [row.categorySlug, row.ruleKey, row.title, row.description, row.severity ?? "warning", row.isBlocking ?? false, JSON.stringify(row.applicability ?? {}), row.active ?? true, row.showToCustomer ?? true, row.showToHelper ?? true, row.showToManager ?? true, row.sortOrder ?? 100])] },
+    { name: "Рекомендуемые цены", rows: [["categorySlug", "taskSlug", "packageCode", "coveredTaskSlugs", "recommendedMinPrice", "recommendedMaxPrice", "defaultDurationMinutes", "priceComment", "active"], ...(payload.pricingRules ?? []).map((row) => [row.categorySlug, row.taskSlug ?? "", row.packageCode ?? "", JSON.stringify(row.coveredTaskSlugs ?? []), row.recommendedMinPrice ?? "", row.recommendedMaxPrice ?? "", row.defaultDurationMinutes ?? "", row.priceComment ?? "", row.active ?? true])] },
     { name: "Инструкция", rows: [["Импорт создаёт новую черновую версию и не перезаписывает опубликованную структуру."], ["Цены являются рекомендуемым ориентиром; итоговая сумма согласуется в чате."], ["Медицинские процедуры, ремонтные, технические и опасные работы запрещены."], ["Не используйте запрещённые термины в пользовательских текстах."]] }
   ];
 }
@@ -899,16 +1170,16 @@ function publicStructurePassport(structure: any) {
   return { id: structure.id, scopeType: structure.scopeType, versionNumber: structure.versionNumber, title: structure.title, qualityStatus: structure.qualityStatus };
 }
 
-async function resolveStructuredSelection(client: DbClient, structureId: string, input: { categoryId: string; subcategoryId?: string | null; taskTemplateId?: string | null }) {
+async function resolveStructuredSelection(client: DbClient, structureIds: string[], input: { categoryId: string; subcategoryId?: string | null; taskTemplateId?: string | null }) {
   const category = await client.category.findFirst({
-    where: { id: input.categoryId, structureId, parentId: null, status: "active", isVisibleForCustomer: true },
-    include: { pricingRules: { where: { isActive: true }, orderBy: { createdAt: "asc" } }, safetyRules: { where: { showToCustomer: true }, orderBy: { sortOrder: "asc" } } }
+    where: { id: input.categoryId, structureId: { in: structureIds }, parentId: null, status: "active", isVisibleForCustomer: true },
+    include: { pricingRules: { where: { isActive: true }, include: { taskTemplate: true } }, safetyRules: { where: { showToCustomer: true }, orderBy: { sortOrder: "asc" } } }
   });
   if (!category) throw new HttpError(400, "Выбрана недоступная категория", "request_category_invalid");
   const subcategory = input.subcategoryId
     ? await client.category.findFirst({
-        where: { id: input.subcategoryId, structureId, parentId: category.id, status: "active", isVisibleForCustomer: true },
-        include: { pricingRules: { where: { isActive: true }, orderBy: { createdAt: "asc" } }, safetyRules: { where: { showToCustomer: true }, orderBy: { sortOrder: "asc" } } }
+        where: { id: input.subcategoryId, structureId: { in: structureIds }, parentId: category.id, status: "active", isVisibleForCustomer: true },
+        include: { pricingRules: { where: { isActive: true }, include: { taskTemplate: true } }, safetyRules: { where: { showToCustomer: true }, orderBy: { sortOrder: "asc" } } }
       })
     : null;
   if (input.subcategoryId && !subcategory) throw new HttpError(400, "Подкатегория не относится к выбранной категории", "request_subcategory_mismatch");
@@ -917,8 +1188,32 @@ async function resolveStructuredSelection(client: DbClient, structureId: string,
     ? await client.categoryTaskTemplate.findFirst({ where: { id: input.taskTemplateId, categoryId: taskCategoryId, isActive: true } })
     : null;
   if (input.taskTemplateId && !taskTemplate) throw new HttpError(400, "Шаблон задачи не относится к выбранной категории", "request_task_template_mismatch");
-  const pricing = subcategory?.pricingRules[0] ?? category.pricingRules[0] ?? null;
+  const pricing = selectStructuredPricingRule(category.pricingRules, subcategory?.pricingRules ?? [], taskTemplate);
   return { category, subcategory, taskTemplate, pricing, safetyRules: [...category.safetyRules, ...(subcategory?.safetyRules ?? [])] };
+}
+
+function selectStructuredPricingRule(categoryRules: any[], subcategoryRules: any[], taskTemplate: any | null) {
+  const candidates = [
+    ...subcategoryRules.map((rule) => ({ rule, specificity: pricingRuleMatchesTemplate(rule, taskTemplate) ? 3 : 2 })),
+    ...categoryRules.map((rule) => ({ rule, specificity: pricingRuleMatchesTemplate(rule, taskTemplate) ? 3 : 1 }))
+  ].filter((candidate) => pricingRuleMatchesTemplate(candidate.rule, taskTemplate) || (!candidate.rule.taskTemplateId && !candidate.rule.taskTemplate));
+  return candidates.sort((left, right) => {
+    if (left.specificity !== right.specificity) return right.specificity - left.specificity;
+    const leftPackage = left.rule.recommendedPackageCode ? 1 : 0;
+    const rightPackage = right.rule.recommendedPackageCode ? 1 : 0;
+    if (leftPackage !== rightPackage) return rightPackage - leftPackage;
+    const leftMax = left.rule.recommendedMaxPrice ?? left.rule.recommendedMinPrice ?? -1;
+    const rightMax = right.rule.recommendedMaxPrice ?? right.rule.recommendedMinPrice ?? -1;
+    if (leftMax !== rightMax) return rightMax - leftMax;
+    const leftMin = left.rule.recommendedMinPrice ?? -1;
+    const rightMin = right.rule.recommendedMinPrice ?? -1;
+    if (leftMin !== rightMin) return rightMin - leftMin;
+    return `${left.rule.taskTemplate?.slug ?? ""}:${left.rule.id}`.localeCompare(`${right.rule.taskTemplate?.slug ?? ""}:${right.rule.id}`);
+  })[0]?.rule ?? null;
+}
+
+function pricingRuleMatchesTemplate(rule: any, taskTemplate: any | null) {
+  return Boolean(taskTemplate && (rule.taskTemplateId === taskTemplate.id || rule.taskTemplate?.slug === taskTemplate.slug));
 }
 
 function calculationLine(kind: "main" | "additional", selection: Awaited<ReturnType<typeof resolveStructuredSelection>>, amount: number | null) {
@@ -994,10 +1289,13 @@ function publicCategory(category: any, audience: "customer" | "helper") {
       })),
       safetyRules: (child.safetyRules ?? []).map((rule: any) => ({
         id: rule.id,
+        ruleKey: rule.ruleKey,
         title: rule.title,
         description: rule.description,
         severity: rule.severity,
         isBlocking: rule.isBlocking,
+        applicability: safeJson(rule.applicabilityJson) ?? {},
+        isActive: rule.isActive,
         sortOrder: rule.sortOrder
       })),
       pricingRules: (child.pricingRules ?? []).map((price: any) => ({
@@ -1020,10 +1318,13 @@ function publicCategory(category: any, audience: "customer" | "helper") {
     })),
     safetyRules: (category.safetyRules ?? []).map((rule: any) => ({
       id: rule.id,
+      ruleKey: rule.ruleKey,
       title: rule.title,
       description: rule.description,
       severity: rule.severity,
       isBlocking: rule.isBlocking,
+      applicability: safeJson(rule.applicabilityJson) ?? {},
+      isActive: rule.isActive,
       sortOrder: rule.sortOrder
     })),
     pricingRules: (category.pricingRules ?? []).map((price: any) => ({
@@ -1069,6 +1370,11 @@ function safeJson(value: string) {
   try { return JSON.parse(value); } catch { return null; }
 }
 
+function jsonArray(value: string | null | undefined): string[] {
+  const parsed = value ? safeJson(value) : [];
+  return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+}
+
 const structureListInclude = {
   scopeRegion: true,
   scopeCity: { include: { regionRecord: true } },
@@ -1083,7 +1389,7 @@ const structureDetailInclude = {
     include: {
       taskTemplates: { orderBy: { sortOrder: "asc" as const } },
       safetyRules: { orderBy: { sortOrder: "asc" as const } },
-      pricingRules: { orderBy: { createdAt: "asc" as const } }
+      pricingRules: { orderBy: { createdAt: "asc" as const }, include: { taskTemplate: true } }
     }
   }
 } satisfies Prisma.CategoryStructureInclude;

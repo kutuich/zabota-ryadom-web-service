@@ -25,15 +25,18 @@ export async function readCategoryImportFile(file: File) {
   const taskTemplates = objects(XLSX, workbook, "Типовые задачи").map((row) => ({
     categorySlug: text(row.categorySlug), taskSlug: text(row.taskSlug), title: text(row.title), description: optionalText(row.description),
     customerHint: optionalText(row.customerHint), helperHint: optionalText(row.helperHint), managerHint: optionalText(row.managerHint),
-    safetyNote: optionalText(row.safetyNote), sortOrder: integer(row.sortOrder, 100), active: bool(row.active, true)
+    safetyNote: optionalText(row.safetyNote), taskKind: optionalText(row.taskKind) ?? "standard", aliases: json(row.aliases, []),
+    durationEffect: json(row.durationEffect, {}), priceEffect: json(row.priceEffect, {}), requiresComment: bool(row.requiresComment, false),
+    allowedRegions: json(row.allowedRegions, []), formFields: json(row.formFields, []), recommendations: json(row.recommendations, []),
+    constraints: json(row.constraints, {}), sortOrder: integer(row.sortOrder, 100), active: bool(row.active, true)
   }));
   const safetyRules = objects(XLSX, workbook, "Ограничения").map((row) => ({
-    categorySlug: text(row.categorySlug), title: text(row.title), description: text(row.description), severity: optionalText(row.severity) ?? "warning",
-    isBlocking: bool(row.isBlocking, false), showToCustomer: bool(row.showToCustomer, true), showToHelper: bool(row.showToHelper, true),
+    categorySlug: text(row.categorySlug), ruleKey: text(row.ruleKey), title: text(row.title), description: text(row.description), severity: optionalText(row.severity) ?? "warning",
+    isBlocking: bool(row.isBlocking, false), applicability: json(row.applicability, {}), active: bool(row.active, true), showToCustomer: bool(row.showToCustomer, true), showToHelper: bool(row.showToHelper, true),
     showToManager: bool(row.showToManager, true), sortOrder: integer(row.sortOrder, 100)
   }));
   const pricingRules = objects(XLSX, workbook, "Рекомендуемые цены").map((row) => ({
-    categorySlug: text(row.categorySlug), packageCode: optionalText(row.packageCode), recommendedMinPrice: optionalNumber(row.recommendedMinPrice),
+    categorySlug: text(row.categorySlug), taskSlug: optionalText(row.taskSlug), packageCode: optionalText(row.packageCode), coveredTaskSlugs: json(row.coveredTaskSlugs, []), recommendedMinPrice: optionalNumber(row.recommendedMinPrice),
     recommendedMaxPrice: optionalNumber(row.recommendedMaxPrice), defaultDurationMinutes: optionalNumber(row.defaultDurationMinutes),
     priceComment: optionalText(row.priceComment), active: bool(row.active, true)
   }));
@@ -72,6 +75,7 @@ function text(value: unknown) { return String(value ?? "").trim(); }
 function optionalText(value: unknown) { const result = text(value); return result || null; }
 function integer(value: unknown, fallback: number) { const result = Number(value); return Number.isInteger(result) ? result : fallback; }
 function optionalNumber(value: unknown) { const result = text(value); return result === "" ? null : Number(result); }
+function json<T>(value: unknown, fallback: T): T { const source = text(value); if (!source) return fallback; try { return JSON.parse(source) as T; } catch { return fallback; } }
 function bool(value: unknown, fallback: boolean) {
   if (typeof value === "boolean") return value;
   const normalized = text(value).toLocaleLowerCase();

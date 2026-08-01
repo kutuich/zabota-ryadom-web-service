@@ -1,4 +1,6 @@
 import bcrypt from "bcryptjs";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { PrismaClient } from "@prisma/client";
 import type { City, ServiceCategory, User } from "@prisma/client";
 import type { UserRole } from "../src/types/domain";
@@ -13,7 +15,12 @@ import { acceptLatestLegalDocuments, requiredDocumentTypesForRegistration, seedL
 import { normalizeRussianPhone } from "../src/services/phoneService";
 import { CITY_DIRECTORY } from "../src/services/cityDirectory";
 import { ensureSettlementDirectory } from "../src/services/settlementService";
-import { ensureFederalCategoryStructure } from "../src/services/categoryStructureService";
+import {
+  createDraftFromImport,
+  ensureFederalCategoryStructure,
+  publishCategoryStructure,
+  type CategoryImportPayload
+} from "../src/services/categoryStructureService";
 
 const prisma = new PrismaClient();
 
@@ -734,6 +741,7 @@ async function main() {
   });
   await ensureSettlementDirectory();
   await ensureFederalCategoryStructure();
+  await seedServiceStructureVersions(admin.id);
 
   console.log("Seed completed");
   if (process.env.SEED_DEMO_DATA === "true" && (process.env.NODE_ENV !== "production" || process.env.DEMO_MODE === "true")) {
@@ -743,6 +751,24 @@ async function main() {
       { role: "performer", email: "performer@zabota.local", password },
       { role: "performer", email: "performer2@zabota.local", password }
     ]);
+  }
+}
+
+async function seedServiceStructureVersions(adminId: string) {
+  for (const fileName of ["russia-v2.json", "khmao-v2.json", "yugorsk-v2.json"]) {
+    const payload = JSON.parse(readFileSync(path.resolve(process.cwd(), "backend/prisma/structures", fileName), "utf8")) as CategoryImportPayload;
+    const scope = payload.scope.type === "federal"
+      ? { scopeKey: "federal" }
+      : payload.scope.type === "region"
+        ? { scopeKey: `region:${(await prisma.region.findUniqueOrThrow({ where: { slug: payload.scope.regionSlug! } })).id}` }
+        : { scopeKey: `city:${(await prisma.city.findUniqueOrThrow({ where: { slug: payload.scope.citySlug! } })).id}` };
+    const existing = await prisma.categoryStructure.findUnique({
+      where: { scopeKey_versionNumber: { scopeKey: scope.scopeKey, versionNumber: payload.passport?.versionNumber ?? "2.0" } }
+    });
+    if (existing?.status === "draft") await publishCategoryStructure(existing.id, adminId);
+    if (existing) continue;
+    const draft = await createDraftFromImport(payload, adminId, fileName);
+    await publishCategoryStructure(draft.id, adminId);
   }
 }
 

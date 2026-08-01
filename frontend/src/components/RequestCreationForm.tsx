@@ -1,10 +1,11 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
 import { api } from "../api/client";
-import type { CategoriesForCity, City, StructuredRequestPriceQuote, User } from "../types";
+import type { CategoriesForCity, City, DynamicRequestField, StructuredRequestPriceQuote, User } from "../types";
 import { CityCombobox } from "./CityCombobox";
 
-type SelectedTask = { id: string; categoryId: string; subcategoryId?: string | null; taskTemplateId?: string | null; title: string; categoryTitle: string; categorySlug: string };
+type CatalogTask = NonNullable<CategoriesForCity["directions"]>[number]["tasks"][number];
+type SelectedTask = CatalogTask & { categoryTitle: string };
 type Slot = { id: string; startTime: string; durationMinutes: number };
 type FormError = { path: string; message: string };
 
@@ -27,6 +28,7 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
   const [catalog, setCatalog] = useState<CategoriesForCity | null>(null);
   const [openDirections, setOpenDirections] = useState<string[]>([]);
   const [selectedTasks, setSelectedTasks] = useState<SelectedTask[]>([]);
+  const [taskFieldValues, setTaskFieldValues] = useState<Record<string, Record<string, unknown>>>({});
   const [taskSearch, setTaskSearch] = useState("");
   const [frequency, setFrequency] = useState("once");
   const today = localDate(0);
@@ -54,6 +56,7 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
     api.categoriesForRequest(cityId).then((result) => {
       setCatalog(result);
       setSelectedTasks([]);
+      setTaskFieldValues({});
       setOpenDirections(result.directions?.map((direction) => direction.id) ?? []);
     }).catch(() => setCatalog(null));
   }, [cityId]);
@@ -67,6 +70,22 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
   }, [catalog, taskSearch]);
   const medicalWarning = containsMedicalQuery(taskSearch);
   const hasAccompaniment = selectedTasks.some((task) => task.categorySlug === "accompaniment");
+  const usesLegacyAccompanimentFields = hasAccompaniment && !selectedTasks.some((task) => task.categorySlug === "accompaniment" && (task.formFields?.length ?? 0) > 0);
+  const recommendedTasks = useMemo(() => {
+    const allTasks = (catalog?.directions ?? []).flatMap((direction) => direction.tasks.map((task) => ({ ...task, categoryTitle: direction.title })));
+    const selectedSlugs = new Set(selectedTasks.map((task) => task.slug));
+    const recommendationSlugs = new Set(selectedTasks.flatMap((task) => task.recommendations?.map((item) => item.taskSlug) ?? []));
+    return allTasks.filter((task) => recommendationSlugs.has(task.slug) && !selectedSlugs.has(task.slug));
+  }, [catalog, selectedTasks]);
+  const safetyRules = useMemo(() => {
+    const seen = new Set<string>();
+    return (catalog?.directions ?? []).flatMap((direction) => direction.safetyRules ?? []).filter((rule) => {
+      const key = `${rule.title}:${rule.description}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [catalog]);
   const repeating = !["urgent_today", "once"].includes(frequency);
   const usesDaySchedule = ["weekly", "several_weekly", "regular_schedule"].includes(frequency);
   const schedule = useMemo(() => buildSchedule(), [frequency, startDate, endDate, weeksCount, visitCount, periodMode, selectedDays, globalSlots, slotsByDay]);
@@ -80,9 +99,10 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
         recipientType,
         dependentState: { mainState, features },
         selectedTasks: selectedTasks.map(taskPayload),
+        taskFieldValues,
         frequency,
         schedule,
-        accompanimentWaitingMinutes: hasAccompaniment && waitingRequired ? waitingMinutes : 0,
+        accompanimentWaitingMinutes: usesLegacyAccompanimentFields && waitingRequired ? waitingMinutes : 0,
         queryText: `${taskSearch} ${comment}`
       }).then((result) => {
         if (quoteRequestId.current === requestId) setQuote(result);
@@ -91,7 +111,7 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
       });
     }, 250);
     return () => window.clearTimeout(handle);
-  }, [cityId, recipientType, mainState, features, selectedTasks, frequency, schedule, hasAccompaniment, waitingRequired, waitingMinutes, taskSearch, comment]);
+  }, [cityId, recipientType, mainState, features, selectedTasks, taskFieldValues, frequency, schedule, usesLegacyAccompanimentFields, waitingRequired, waitingMinutes, taskSearch, comment]);
 
   function buildSchedule() {
     const finite = repeating ? {
@@ -111,11 +131,14 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
     return { frequency, startDate: frequency === "urgent_today" ? today : startDate, ...finite, slots: globalSlots };
   }
 
-  function toggleTask(task: any, direction: any) {
+  function toggleTask(task: CatalogTask, direction: { title: string; slug: string }) {
     const current = selectedTasks.some((item) => item.id === task.id);
-    setSelectedTasks(current
-      ? selectedTasks.filter((item) => item.id !== task.id)
-      : [...selectedTasks, { id: task.id, categoryId: task.categoryId, subcategoryId: task.subcategoryId, taskTemplateId: task.taskTemplateId, title: task.title, categoryTitle: direction.title, categorySlug: direction.slug }]);
+    if (current) {
+      setSelectedTasks(selectedTasks.filter((item) => item.id !== task.id));
+      setTaskFieldValues((values) => Object.fromEntries(Object.entries(values).filter(([key]) => key !== taskIdentity(task))));
+    } else {
+      setSelectedTasks([...selectedTasks, { ...task, categoryTitle: direction.title, categorySlug: direction.slug }]);
+    }
   }
 
   function toggleDay(day: number) {
@@ -149,6 +172,14 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
     if (recipientType === "child" && !dependentAge) next.push({ path: "dependentAge", message: "Укажите возраст Подопечного." });
     if (!mainState) next.push({ path: "dependentMainState", message: "Выберите основное состояние Подопечного." });
     if (selectedTasks.length === 0) next.push({ path: "selectedTasks", message: "Выберите хотя бы одну задачу." });
+    for (const task of selectedTasks) {
+      for (const field of task.formFields ?? []) {
+        const value = taskFieldValues[taskIdentity(task)]?.[field.id];
+        const values = taskFieldValues[taskIdentity(task)] ?? {};
+        if (isDynamicFieldRequired(field, values) && (value === undefined || value === null || value === "" || value === false)) next.push({ path: `taskFieldValues.${taskIdentity(task)}.${field.id}`, message: `Заполните поле «${field.label}».` });
+      }
+      if (task.requiresComment && !comment.trim()) next.push({ path: "comment", message: `Добавьте комментарий для задачи «${task.title}».` });
+    }
     if (!startDate) next.push({ path: "schedule.startDate", message: "Укажите дату." });
     if (repeating && periodMode === "endDate" && !endDate) next.push({ path: "schedule.endDate", message: "Укажите дату окончания." });
     if (repeating && periodMode === "weeks" && !weeksCount) next.push({ path: "schedule.weeksCount", message: "Укажите количество недель." });
@@ -172,7 +203,7 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
     }
     if (!address.street.trim()) next.push({ path: "address.street", message: "Укажите улицу." });
     if (!address.house.trim()) next.push({ path: "address.house", message: "Укажите дом." });
-    if (hasAccompaniment && !comment.trim()) next.push({ path: "comment", message: "Укажите место назначения и действия, которые Помощнику нужно выполнить в процессе сопровождения." });
+    if (usesLegacyAccompanimentFields && !comment.trim()) next.push({ path: "comment", message: "Укажите место назначения и действия в процессе сопровождения." });
     return next;
   }
 
@@ -205,8 +236,9 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
         dependentMainState: mainState,
         dependentStateFeatures: features,
         selectedTasks: selectedTasks.map(taskPayload),
+        taskFieldValues,
         scheduleV2: schedule,
-        accompanimentWaitingMinutes: hasAccompaniment && waitingRequired ? waitingMinutes : 0,
+        accompanimentWaitingMinutes: usesLegacyAccompanimentFields && waitingRequired ? waitingMinutes : 0,
         addressStreet: address.street,
         addressHouse: address.house,
         addressApartment: address.apartment || undefined,
@@ -269,11 +301,13 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
         <label className="task-search">Найти задачу<input value={taskSearch} onChange={(event) => setTaskSearch(event.target.value)} /></label>
         {medicalWarning && <p className="notice">Сервис не принимает задачи с медицинскими процедурами. При угрозе жизни или здоровью обращайтесь в экстренные службы.</p>}
         <div className="task-directions" data-field-path="selectedTasks" tabIndex={-1}>
-          {visibleDirections.map((direction) => <section className="task-direction" key={direction.id}><button type="button" className="task-direction__head" onClick={() => setOpenDirections(toggle(openDirections, direction.id))}><span><strong>{direction.title}</strong>{direction.subtitle && <small>{direction.subtitle}</small>}</span><span>{openDirections.includes(direction.id) ? "−" : "+"}</span></button>{openDirections.includes(direction.id) && <div className="task-options">{direction.tasks.map((task) => <label key={task.id}><input type="checkbox" checked={selectedTasks.some((item) => item.id === task.id)} onChange={() => toggleTask(task, direction)} /><span>{task.title}</span></label>)}</div>}</section>)}
+          {visibleDirections.map((direction) => <section className="task-direction" key={direction.id}><button type="button" className="task-direction__head" onClick={() => setOpenDirections(toggle(openDirections, direction.id))}><span><strong>{direction.title}</strong>{direction.subtitle && <small>{direction.subtitle}</small>}</span><span>{openDirections.includes(direction.id) ? "−" : "+"}</span></button>{openDirections.includes(direction.id) && <div className="task-options">{direction.tasks.map((task) => <label key={task.id}><input type="checkbox" checked={selectedTasks.some((item) => item.id === task.id)} onChange={() => toggleTask(task, direction)} /><span><strong>{task.title}</strong>{task.description && <small>{task.description}</small>}{task.customerHint && <small>{task.customerHint}</small>}</span></label>)}</div>}</section>)}
         </div>
         <FieldError text={fieldError("selectedTasks")} />
-        {selectedTasks.length > 0 && <div className="selected-tasks"><strong>Вы выбрали</strong>{selectedTasks.map((task) => <span key={task.id}>{task.title}<button type="button" aria-label={`Убрать ${task.title}`} onClick={() => setSelectedTasks(selectedTasks.filter((item) => item.id !== task.id))}><X size={15} /></button></span>)}<p>Выбранные задачи будут выполняться во время каждого визита.</p></div>}
-        {hasAccompaniment && <div className="notice"><p>В комментарии укажите, куда нужно сопроводить Подопечного и какие действия Помощнику нужно выполнить в процессе сопровождения.</p><label className="checkbox-row"><input type="checkbox" checked={waitingRequired} onChange={(event) => setWaitingRequired(event.target.checked)} />Нужно ожидание</label>{waitingRequired && <label>Продолжительность ожидания, минут<input type="number" step="30" min="30" value={waitingMinutes} onChange={(event) => setWaitingMinutes(Number(event.target.value))} /></label>}</div>}
+        {selectedTasks.length > 0 && <div className="selected-tasks"><strong>Вы выбрали</strong>{selectedTasks.map((task) => <span key={task.id}>{task.title}<button type="button" aria-label={`Убрать ${task.title}`} onClick={() => toggleTask(task, { title: task.categoryTitle, slug: task.categorySlug })}><X size={15} /></button></span>)}<p>Выбранные задачи будут выполняться во время каждого визита.</p></div>}
+        {recommendedTasks.length > 0 && <div className="task-recommendations"><strong>Также часто требуется</strong>{recommendedTasks.map((task) => <button type="button" className="secondary-button" key={task.id} onClick={() => toggleTask(task, { title: task.categoryTitle, slug: task.categorySlug })}><Plus size={16} />{task.title}</button>)}<small>Добавьте только если это действительно нужно.</small></div>}
+        {selectedTasks.some((task) => (task.formFields?.length ?? 0) > 0) && <div className="dynamic-task-fields">{selectedTasks.filter((task) => (task.formFields?.length ?? 0) > 0).map((task) => { const values = taskFieldValues[taskIdentity(task)] ?? {}; return <section key={task.id}><h4>{task.title}</h4>{task.formFields!.filter((field) => isDynamicFieldVisible(field, values)).map((field) => <DynamicField key={field.id} task={task} field={field} required={isDynamicFieldRequired(field, values)} value={values[field.id]} onChange={(value) => setTaskFieldValues((current) => ({ ...current, [taskIdentity(task)]: { ...(current[taskIdentity(task)] ?? {}), [field.id]: value } }))} error={fieldError(`taskFieldValues.${taskIdentity(task)}.${field.id}`)} />)}</section>; })}</div>}
+        {usesLegacyAccompanimentFields && <div className="notice"><p>Укажите место назначения в комментарии.</p><label className="checkbox-row"><input type="checkbox" checked={waitingRequired} onChange={(event) => setWaitingRequired(event.target.checked)} />Нужно ожидание</label>{waitingRequired && <label>Продолжительность ожидания, минут<input type="number" step="30" min="30" value={waitingMinutes} onChange={(event) => setWaitingMinutes(Number(event.target.value))} /></label>}</div>}
       </FormSection>
 
       <FormSection number="5" title="Как часто и когда нужна помощь">
@@ -298,7 +332,7 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
       <FormSection number="8" title="Комментарий">
         <label>Комментарий к заявке<textarea data-field-path="comment" value={comment} onChange={(event) => setComment(event.target.value)} /></label><FieldError text={fieldError("comment")} />
       </FormSection>
-      <details className="request-safety"><summary>Ограничения и безопасность · Подробнее</summary><p>Сервис принимает бытовые и организационные задачи. Медицинские процедуры, опасные работы и действия с чужими банковскими доступами не принимаются.</p></details>
+      <details className="request-safety"><summary>Ограничения и безопасность · Подробнее</summary><p>Сервис принимает бытовые и организационные задачи. Медицинские процедуры не принимаются.</p>{safetyRules.length > 0 && <ul>{safetyRules.map((rule) => <li key={`${rule.title}:${rule.description}`}><strong>{rule.title}.</strong> {rule.description}</li>)}</ul>}</details>
       <section className="request-builder__submit"><h2>Проверка и создание</h2><button className="primary-button" type="submit" disabled={submitting}>{submitting ? "Создаём..." : "Создать заявку"}</button></section>
     </form>
   );
@@ -307,9 +341,23 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
 function FormSection({ number, title, children }: { number: string; title: string; children: React.ReactNode }) { return <section className="request-builder__section"><h2><span>{number}</span>{title}</h2>{children}</section>; }
 function Choice({ selected, onClick, children }: { selected: boolean; onClick: () => void; children: React.ReactNode }) { return <button type="button" className={`choice-button${selected ? " is-selected" : ""}`} onClick={onClick}>{children}</button>; }
 function FieldError({ text }: { text?: string }) { return text ? <span className="field-error-text">{text}</span> : null; }
+function DynamicField({ task, field, required, value, onChange, error }: { task: SelectedTask; field: DynamicRequestField; required: boolean; value: unknown; onChange: (value: unknown) => void; error?: string }) {
+  const path = `taskFieldValues.${taskIdentity(task)}.${field.id}`;
+  const control = field.type === "textarea"
+    ? <textarea value={String(value ?? "")} placeholder={field.placeholder ?? undefined} onChange={(event) => onChange(event.target.value)} />
+    : field.type === "select"
+      ? <select value={String(value ?? "")} onChange={(event) => onChange(event.target.value)}><option value="">Выберите</option>{field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+      : field.type === "checkbox"
+        ? <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
+        : <input type={field.type} value={String(value ?? "")} min={field.min ?? undefined} max={field.max ?? undefined} placeholder={field.placeholder ?? undefined} onChange={(event) => onChange(field.type === "number" ? event.target.value === "" ? "" : Number(event.target.value) : event.target.value)} />;
+  return <label className={error ? "field-error" : ""} data-field-path={path}>{field.label}{required && <strong> *</strong>}{control}{field.helpText && <small>{field.helpText}</small>}<FieldError text={error} /></label>;
+}
+function isDynamicFieldVisible(field: DynamicRequestField, values: Record<string, unknown>) { return !field.requiredWhen || values[field.requiredWhen.fieldId] === field.requiredWhen.equals; }
+function isDynamicFieldRequired(field: DynamicRequestField, values: Record<string, unknown>) { return Boolean(field.required || (field.requiredWhen && values[field.requiredWhen.fieldId] === field.requiredWhen.equals)); }
 function VisitSlots({ slots, errors, onChange, onAdd, onRemove }: { slots: Slot[]; errors: FormError[]; onChange: (id: string, patch: Partial<Slot>) => void; onAdd: () => void; onRemove: (id: string) => void }) { return <div className="visit-slots">{slots.map((slot, index) => { const error = errors.find((item) => item.path === `schedule.visitSlots.${slot.id}.startTime`); return <div className={`visit-slot${error ? " field-error" : ""}`} key={slot.id}><strong>Визит {index + 1}</strong><label>Время начала<input data-field-path={`schedule.visitSlots.${slot.id}.startTime`} type="time" value={slot.startTime} onChange={(event) => onChange(slot.id, { startTime: event.target.value })} />{error && <FieldError text={error.message} />}</label><label>Длительность<select value={slot.durationMinutes} onChange={(event) => onChange(slot.id, { durationMinutes: Number(event.target.value) })}>{durations.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><span>Окончание<strong>{slotEnd(slot)}</strong></span>{slots.length > 1 && <button className="icon-button" type="button" title="Удалить визит" onClick={() => onRemove(slot.id)}><Trash2 size={18} /></button>}</div>; })}<button className="secondary-button" type="button" onClick={onAdd}><Plus size={17} />Добавить ещё один визит</button></div>; }
 function newSlot(startTime: string, durationMinutes: number): Slot { return { id: crypto.randomUUID(), startTime, durationMinutes }; }
 function taskPayload(task: SelectedTask) { return { categoryId: task.categoryId, subcategoryId: task.subcategoryId ?? undefined, taskTemplateId: task.taskTemplateId ?? undefined }; }
+function taskIdentity(task: Pick<SelectedTask, "categoryId" | "subcategoryId" | "taskTemplateId">) { return `${task.categoryId}:${task.subcategoryId ?? "root"}:${task.taskTemplateId ?? "none"}`; }
 function toggle<T>(values: T[], value: T) { return values.includes(value) ? values.filter((item) => item !== value) : [...values, value]; }
 function normalize(value: string) { return value.toLocaleLowerCase("ru-RU").replace(/ё/g, "е").trim(); }
 function containsMedicalQuery(value: string) { const query = normalize(value); return ["укол", "инъекц", "капельниц", "перевяз", "обработка ран", "диагност", "лечение"].some((term) => query.includes(term)); }

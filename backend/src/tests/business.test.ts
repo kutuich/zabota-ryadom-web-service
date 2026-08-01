@@ -68,6 +68,7 @@ import {
   calculateRecommendedAmount,
   calculateStructuredRequestPrice,
   categoriesForCity,
+  compareCategoryStructures,
   createDraftFromImport,
   createRequestCategorySnapshotTx,
   createStructureFromParent,
@@ -78,7 +79,7 @@ import {
   saveHelperCategoryPreferences,
   validateCategoryImport
 } from "../services/categoryStructureService";
-import { expandRequestSchedule } from "../services/requestScheduleService";
+import { calculateMultiTaskRequest, createMultiTaskRequestSnapshotTx, expandRequestSchedule } from "../services/requestScheduleService";
 import { openVisitDispute, reconcileDueVisits, resolveVisitDispute } from "../services/visitOperationsService";
 import { createVisitReconciliationScheduler } from "../services/visitReconciliationScheduler";
 import {
@@ -758,10 +759,97 @@ async function runServiceCommunicationTests() {
 
 async function runCategoryStructureTests() {
   const suffix = Date.now().toString(36);
+  const fixtureDirectory = path.resolve(process.cwd(), "prisma/structures");
+  const federalV2 = JSON.parse(readFileSync(path.join(fixtureDirectory, "russia-v2.json"), "utf8"));
+  const regionV2 = JSON.parse(readFileSync(path.join(fixtureDirectory, "khmao-v2.json"), "utf8"));
+  const cityV2 = JSON.parse(readFileSync(path.join(fixtureDirectory, "yugorsk-v2.json"), "utf8"));
+  assert.equal(validateCategoryImport(federalV2).valid, true);
+  assert.equal(validateCategoryImport(regionV2).valid, true);
+  assert.equal(validateCategoryImport(cityV2).valid, true);
+  assert.deepEqual(federalV2.categories.filter((category: any) => !category.parentSlug).map((category: any) => category.title), ["Помощь по дому", "Уход на дому", "Покупки и поручения", "Сопровождение"]);
+  const federalTaskSlugs = federalV2.taskTemplates.map((task: any) => task.taskSlug);
+  assert.equal(federalTaskSlugs.filter((slug: string) => slug === "stay-near").length, 1);
+  assert.equal(federalTaskSlugs.some((slug: string) => ["stay-near-1-2h", "stay-near-3-4h", "deliver-items"].includes(slug)), false);
+  const cleaningTask = federalV2.taskTemplates.find((task: any) => task.taskSlug === "light-cleaning");
+  assert.deepEqual(cleaningTask.recommendations, [{ taskSlug: "take-out-trash", label: "Вынос мусора" }]);
+  const cleaningPrice = federalV2.pricingRules.find((rule: any) => rule.taskSlug === "light-cleaning");
+  assert.deepEqual(cleaningPrice.coveredTaskSlugs, ["light-cleaning", "take-out-trash"]);
+  assert.equal(federalV2.pricingRules.find((rule: any) => rule.taskSlug === "take-out-trash").packageCode, cleaningPrice.packageCode);
+  assert.notEqual(federalV2.pricingRules.find((rule: any) => rule.taskSlug === "wash-dishes").packageCode, cleaningPrice.packageCode);
+  assert.notEqual(federalV2.pricingRules.find((rule: any) => rule.taskSlug === "simple-meal").packageCode, cleaningPrice.packageCode);
+  const federalPickup = federalV2.taskTemplates.find((task: any) => task.taskSlug === "pickup-order");
+  const regionalPickup = regionV2.taskTemplates.find((task: any) => task.taskSlug === "pickup-order");
+  assert.deepEqual(regionalPickup.formFields, federalPickup.formFields);
+  const federalAccompaniment = federalV2.taskTemplates.find((task: any) => task.taskSlug === "accompany");
+  const cityAccompaniment = cityV2.taskTemplates.find((task: any) => task.taskSlug === "accompany");
+  assert.deepEqual(cityAccompaniment.formFields, federalAccompaniment.formFields);
+  assert.deepEqual(cityAccompaniment.durationEffect, federalAccompaniment.durationEffect);
+  assert.ok(federalV2.safetyRules.length >= 7);
   const admin = await prisma.user.findFirstOrThrow({ where: { role: { in: ["admin", "superadmin"] } } });
   const helper = await prisma.user.findFirstOrThrow({ where: { role: "performer" } });
   const customer = await prisma.user.findFirstOrThrow({ where: { role: "client" } });
   const legacyCategory = await prisma.serviceCategory.findFirstOrThrow();
+  const yugorsk = await prisma.city.findFirstOrThrow({ where: { slug: "yugorsk" } });
+  const yugorskCatalog = await categoriesForCity(yugorsk.id, "customer");
+  assert.equal(yugorskCatalog.layers.length, 3);
+  assert.deepEqual(yugorskCatalog.categories.map((category) => category.title), ["Помощь по дому", "Уход на дому", "Покупки и поручения", "Сопровождение"]);
+  const yugorskTasks = yugorskCatalog.categories.flatMap((category) => (category.children ?? []).flatMap((child) => (child.taskTemplates ?? []).map((task) => ({ category, child, task }))));
+  assert.equal(yugorskTasks.filter((item) => item.task.slug === "stay-near").length, 1);
+  assert.equal(yugorskTasks.some((item) => ["stay-near-1-2h", "stay-near-3-4h", "deliver-items"].includes(item.task.slug)), false);
+  const pickupSelection = yugorskTasks.find((item) => item.task.slug === "pickup-order")!;
+  assert.deepEqual(pickupSelection.task.formFields.map((field: any) => field.id), ["order_description", "pickup_point", "related_to_beneficiary_help", "approximate_weight_kg", "approximate_size_comment", "contains_restricted_items", "customer_comment"]);
+  assert.equal(pickupSelection.task.sourceStructure.scopeType, "region");
+  const accompanimentSelection = yugorskTasks.find((item) => item.task.slug === "accompany")!;
+  const accompanimentTask = { categoryId: accompanimentSelection.category.id, subcategoryId: accompanimentSelection.child.id, taskTemplateId: accompanimentSelection.task.id };
+  const accompanimentTaskKey = `${accompanimentTask.categoryId}:${accompanimentTask.subcategoryId}:${accompanimentTask.taskTemplateId}`;
+  const accompanimentValues = { destination_type: "other", accompaniment_duration_minutes: 90 };
+  await assert.rejects(calculateMultiTaskRequest({
+    cityId: yugorsk.id,
+    selectedTasks: [accompanimentTask],
+    taskFieldValues: { [accompanimentTaskKey]: accompanimentValues },
+    frequency: "once",
+    schedule: { frequency: "once", startDate: "2030-04-10", slots: [{ id: "accompany", startTime: "10:00", durationMinutes: 120 }] }
+  }), (error: any) => error?.details?.validationErrors?.some((item: any) => item.path.endsWith("destination_details")) === true);
+  const completeAccompanimentValues = { ...accompanimentValues, destination_details: "Другое согласованное место" };
+  const accompanimentOnlyCalculation = await calculateMultiTaskRequest({
+    cityId: yugorsk.id,
+    selectedTasks: [accompanimentTask],
+    taskFieldValues: { [accompanimentTaskKey]: completeAccompanimentValues },
+    frequency: "once",
+    schedule: { frequency: "once", startDate: "2030-04-10", slots: [{ id: "accompany", startTime: "10:00", durationMinutes: 120 }] }
+  });
+  assert.equal(accompanimentOnlyCalculation.totalDurationMinutes, 90);
+  const cleaningSelection = yugorskTasks.find((item) => item.task.slug === "light-cleaning")!;
+  const cleaningSelectionInput = { categoryId: cleaningSelection.category.id, subcategoryId: cleaningSelection.child.id, taskTemplateId: cleaningSelection.task.id };
+  const trashSelection = yugorskTasks.find((item) => item.task.slug === "take-out-trash")!;
+  const trashSelectionInput = { categoryId: trashSelection.category.id, subcategoryId: trashSelection.child.id, taskTemplateId: trashSelection.task.id };
+  const dishesSelection = yugorskTasks.find((item) => item.task.slug === "wash-dishes")!;
+  const dishesSelectionInput = { categoryId: dishesSelection.category.id, subcategoryId: dishesSelection.child.id, taskTemplateId: dishesSelection.task.id };
+  const pricingSchedule = { frequency: "once" as const, startDate: "2030-04-10", slots: [{ id: "pricing", startTime: "14:00", durationMinutes: 120 }] };
+  const calculateYugorskTasks = (selectedTasks: typeof cleaningSelectionInput[]) => calculateMultiTaskRequest({ cityId: yugorsk.id, selectedTasks, frequency: "once", schedule: pricingSchedule });
+  const cleaningOnlyPrice = await calculateYugorskTasks([cleaningSelectionInput]);
+  const cleaningTrashPrice = await calculateYugorskTasks([cleaningSelectionInput, trashSelectionInput]);
+  const trashCleaningPrice = await calculateYugorskTasks([trashSelectionInput, cleaningSelectionInput]);
+  const cleaningDishesPrice = await calculateYugorskTasks([cleaningSelectionInput, dishesSelectionInput]);
+  assert.equal(cleaningOnlyPrice.perVisitHelpAmount, 900);
+  assert.equal(cleaningTrashPrice.perVisitHelpAmount, 900);
+  assert.equal(cleaningTrashPrice.pricedRules.length, 1);
+  assert.equal(cleaningDishesPrice.perVisitHelpAmount, 1600);
+  assert.equal(cleaningDishesPrice.pricedRules.length, 2);
+  const stablePricingView = (quote: any) => ({ total: quote.perVisitHelpAmount, duration: quote.totalDurationMinutes, rules: quote.pricedRules.map((rule: any) => ({ min: rule.min, max: rule.max, packageCode: rule.packageCode, comment: rule.comment, coveredTaskKeys: rule.coveredTaskKeys })) });
+  assert.deepEqual(stablePricingView(cleaningTrashPrice), stablePricingView(trashCleaningPrice));
+  assert.ok(cleaningOnlyPrice.warnings.some((warning) => warning.includes("Опасные, ремонтные и технические работы")));
+  const accompanimentCombinedCalculation = await calculateMultiTaskRequest({
+    cityId: yugorsk.id,
+    selectedTasks: [cleaningSelectionInput, accompanimentTask],
+    taskFieldValues: { [accompanimentTaskKey]: completeAccompanimentValues },
+    frequency: "once",
+    schedule: { frequency: "once", startDate: "2030-04-10", slots: [{ id: "combined", startTime: "10:00", durationMinutes: 120 }] }
+  });
+  assert.equal(accompanimentCombinedCalculation.totalDurationMinutes, 210);
+  assert.equal(accompanimentCombinedCalculation.pricedRules.flatMap((rule) => rule.coveredTaskKeys).filter((key) => key === accompanimentTaskKey).length, 1);
+  const activeScopes = await prisma.categoryStructure.groupBy({ by: ["scopeKey"], where: { status: "active" }, _count: { _all: true } });
+  assert.equal(activeScopes.every((scope) => scope._count._all === 1), true);
   const federalBefore = await ensureFederalCategoryStructure();
   const federalAgain = await ensureFederalCategoryStructure();
   assert.equal(federalAgain.id, federalBefore.id);
@@ -795,6 +883,62 @@ async function runCategoryStructureTests() {
   const createdStructureIds: string[] = [];
   const requestIds: string[] = [];
   try {
+    const pickupTask = { categoryId: pickupSelection.category.id, subcategoryId: pickupSelection.child.id, taskTemplateId: pickupSelection.task.id };
+    const pickupTaskKey = `${pickupTask.categoryId}:${pickupTask.subcategoryId}:${pickupTask.taskTemplateId}`;
+    const pickupValues = { order_description: "Небольшой заказ", pickup_point: "Пункт выдачи рядом", related_to_beneficiary_help: true, approximate_weight_kg: 8 };
+    await assert.rejects(calculateMultiTaskRequest({
+      cityId: yugorsk.id,
+      selectedTasks: [pickupTask],
+      taskFieldValues: { [pickupTaskKey]: pickupValues },
+      frequency: "once",
+      schedule: { frequency: "once", startDate: "2030-04-11", slots: [{ id: "blocked-safety", startTime: "10:00", durationMinutes: 60 }] }
+    }), (error: any) => error?.code === "safety_rule_blocked" && error?.details?.safetyRules?.some((rule: any) => rule.ruleKey === "heavy-load-limit"));
+    const requestsBeforeBlockedSafety = await prisma.clientRequest.count();
+    const blockedSafetyResponse = await apiRequest(createApp(), "/api/requests", {
+      method: "POST",
+      token: tokenFor(customer.id, customer.role),
+      body: {
+        cityId: yugorsk.id,
+        contactName: customer.displayName ?? "Заказчик",
+        contactPhone: customer.phone ?? "+79000000002",
+        recipientType: "self",
+        dependentMainState: "independent",
+        selectedTasks: [pickupTask],
+        taskFieldValues: { [pickupTaskKey]: pickupValues },
+        scheduleV2: { frequency: "once", startDate: "2030-04-11", slots: [{ id: "blocked-api", startTime: "11:00", durationMinutes: 60 }] },
+        addressStreet: "ул. Мира",
+        addressHouse: "10",
+        comment: "Проверка структурной блокировки"
+      }
+    });
+    assert.equal(blockedSafetyResponse.status, 422);
+    assert.equal(blockedSafetyResponse.payload.code, "safety_rule_blocked");
+    assert.equal(await prisma.clientRequest.count(), requestsBeforeBlockedSafety);
+    const safePickupValues = { ...pickupValues, approximate_weight_kg: 5 };
+    const safePickupResponse = await apiRequest(createApp(), "/api/requests", {
+      method: "POST",
+      token: tokenFor(customer.id, customer.role),
+      body: {
+        cityId: yugorsk.id,
+        contactName: customer.displayName ?? "Заказчик",
+        contactPhone: customer.phone ?? "+79000000002",
+        recipientType: "self",
+        dependentMainState: "independent",
+        selectedTasks: [pickupTask],
+        taskFieldValues: { [pickupTaskKey]: safePickupValues },
+        scheduleV2: { frequency: "once", startDate: "2030-04-11", slots: [{ id: "safe-api", startTime: "12:00", durationMinutes: 60 }] },
+        addressStreet: "ул. Мира",
+        addressHouse: "10",
+        comment: "Безопасный небольшой заказ"
+      }
+    });
+    assert.equal(safePickupResponse.status, 201);
+    requestIds.push(safePickupResponse.payload.id);
+    const safePickupSnapshot = JSON.parse((await prisma.requestCategorySnapshot.findFirstOrThrow({ where: { requestId: safePickupResponse.payload.id } })).snapshotJson);
+    assert.equal(safePickupSnapshot.structureLayers.length, 3);
+    assert.ok(safePickupSnapshot.appliedSafetyRules.some((rule: any) => rule.ruleKey === "heavy-load-limit" && rule.result === "passed" && rule.sourceStructure.versionNumber === "2.0"));
+    assert.ok(safePickupSnapshot.appliedSafetyRules.some((rule: any) => rule.ruleKey === "financial-safety" && rule.result === "warning"));
+
     assert.equal((await getEffectiveCategoryStructure(city.id)).status, "uses_federal_fallback");
     const regionDraft = await createStructureFromParent({ scopeType: "region", regionId: region.id }, admin.id);
     createdStructureIds.push(regionDraft.id);
@@ -807,12 +951,108 @@ async function runCategoryStructureTests() {
     createdStructureIds.push(cityDraft.id);
     assert.equal(cityDraft.parentStructureId, regionDraft.id);
     await publishCategoryStructure(cityDraft.id, admin.id);
-    assert.equal((await getEffectiveCategoryStructure(city.id)).status, "local_ready");
+    const layeredStructure = await getEffectiveCategoryStructure(city.id);
+    assert.equal(layeredStructure.status, "local_ready");
+    assert.equal(layeredStructure.layers.length, 3);
+    const [regionShoppingCategory, cityShoppingCategory] = await Promise.all([
+      prisma.category.findUniqueOrThrow({ where: { structureId_slug: { structureId: regionDraft.id, slug: "shopping-delivery" } } }),
+      prisma.category.findUniqueOrThrow({ where: { structureId_slug: { structureId: cityDraft.id, slug: "shopping-delivery" } } })
+    ]);
+    const [regionHeavyRule, cityHeavyRule] = await Promise.all([
+      prisma.categorySafetyRule.findFirstOrThrow({ where: { categoryId: regionShoppingCategory.id, ruleKey: "heavy-load-limit" } }),
+      prisma.categorySafetyRule.findFirstOrThrow({ where: { categoryId: cityShoppingCategory.id, ruleKey: "heavy-load-limit" } })
+    ]);
+    await prisma.categorySafetyRule.update({ where: { id: regionHeavyRule.id }, data: { title: "Региональное ограничение веса" } });
+    await prisma.categorySafetyRule.update({ where: { id: cityHeavyRule.id }, data: { title: "Городское ограничение веса" } });
+    const fallbackSafetyCatalog = await categoriesForCity(fallbackCity.id, "customer");
+    const fallbackHeavyRules = fallbackSafetyCatalog.categories.find((category) => category.slug === "shopping-delivery")!.safetyRules!.filter((rule: any) => rule.ruleKey === "heavy-load-limit");
+    assert.equal(fallbackHeavyRules.length, 1);
+    assert.equal(fallbackHeavyRules[0].title, "Региональное ограничение веса");
+    const citySafetyCatalog = await categoriesForCity(city.id, "customer");
+    const cityHeavyRules = citySafetyCatalog.categories.find((category) => category.slug === "shopping-delivery")!.safetyRules!.filter((rule: any) => rule.ruleKey === "heavy-load-limit");
+    assert.equal(cityHeavyRules.length, 1);
+    assert.equal(cityHeavyRules[0].title, "Городское ограничение веса");
+    await prisma.categorySafetyRule.update({ where: { id: cityHeavyRule.id }, data: { isActive: false } });
+    const disabledCitySafetyCatalog = await categoriesForCity(city.id, "customer");
+    assert.equal(disabledCitySafetyCatalog.categories.find((category) => category.slug === "shopping-delivery")!.safetyRules!.some((rule: any) => rule.ruleKey === "heavy-load-limit"), false);
+    await prisma.categorySafetyRule.update({ where: { id: cityHeavyRule.id }, data: { isActive: true } });
+
+    const pricingTestRoot = await prisma.category.create({ data: { structureId: cityDraft.id, slug: `pricing-test-${suffix}`, title: "Проверка pricing resolver", level: 0, sortOrder: 900 } });
+    await prisma.categoryPricingRule.create({ data: { categoryId: pricingTestRoot.id, recommendedMinPrice: 100, recommendedMaxPrice: 200, priceComment: "category fallback" } });
+    const createPricingTask = async (slug: string, rule?: { min: number; max: number; packageCode?: string; covered?: string[]; comment?: string }) => {
+      const child = await prisma.category.create({ data: { structureId: cityDraft.id, parentId: pricingTestRoot.id, slug: `pricing-${slug}`, title: slug, level: 1, sortOrder: 900 } });
+      const task = await prisma.categoryTaskTemplate.create({ data: { categoryId: child.id, slug, title: slug } });
+      if (rule) await prisma.categoryPricingRule.create({ data: { categoryId: child.id, taskTemplateId: task.id, recommendedMinPrice: rule.min, recommendedMaxPrice: rule.max, recommendedPackageCode: rule.packageCode, coveredTaskSlugsJson: JSON.stringify(rule.covered ?? []), priceComment: rule.comment } });
+      return { categoryId: pricingTestRoot.id, subcategoryId: child.id, taskTemplateId: task.id };
+    };
+    const exactTask = await createPricingTask("exact-task", { min: 500, max: 600, packageCode: "explicit-cover", covered: ["exact-task", "covered-task"], comment: "exact task" });
+    const coveredTask = await createPricingTask("covered-task", { min: 300, max: 400, packageCode: "different-package", comment: "must be covered" });
+    const fallbackTask = await createPricingTask("fallback-task");
+    const tieLowTask = await createPricingTask("tie-low", { min: 500, max: 700, packageCode: "tie-package", comment: "low min" });
+    const tieHighTask = await createPricingTask("tie-high", { min: 600, max: 700, packageCode: "tie-package", comment: "high min" });
+    const unpricedRoot = await prisma.category.create({ data: { structureId: cityDraft.id, slug: `unpriced-test-${suffix}`, title: "Без цены", level: 0, sortOrder: 910 } });
+    const unpricedChild = await prisma.category.create({ data: { structureId: cityDraft.id, parentId: unpricedRoot.id, slug: "unpriced-child", title: "Без цены", level: 1, sortOrder: 10 } });
+    const unpricedTemplate = await prisma.categoryTaskTemplate.create({ data: { categoryId: unpricedChild.id, slug: "unpriced-task", title: "Без цены" } });
+    const unpricedTask = { categoryId: unpricedRoot.id, subcategoryId: unpricedChild.id, taskTemplateId: unpricedTemplate.id };
+    const resolverSchedule = { frequency: "once" as const, startDate: "2030-04-10", slots: [{ id: "resolver", startTime: "16:00", durationMinutes: 120 }] };
+    const resolverQuote = (selectedTasks: typeof exactTask[]) => calculateMultiTaskRequest({ cityId: city.id, selectedTasks, frequency: "once", schedule: resolverSchedule });
+    const exactQuote = await resolverQuote([exactTask]);
+    assert.deepEqual(exactQuote.pricedRules.map((rule) => [rule.min, rule.max, rule.comment]), [[500, 600, "exact task"]]);
+    const legacyExactQuote = await calculateStructuredRequestPrice({ cityId: city.id, categoryId: exactTask.categoryId, subcategoryId: exactTask.subcategoryId, taskTemplateId: exactTask.taskTemplateId, frequencyCode: "once", durationMinutes: 120 });
+    assert.equal(legacyExactQuote.calculatedRecommendedPrice, 550);
+    const coveredQuote = await resolverQuote([exactTask, coveredTask]);
+    assert.equal(coveredQuote.pricedRules.length, 1);
+    assert.equal(coveredQuote.perVisitHelpAmount, exactQuote.perVisitHelpAmount);
+    const fallbackQuote = await resolverQuote([fallbackTask]);
+    assert.deepEqual(fallbackQuote.pricedRules.map((rule) => [rule.min, rule.max, rule.comment]), [[100, 200, "category fallback"]]);
+    const unpricedQuote = await resolverQuote([unpricedTask]);
+    assert.equal(unpricedQuote.perVisitHelpAmount, null);
+    assert.equal(unpricedQuote.pricedRules.length, 0);
+    assert.equal(unpricedQuote.unpricedTasks[0].taskTemplateSlug, "unpriced-task");
+    const tieForward = await resolverQuote([tieLowTask, tieHighTask]);
+    const tieReverse = await resolverQuote([tieHighTask, tieLowTask]);
+    assert.deepEqual(stablePricingView(tieForward), stablePricingView(tieReverse));
+    assert.equal(tieForward.pricedRules[0].comment, "high min");
 
     const customerCategories = await categoriesForCity(city.id, "customer");
     assert.ok(customerCategories.categories.length > 0);
+    assert.equal(customerCategories.layers.length, 3);
     assert.equal(Object.prototype.hasOwnProperty.call(customerCategories.categories[0], "descriptionForAdmin"), false);
     assert.equal(Object.prototype.hasOwnProperty.call(customerCategories.categories[0], "isVisibleForAdmin"), false);
+    const multiTaskCategory = customerCategories.categories.find((category) => (category.children ?? []).flatMap((child) => child.taskTemplates ?? []).length >= 2)!;
+    const multiTaskRows = (multiTaskCategory.children ?? []).flatMap((child) => (child.taskTemplates ?? []).map((task) => ({
+      categoryId: multiTaskCategory.id,
+      subcategoryId: child.id,
+      taskTemplateId: task.id
+    }))).slice(0, 2);
+    assert.equal(multiTaskRows.length, 2);
+    const multiTaskCalculation = await calculateMultiTaskRequest({
+      cityId: city.id,
+      selectedTasks: multiTaskRows,
+      frequency: "once",
+      schedule: { frequency: "once", startDate: "2030-04-10", slots: [{ id: "multi", startTime: "10:00", durationMinutes: 120 }] }
+    });
+    assert.equal(multiTaskCalculation.selectedTasks.length, 2);
+    assert.equal(multiTaskCalculation.structureLayers.length, 3);
+    const dynamicSelection = customerCategories.categories.flatMap((category) => (category.children ?? []).flatMap((child) => (child.taskTemplates ?? []).map((task) => ({ category, child, task })))).find((item) => (item.task.formFields?.length ?? 0) > 0);
+    assert.ok(dynamicSelection);
+    const dynamicTask = { categoryId: dynamicSelection.category.id, subcategoryId: dynamicSelection.child.id, taskTemplateId: dynamicSelection.task.id };
+    const dynamicTaskKey = `${dynamicTask.categoryId}:${dynamicTask.subcategoryId}:${dynamicTask.taskTemplateId}`;
+    await assert.rejects(calculateMultiTaskRequest({
+      cityId: city.id,
+      selectedTasks: [dynamicTask],
+      frequency: "once",
+      schedule: { frequency: "once", startDate: "2030-04-10", slots: [{ id: "dynamic", startTime: "12:00", durationMinutes: 120 }] }
+    }), (error: any) => error?.details?.validationErrors?.some((item: any) => item.path.startsWith(`taskFieldValues.${dynamicTaskKey}.`)) === true);
+    const dynamicValues = Object.fromEntries(dynamicSelection.task.formFields!.map((field: { id: string; type: string; min?: number | null; options?: Array<{ value: string }> }) => [field.id, field.type === "number" ? Math.max(field.min ?? 15, 30) : field.type === "checkbox" ? true : field.options?.[0]?.value ?? "Тестовое значение"]));
+    const dynamicCalculation = await calculateMultiTaskRequest({
+      cityId: city.id,
+      selectedTasks: [dynamicTask],
+      taskFieldValues: { [dynamicTaskKey]: dynamicValues },
+      frequency: "once",
+      schedule: { frequency: "once", startDate: "2030-04-10", slots: [{ id: "dynamic", startTime: "12:00", durationMinutes: 120 }] }
+    });
+    assert.deepEqual(dynamicCalculation.taskFieldValues[dynamicTaskKey], dynamicValues);
     const categoriesResponse = await apiRequest(createApp(), `/api/categories/for-request?cityId=${city.id}`, {
       method: "GET",
       token: tokenFor(customer.id, customer.role)
@@ -829,12 +1069,21 @@ async function runCategoryStructureTests() {
     assert.ok(invalidSlug.errors.some((error) => error.includes("Некорректный slug")));
     assert.equal(validateCategoryImport({ scope: { type: "city", cityId: city.id }, categories: [{ slug: "unsafe", title: "Медицинские услуги" }] }).valid, false);
     assert.equal(validateCategoryImport({ scope: { type: "city", cityId: city.id }, categories: [{ slug: "safe", title: "Помощь" }], pricingRules: [{ categorySlug: "safe", recommendedMinPrice: 900, recommendedMaxPrice: 500 }] }).valid, false);
+    assert.equal(validateCategoryImport({
+      scope: { type: "city", cityId: city.id },
+      categories: [{ slug: "dynamic", title: "Динамическая задача" }],
+      taskTemplates: [{ categorySlug: "dynamic", taskSlug: "dynamic-task", title: "Динамическая задача", formFields: [{ id: "destination", label: "Место", type: "text", required: true }] }]
+    }).valid, true);
+    assert.equal(validateCategoryImport({ scope: { type: "city", cityId: city.id }, categories: [{ slug: "legacy-safe", title: "Старая структура" }], safetyRules: [{ categorySlug: "legacy-safe", title: "Информация", description: "Не блокирует", isBlocking: false }] }).valid, true);
+    const invalidBlockingRule = validateCategoryImport({ scope: { type: "city", cityId: city.id }, categories: [{ slug: "unsafe-rule", title: "Проверка" }], safetyRules: [{ categorySlug: "unsafe-rule", ruleKey: "unsafe", title: "Блокировка", description: "Нет условия", isBlocking: true }] });
+    assert.equal(invalidBlockingRule.valid, false);
+    assert.ok(invalidBlockingRule.errors.some((error) => error.includes("машиночитаемое условие")));
 
     const structure = await prisma.categoryStructure.findUniqueOrThrow({ where: { id: cityDraft.id }, include: { categories: true } });
     const rootCategory = structure.categories.find((category) => !category.parentId)!;
     const childCategory = structure.categories.find((category) => category.parentId === rootCategory.id)!;
     await prisma.categoryPricingRule.updateMany({
-      where: { categoryId: rootCategory.id, isActive: true },
+      where: { categoryId: { in: [rootCategory.id, childCategory.id] }, isActive: true },
       data: { recommendedMinPrice: 900, recommendedMaxPrice: 1500, defaultDurationMinutes: 120 }
     });
     const taskTemplate = await prisma.categoryTaskTemplate.findFirstOrThrow({ where: { categoryId: childCategory.id, isActive: true } });
@@ -868,7 +1117,7 @@ async function runCategoryStructureTests() {
     const additionalChild = structure.categories.find((category) => category.parentId === additionalRoot.id)!;
     const additionalTemplate = await prisma.categoryTaskTemplate.findFirstOrThrow({ where: { categoryId: additionalChild.id, isActive: true } });
     await prisma.categoryPricingRule.updateMany({
-      where: { categoryId: additionalRoot.id, isActive: true },
+      where: { categoryId: { in: [additionalRoot.id, additionalChild.id] }, isActive: true },
       data: { recommendedMinPrice: 700, recommendedMaxPrice: 900 }
     });
     const combinedCalculation = await calculateStructuredRequestPrice({
@@ -886,7 +1135,7 @@ async function runCategoryStructureTests() {
       /Шаблон задачи не относится/
     );
     await prisma.categoryPricingRule.updateMany({
-      where: { categoryId: additionalRoot.id, isActive: true },
+      where: { categoryId: { in: [additionalRoot.id, additionalChild.id] }, isActive: true },
       data: { recommendedMinPrice: null, recommendedMaxPrice: null }
     });
     const unpricedAdditional = await calculateStructuredRequestPrice({
@@ -940,6 +1189,33 @@ async function runCategoryStructureTests() {
     assert.equal(JSON.parse(snapshot!.snapshotJson).finalCalculatedRecommendedPrice, 1200);
     assert.equal(JSON.parse(snapshot!.snapshotJson).structureScopeType, "city");
     assert.equal(JSON.parse(snapshot!.snapshotJson).additionalTaskCategoryId, additionalRoot.id);
+    const multiSnapshot = await prisma.$transaction((tx) => createMultiTaskRequestSnapshotTx(tx, {
+      requestId: request.id,
+      cityId: city.id,
+      recipientType: "self",
+      dependentState: { mainState: "independent", features: [] },
+      selectedTasks: multiTaskRows,
+      frequency: "once",
+      schedule: { frequency: "once", startDate: "2030-04-10", slots: [{ id: "multi", startTime: "10:00", durationMinutes: 120 }] }
+    }, multiTaskCalculation));
+    const multiSnapshotJson = JSON.parse(multiSnapshot.snapshotJson);
+    assert.equal(multiSnapshotJson.selectedTasks.length, 2);
+    assert.equal(multiSnapshotJson.structureLayers.length, 3);
+    const dynamicSnapshot = await prisma.$transaction((tx) => createMultiTaskRequestSnapshotTx(tx, {
+      requestId: request.id,
+      cityId: city.id,
+      recipientType: "self",
+      dependentState: { mainState: "independent", features: [] },
+      selectedTasks: [dynamicTask],
+      taskFieldValues: { [dynamicTaskKey]: dynamicValues },
+      frequency: "once",
+      schedule: { frequency: "once", startDate: "2030-04-10", slots: [{ id: "dynamic", startTime: "12:00", durationMinutes: 120 }] }
+    }, dynamicCalculation));
+    const dynamicSnapshotJson = JSON.parse(dynamicSnapshot.snapshotJson);
+    assert.deepEqual(dynamicSnapshotJson.taskFieldValues[dynamicTaskKey], dynamicValues);
+    assert.equal(dynamicSnapshotJson.structureLayers.length, 3);
+    assert.equal(dynamicSnapshotJson.selectedTasks.length, 1);
+    assert.ok(Array.isArray(dynamicSnapshotJson.pricingBreakdown));
     await prisma.category.update({ where: { id: rootCategory.id }, data: { title: "Временно переименовано" } });
     assert.equal(JSON.parse((await prisma.requestCategorySnapshot.findUniqueOrThrow({ where: { id: snapshot!.id } })).snapshotJson).category.title, rootCategory.title);
 
@@ -951,9 +1227,21 @@ async function runCategoryStructureTests() {
     const importedDraft = await createDraftFromImport(exported.payload, admin.id, exported.fileName);
     createdStructureIds.push(importedDraft.id);
     assert.equal(importedDraft.status, "draft");
+    await assert.rejects(createDraftFromImport(exported.payload, admin.id, exported.fileName), (error: any) => error?.code === "category_structure_version_exists");
     await publishCategoryStructure(importedDraft.id, admin.id);
     assert.equal((await prisma.categoryStructure.findUniqueOrThrow({ where: { id: cityDraft.id } })).status, "archived");
     assert.equal((await getEffectiveCategoryStructure(city.id)).structure?.id, importedDraft.id);
+    const comparison = await compareCategoryStructures(cityDraft.id, importedDraft.id);
+    assert.equal(comparison.left.id, cityDraft.id);
+    assert.equal(comparison.right.id, importedDraft.id);
+    const compareResponse = await apiRequest(createApp(), `/api/admin/category-structures/compare?leftId=${cityDraft.id}&rightId=${importedDraft.id}`, { method: "GET", token: tokenFor(admin.id, admin.role) });
+    assert.equal(compareResponse.status, 200);
+    const rollbackResponse = await apiRequest(createApp(), `/api/admin/category-structures/${cityDraft.id}/rollback`, { method: "POST", token: tokenFor(admin.id, admin.role) });
+    assert.equal(rollbackResponse.status, 201);
+    const rollbackDraft = rollbackResponse.payload;
+    createdStructureIds.push(rollbackDraft.id);
+    assert.equal(rollbackDraft.status, "draft");
+    assert.match(rollbackDraft.comment ?? "", /отката/);
 
     const workingStructures = await listCategoryStructures();
     assert.equal(workingStructures.some((item) => item.status === "archived"), false);
@@ -2829,12 +3117,8 @@ async function runBonusServiceFeeTests() {
       prisma.user.update({ where: { id: client.id }, data: { balance: 450, bonusBalance: 300 } }),
       prisma.user.update({ where: { id: performer.id }, data: { balance: 500, bonusBalance: 250 } })
     ]);
-    const effective = await getEffectiveCategoryStructure(client.cityId);
-    assert.ok(effective.structure);
-    const requestCategory = await prisma.category.findFirstOrThrow({
-      where: { structureId: effective.structure.id, slug: "home-help", parentId: null, status: "active" },
-      include: { children: { where: { status: "active" }, include: { taskTemplates: { where: { isActive: true } } } }, taskTemplates: { where: { isActive: true } } }
-    });
+    const effectiveCatalog = await categoriesForCity(client.cityId, "customer");
+    const requestCategory = effectiveCatalog.categories.find((category) => category.slug === "home-help")!;
     const requestSubcategory = requestCategory.children[0] ?? null;
     const requestTaskTemplate = requestSubcategory?.taskTemplates[0] ?? requestCategory.taskTemplates[0] ?? null;
     const selectedTasks = [{
@@ -3166,7 +3450,7 @@ async function runCriticalSafetyTests() {
         agreedPackageId: "home_help_2h",
         agreedAddons: ["shopping"],
         agreedDurationMinutes: 120,
-        agreedScheduledAt: "2026-08-01T10:00:00.000Z",
+        agreedScheduledAt: "2030-08-01T10:00:00.000Z",
         agreedTermsComment: "Две бытовые задачи и покупки"
       }
     });

@@ -304,6 +304,10 @@ export const api = {
     apiFetch<CategoryStructure>("/admin/category-structures/create-from-parent", { method: "POST", body: JSON.stringify(body) }),
   adminCreateCategoryStructureVersion: (id: string, comment?: string) =>
     apiFetch<CategoryStructure>(`/admin/category-structures/${id}/new-version`, { method: "POST", body: JSON.stringify({ comment }) }),
+  adminCreateCategoryStructureRollback: (id: string) =>
+    apiFetch<CategoryStructure>(`/admin/category-structures/${id}/rollback`, { method: "POST" }),
+  adminCompareCategoryStructures: (leftId: string, rightId: string) =>
+    apiFetch<import("../types").CategoryStructureComparison>(`/admin/category-structures/compare?leftId=${encodeURIComponent(leftId)}&rightId=${encodeURIComponent(rightId)}`),
   adminUpdateCategoryStructure: (id: string, body: Partial<Pick<CategoryStructure, "title" | "description" | "qualityStatus" | "comment">>) =>
     apiFetch<CategoryStructure>(`/admin/category-structures/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   adminPublishCategoryStructure: (id: string) => apiFetch<CategoryStructure>(`/admin/category-structures/${id}/publish`, { method: "POST" }),

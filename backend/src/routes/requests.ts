@@ -28,6 +28,7 @@ import {
   calculateMultiTaskRequest,
   createMultiTaskRequestSnapshotTx,
   REQUEST_FREQUENCIES,
+  validateMultiTaskSafety,
   type RequestScheduleInput
 } from "../services/requestScheduleService";
 
@@ -120,6 +121,7 @@ const createRequestSchema = z.object({
     subcategoryId: z.string().min(1).nullable().optional(),
     taskTemplateId: z.string().min(1).nullable().optional()
   })).max(100).optional(),
+  taskFieldValues: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
   scheduleV2: z.any().optional(),
   accompanimentWaitingMinutes: z.number().int().min(0).max(1440).optional(),
   title: z.string().min(4).max(160).optional(),
@@ -193,6 +195,7 @@ const multiTaskPriceSchema = z.object({
   recipientType: z.enum(["self", "adult", "elderly", "child"]),
   dependentState: z.object({ mainState: z.string().min(1), features: z.array(z.string()).default([]) }),
   selectedTasks: z.array(z.object({ categoryId: z.string().min(1), subcategoryId: z.string().nullable().optional(), taskTemplateId: z.string().nullable().optional() })).min(1).max(100),
+  taskFieldValues: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
   frequency: z.enum(REQUEST_FREQUENCIES),
   schedule: scheduleV2Schema,
   accompanimentWaitingMinutes: z.number().int().min(0).max(1440).optional(),
@@ -210,6 +213,7 @@ requestsRouter.post(
         selectedTasks: input.selectedTasks,
         frequency: input.frequency,
         schedule: input.schedule,
+        taskFieldValues: input.taskFieldValues,
         queryText: input.queryText
       }));
     }
@@ -328,11 +332,16 @@ requestsRouter.post(
       selectedTasks: input.selectedTasks!,
       frequency: scheduleV2!.frequency,
       schedule: scheduleV2!,
+      taskFieldValues: input.taskFieldValues,
       queryText: `${input.comment ?? ""}`
     }) : null;
     const hasAccompaniment = multiPricing?.selectedTasks.some((task) => task.categorySlug === "accompaniment") ?? false;
     if (hasAccompaniment && !input.comment?.trim()) {
       throw new HttpError(400, "Проверьте заполнение формы", "validation_error", { validationErrors: [{ path: "comment", message: "Укажите место назначения и действия, которые Помощнику нужно выполнить в процессе сопровождения." }] });
+    }
+    const commentRequiredTask = multiPricing?.selectedTasks.find((task) => task.requiresComment);
+    if (commentRequiredTask && !input.comment?.trim()) {
+      throw new HttpError(400, "Проверьте заполнение формы", "validation_error", { validationErrors: [{ path: "comment", message: `Добавьте комментарий для задачи «${commentRequiredTask.taskTemplateTitle}».` }] });
     }
     const resolvedTitle = input.title ?? multiPricing!.selectedTasks.slice(0, 3).map((task) => task.taskTemplateTitle).join(", ");
     const resolvedDescription = input.description ?? `Выбранные задачи: ${multiPricing!.selectedTasks.map((task) => task.taskTemplateTitle).join(", ")}.`;
@@ -398,6 +407,10 @@ requestsRouter.post(
     const firstVisit = multiPricing?.expandedVisits[0];
     const derivedHelpFor = input.recipientType === "child" ? "child" : input.recipientType === "elderly" ? "elderly" : input.recipientType ? "home_family" : input.helpFor;
     const derivedStates = usesStructuredV2 ? [input.dependentMainState!, ...(input.dependentStateFeatures ?? [])] : input.dependentState;
+
+    if (usesStructuredV2) {
+      await validateMultiTaskSafety({ cityId: input.cityId, selectedTasks: input.selectedTasks!, taskFieldValues: input.taskFieldValues });
+    }
 
     const approximate = toApproximatePoint(input.lat, input.lng, city.mapCenterLat, city.mapCenterLng);
     const request = await prisma.$transaction(async (tx) => {
@@ -472,6 +485,7 @@ requestsRouter.post(
           dependentAge: input.dependentAge,
           dependentState: { mainState: input.dependentMainState!, features: input.dependentStateFeatures ?? [] },
           selectedTasks: input.selectedTasks!,
+          taskFieldValues: input.taskFieldValues,
           frequency: scheduleV2!.frequency,
           schedule: scheduleV2!,
           accompanimentWaitingMinutes: input.accompanimentWaitingMinutes

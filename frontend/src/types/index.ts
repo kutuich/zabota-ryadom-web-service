@@ -93,6 +93,28 @@ export type CategoryTaskTemplate = {
   customerHint?: string | null;
   helperHint?: string | null;
   safetyNote?: string | null;
+  taskKind?: "standard" | "additional" | "both";
+  aliases?: string[];
+  durationEffect?: Record<string, unknown>;
+  priceEffect?: Record<string, unknown>;
+  requiresComment?: boolean;
+  allowedRegions?: string[];
+  formFields?: DynamicRequestField[];
+  recommendations?: Array<{ taskSlug: string; label?: string | null }>;
+  constraints?: Record<string, unknown>;
+};
+
+export type DynamicRequestField = {
+  id: string;
+  label: string;
+  type: "text" | "textarea" | "number" | "select" | "checkbox" | "time";
+  required?: boolean;
+  requiredWhen?: { fieldId: string; equals: string | number | boolean };
+  placeholder?: string | null;
+  helpText?: string | null;
+  options?: Array<{ value: string; label: string }>;
+  min?: number | null;
+  max?: number | null;
 };
 
 export type StructuredCategory = {
@@ -108,7 +130,7 @@ export type StructuredCategory = {
   status: string;
   children?: StructuredCategory[];
   taskTemplates?: CategoryTaskTemplate[];
-  safetyRules?: Array<{ id: string; title: string; description: string; severity: string; isBlocking: boolean }>;
+  safetyRules?: Array<{ id: string; ruleKey?: string; title: string; description: string; severity: string; isBlocking: boolean; applicability?: Record<string, unknown>; categorySlug?: string; sourceStructure?: Pick<CategoryStructure, "id" | "scopeType" | "versionNumber" | "title"> }>;
   pricingRules?: Array<{ id: string; recommendedMinPrice?: number | null; recommendedMaxPrice?: number | null; defaultDurationMinutes?: number | null; priceComment?: string | null }>;
 };
 
@@ -127,6 +149,7 @@ export type CategoryStructure = {
   source: string;
   comment?: string | null;
   publishedAt?: string | null;
+  activatedAt?: string | null;
   archivedAt?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -150,6 +173,7 @@ export type CategoriesForCity = {
   status: CategoryCityStatus["status"];
   statusLabel: string;
   structure: Pick<CategoryStructure, "id" | "scopeType" | "versionNumber" | "title" | "qualityStatus"> | null;
+  layers?: Array<Pick<CategoryStructure, "id" | "scopeType" | "versionNumber" | "title" | "qualityStatus">>;
   categories: StructuredCategory[];
   directions?: Array<{
     id: string;
@@ -169,6 +193,16 @@ export type CategoriesForCity = {
       slug: string;
       title: string;
       aliases: string[];
+      description?: string | null;
+      customerHint?: string | null;
+      safetyNote?: string | null;
+      taskKind?: "standard" | "additional" | "both";
+      durationEffect?: Record<string, unknown>;
+      priceEffect?: Record<string, unknown>;
+      requiresComment?: boolean;
+      formFields?: DynamicRequestField[];
+      recommendations?: Array<{ taskSlug: string; label?: string | null }>;
+      constraints?: Record<string, unknown>;
     }>;
   }>;
 };
@@ -228,6 +262,7 @@ export type StructuredRequestPriceQuote = {
   frequencyTitle?: string;
   userMessage: string;
   warnings: string[];
+  appliedSafetyRules?: Array<{ id: string; ruleKey: string; title: string; description: string; severity: string; isBlocking: boolean; categorySlug: string; taskSlug: string; result: "warning" | "passed" | "blocked" }>;
 };
 
 export type HelperCategoryPreference = {
@@ -339,6 +374,14 @@ export type CategoryImportPreview = {
   errors: string[];
   warnings: string[];
   summary: Record<string, string | number | undefined>;
+};
+
+export type CategoryStructureComparison = {
+  left: Pick<CategoryStructure, "id" | "title" | "versionNumber" | "scopeType">;
+  right: Pick<CategoryStructure, "id" | "title" | "versionNumber" | "scopeType">;
+  categories: { added: string[]; removed: string[]; changed: string[] };
+  tasks: { added: string[]; removed: string[]; changed: string[] };
+  pricingRules: { added: string[]; removed: string[]; changed: string[] };
 };
 
 export type User = {
