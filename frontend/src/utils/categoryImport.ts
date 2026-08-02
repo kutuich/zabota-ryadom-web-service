@@ -40,10 +40,31 @@ export async function readCategoryImportFile(file: File) {
     recommendedMaxPrice: optionalNumber(row.recommendedMaxPrice), defaultDurationMinutes: optionalNumber(row.defaultDurationMinutes),
     priceComment: optionalText(row.priceComment), active: bool(row.active, true)
   }));
+  const nodes = optionalObjects(XLSX, workbook, "Узлы").map((row) => ({
+    slug: text(row.slug), stableKey: optionalText(row.stableKey) ?? text(row.slug), parentSlug: optionalText(row.parentSlug), nodeType: optionalText(row.nodeType) ?? "task",
+    title: text(row.title), descriptionForCustomer: optionalText(row.descriptionForCustomer), descriptionForHelper: optionalText(row.descriptionForHelper),
+    sortOrder: integer(row.sortOrder, 100), selectable: bool(row.selectable, false), active: bool(row.active, true), visible: bool(row.visible, true),
+    selectionMode: optionalText(row.selectionMode) ?? "multiple", aliases: json(row.aliases, []), formFields: json(row.formFields, []),
+    constraints: json(row.constraints, {}), durationEffect: json(row.durationEffect, {}), metadata: json(row.metadata, {})
+  }));
+  const relations = optionalObjects(XLSX, workbook, "Связи узлов").map((row) => ({
+    sourceSlug: text(row.sourceSlug), targetSlug: text(row.targetSlug), relationType: text(row.relationType), active: bool(row.active, true),
+    sortOrder: integer(row.sortOrder, 100), conditions: json(row.conditions, {}), pricingBehavior: optionalText(row.pricingBehavior), uiBehavior: optionalText(row.uiBehavior), metadata: json(row.metadata, {})
+  }));
+  const nodePricingRules = optionalObjects(XLSX, workbook, "Цены узлов").map((row) => ({
+    nodeSlug: text(row.nodeSlug), packageCode: optionalText(row.packageCode), coveredNodeSlugs: json(row.coveredNodeSlugs, []),
+    recommendedMinPrice: optionalNumber(row.recommendedMinPrice), recommendedMaxPrice: optionalNumber(row.recommendedMaxPrice),
+    defaultDurationMinutes: optionalNumber(row.defaultDurationMinutes), priceComment: optionalText(row.priceComment), conditions: json(row.conditions, {}), active: bool(row.active, true)
+  }));
+  const nodeSafetyRules = optionalObjects(XLSX, workbook, "Ограничения узлов").map((row) => ({
+    nodeSlug: optionalText(row.nodeSlug), ruleKey: text(row.ruleKey), title: text(row.title), description: text(row.description),
+    severity: optionalText(row.severity) ?? "warning", isBlocking: bool(row.isBlocking, false), applicability: json(row.applicability, {}), active: bool(row.active, true), sortOrder: integer(row.sortOrder, 100)
+  }));
 
   const scopeType = String(passport.scopeType || "").toLocaleLowerCase() as "federal" | "region" | "city";
   return {
-    version: "1",
+    schemaVersion: nodes.length ? "3" : "2",
+    version: nodes.length ? "2" : "1",
     scope: { type: scopeType, regionId: optionalText(passport.regionId), cityId: optionalText(passport.cityId) },
     passport: {
       title: optionalText(passport.title),
@@ -55,7 +76,8 @@ export async function readCategoryImportFile(file: File) {
     categories,
     taskTemplates,
     safetyRules,
-    pricingRules
+    pricingRules,
+    ...(nodes.length ? { nodes, relations, nodePricingRules, nodeSafetyRules } : {})
   };
 }
 
@@ -69,6 +91,11 @@ function objects(XLSX: XlsxModule, workbook: WorkBook, name: string) {
   const sheet = workbook.Sheets[name];
   if (!sheet) throw new Error(`В файле нет листа «${name}».`);
   return XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+}
+
+function optionalObjects(XLSX: XlsxModule, workbook: WorkBook, name: string) {
+  const sheet = workbook.Sheets[name];
+  return sheet ? XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" }) : [];
 }
 
 function text(value: unknown) { return String(value ?? "").trim(); }

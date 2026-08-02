@@ -26,6 +26,7 @@ import {
 } from "../services/categoryStructureService";
 import { asyncHandler, HttpError } from "../utils/http";
 import { flattenRequestCatalog } from "../services/requestScheduleService";
+import { getEffectiveServiceTree } from "../services/serviceTreeService";
 import {
   cancelRequestStructureUpdate,
   confirmRequestStructureUpdate,
@@ -42,6 +43,13 @@ export const helperCategoryPreferencesRouter = Router();
 export const adminCategoryStructuresRouter = Router();
 
 categoryStructuresRouter.use(authenticate);
+categoryStructuresRouter.get(
+  "/effective-tree",
+  asyncHandler(async (req, res) => {
+    const cityId = z.string().min(1).parse(req.query.cityId);
+    res.json(await getEffectiveServiceTree(cityId));
+  })
+);
 categoryStructuresRouter.get(
   "/effective",
   asyncHandler(async (req, res) => {

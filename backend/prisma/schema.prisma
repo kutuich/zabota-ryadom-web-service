@@ -58,6 +58,7 @@ model City {
   categoryStructures      CategoryStructure[]
   helperCategoryPreferences HelperCategoryPreference[]
   broadcastCampaigns       BroadcastCampaign[]
+  requestDrafts            RequestDraft[]
 
   @@index([isActive])
   @@index([normalizedName])
@@ -155,6 +156,9 @@ model User {
   broadcastRecipients       BroadcastRecipient[]
   serviceMessageAttachments ServiceMessageAttachment[] @relation("ServiceAttachmentOwner")
   uploadedServiceAttachments ServiceMessageAttachment[] @relation("ServiceAttachmentUploader")
+  requestDrafts              RequestDraft[]              @relation("RequestDraftOwner")
+  requestDraftSupportCases   RequestDraftSupportCase[]   @relation("RequestDraftSupportClient")
+  assignedDraftSupportCases  RequestDraftSupportCase[]   @relation("RequestDraftSupportManager")
 
   @@index([role])
   @@index([cityId])
@@ -297,6 +301,7 @@ model CategoryStructure {
   importFileName       String?
   importHash           String?
   metadataJson         String?
+  schemaVersion        String              @default("2")
   scopeRegion          Region?             @relation(fields: [scopeRegionId], references: [id], onDelete: SetNull)
   scopeCity            City?               @relation(fields: [scopeCityId], references: [id], onDelete: SetNull)
   parentStructure      CategoryStructure?  @relation("CategoryStructureVersions", fields: [parentStructureId], references: [id], onDelete: SetNull)
@@ -306,12 +311,124 @@ model CategoryStructure {
   categories           Category[]
   requestSnapshots     RequestCategorySnapshot[]
   requestUpdateRevisions RequestStructureUpdateRevision[]
+  serviceNodes         ServiceNode[]
+  serviceNodeRelations ServiceNodeRelation[]
+  serviceNodePricingRules ServiceNodePricingRule[]
+  serviceNodeSafetyRules ServiceNodeSafetyRule[]
+  requestDrafts        RequestDraft[]
 
   @@unique([scopeKey, versionNumber])
   @@index([scopeType, status])
   @@index([scopeRegionId, status])
   @@index([scopeCityId, status])
   @@index([parentStructureId])
+}
+
+model ServiceNode {
+  id                     String   @id @default(cuid())
+  structureId            String
+  parentId               String?
+  slug                   String
+  stableKey              String
+  nodeType               String   @default("task")
+  title                  String
+  descriptionForCustomer String?
+  descriptionForHelper   String?
+  sortOrder              Int      @default(100)
+  isActive               Boolean  @default(true)
+  isSelectable           Boolean  @default(false)
+  isVisible              Boolean  @default(true)
+  selectionMode          String   @default("multiple")
+  aliasesJson            String   @default("[]")
+  formFieldsJson         String   @default("[]")
+  constraintsJson        String   @default("{}")
+  durationEffectJson     String   @default("{}")
+  metadataJson           String   @default("{}")
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  structure              CategoryStructure @relation(fields: [structureId], references: [id], onDelete: Cascade)
+  parent                 ServiceNode? @relation("ServiceNodeTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children               ServiceNode[] @relation("ServiceNodeTree")
+  outgoingRelations      ServiceNodeRelation[] @relation("ServiceNodeRelationSource")
+  incomingRelations      ServiceNodeRelation[] @relation("ServiceNodeRelationTarget")
+  pricingRules           ServiceNodePricingRule[]
+  safetyRules            ServiceNodeSafetyRule[]
+
+  @@unique([structureId, slug])
+  @@unique([structureId, stableKey])
+  @@index([structureId, parentId, sortOrder])
+  @@index([structureId, nodeType, isActive])
+}
+
+model ServiceNodeRelation {
+  id              String   @id @default(cuid())
+  structureId     String
+  sourceNodeId    String?
+  targetNodeId    String?
+  sourceSlug      String
+  targetSlug      String
+  relationType    String
+  isActive        Boolean  @default(true)
+  sortOrder       Int      @default(100)
+  conditionsJson  String   @default("{}")
+  pricingBehavior String?
+  uiBehavior      String?
+  metadataJson    String   @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  structure       CategoryStructure @relation(fields: [structureId], references: [id], onDelete: Cascade)
+  sourceNode      ServiceNode? @relation("ServiceNodeRelationSource", fields: [sourceNodeId], references: [id], onDelete: Cascade)
+  targetNode      ServiceNode? @relation("ServiceNodeRelationTarget", fields: [targetNodeId], references: [id], onDelete: Cascade)
+
+  @@unique([structureId, sourceSlug, targetSlug, relationType])
+  @@index([structureId, relationType, isActive])
+  @@index([sourceNodeId, isActive])
+  @@index([targetNodeId, isActive])
+}
+
+model ServiceNodePricingRule {
+  id                     String   @id @default(cuid())
+  structureId            String
+  nodeId                 String?
+  nodeSlug               String
+  packageCode            String?
+  coveredNodeSlugsJson   String   @default("[]")
+  recommendedMinPrice    Int?
+  recommendedMaxPrice    Int?
+  defaultDurationMinutes Int?
+  priceComment           String?
+  conditionsJson         String   @default("{}")
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  structure              CategoryStructure @relation(fields: [structureId], references: [id], onDelete: Cascade)
+  node                   ServiceNode? @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@index([structureId, isActive])
+  @@index([nodeId, isActive])
+}
+
+model ServiceNodeSafetyRule {
+  id                String   @id @default(cuid())
+  structureId       String
+  nodeId            String?
+  nodeSlug          String?
+  ruleKey           String
+  title             String
+  description       String
+  severity          String   @default("warning")
+  isBlocking        Boolean  @default(false)
+  applicabilityJson String   @default("{}")
+  isActive          Boolean  @default(true)
+  sortOrder         Int      @default(100)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  structure         CategoryStructure @relation(fields: [structureId], references: [id], onDelete: Cascade)
+  node              ServiceNode? @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@unique([structureId, ruleKey])
+  @@index([structureId, isActive, sortOrder])
+  @@index([nodeId, isActive])
 }
 
 model Category {
@@ -548,12 +665,90 @@ model ClientRequest {
   serviceMessages        ServiceMessage[]
   serviceAttachments     ServiceMessageAttachment[]
   structureUpdateRevisions RequestStructureUpdateRevision[]
+  sourceDraft             RequestDraft?
 
   @@index([cityId, status])
   @@index([publicNumber])
   @@index([clientId])
   @@index([createdByManagerId])
   @@index([selectedPerformerId])
+}
+
+model RequestDraft {
+  id                       String   @id @default(cuid())
+  userId                   String
+  cityId                   String?
+  structureId              String?
+  convertedRequestId       String?  @unique
+  status                   String   @default("active")
+  title                    String?
+  formDataJson             String   @default("{}")
+  selectedNodeSlugsJson    String   @default("[]")
+  expandedNodeSlugsJson    String   @default("[]")
+  dynamicFieldValuesJson   String   @default("{}")
+  scheduleDraftJson        String   @default("{}")
+  addressDraftJson         String   @default("{}")
+  beneficiaryDraftJson     String   @default("{}")
+  structureVersionsJson    String   @default("[]")
+  latestQuoteJson          String?
+  validationStateJson      String   @default("{}")
+  revision                 Int      @default(1)
+  lastAutosavedAt          DateTime?
+  deletedAt                DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  user                     User     @relation("RequestDraftOwner", fields: [userId], references: [id], onDelete: Cascade)
+  city                     City?    @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  structure                CategoryStructure? @relation(fields: [structureId], references: [id], onDelete: SetNull)
+  convertedRequest         ClientRequest? @relation(fields: [convertedRequestId], references: [id], onDelete: SetNull)
+  revisions                RequestDraftRevision[]
+  supportCases             RequestDraftSupportCase[]
+
+  @@index([userId, status, updatedAt])
+  @@index([cityId, status])
+  @@index([structureId])
+}
+
+model RequestDraftRevision {
+  id             String   @id @default(cuid())
+  draftId        String
+  revision       Int
+  snapshotJson   String
+  changeSource   String   @default("autosave")
+  createdAt      DateTime @default(now())
+  draft          RequestDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@unique([draftId, revision])
+  @@index([draftId, createdAt])
+}
+
+model RequestDraftSupportCase {
+  id                         String   @id @default(cuid())
+  publicNumber               String   @unique
+  draftId                    String
+  clientId                   String
+  assignedManagerId          String?
+  relatedServiceConversationId String?
+  status                     String   @default("new")
+  subject                    String
+  initialMessage             String
+  priority                   String   @default("normal")
+  source                     String   @default("request_draft")
+  snapshotAtCreationJson     String
+  draftRevisionAtCreation    Int
+  lastMessageAt              DateTime @default(now())
+  resolvedAt                 DateTime?
+  closedAt                   DateTime?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  draft                      RequestDraft @relation(fields: [draftId], references: [id], onDelete: Restrict)
+  client                     User @relation("RequestDraftSupportClient", fields: [clientId], references: [id], onDelete: Restrict)
+  assignedManager            User? @relation("RequestDraftSupportManager", fields: [assignedManagerId], references: [id], onDelete: SetNull)
+  serviceMessages            ServiceMessage[]
+
+  @@index([clientId, status, updatedAt])
+  @@index([assignedManagerId, status])
+  @@index([draftId, createdAt])
 }
 
 model RequestStructureUpdateRevision {
@@ -1052,6 +1247,7 @@ model ServiceMessage {
   relatedRefundTransactionId  String?
   relatedRequestId            String?
   relatedLegalDocumentId      String?
+  relatedRequestDraftSupportCaseId String?
   broadcastId                 String?
   isReadByUser                Boolean                    @default(false)
   readByUserAt                DateTime?
@@ -1064,6 +1260,7 @@ model ServiceMessage {
   relatedRefund               RefundTransaction?        @relation(fields: [relatedRefundTransactionId], references: [id], onDelete: SetNull)
   relatedRequest              ClientRequest?            @relation(fields: [relatedRequestId], references: [id], onDelete: SetNull)
   relatedLegalDocument        LegalDocument?            @relation(fields: [relatedLegalDocumentId], references: [id], onDelete: SetNull)
+  relatedRequestDraftSupportCase RequestDraftSupportCase? @relation(fields: [relatedRequestDraftSupportCaseId], references: [id], onDelete: SetNull)
   broadcast                   BroadcastCampaign?        @relation(fields: [broadcastId], references: [id], onDelete: SetNull)
   broadcastRecipient          BroadcastRecipient?
   attachments                 ServiceMessageAttachment[]
@@ -1075,6 +1272,7 @@ model ServiceMessage {
   @@index([relatedPaymentTransactionId])
   @@index([relatedRefundTransactionId])
   @@index([relatedRequestId])
+  @@index([relatedRequestDraftSupportCaseId])
 }
 
 model BroadcastCampaign {

@@ -128,3 +128,6 @@ Admin/superadmin выбирает `keep_fee` или `return_to_source`. Возв
 - Юридический эффект agreement data не утверждён.
 - Автоматического банковского возврата по спору нет.
 - Scheduler lock рассчитан на один application instance; distributed lock не реализован.
+# Черновик до workflow
+
+`RequestDraft` существует до `ClientRequest` и не участвует в workflow заявок. Только успешный publish после полной backend-валидации создаёт заявку и immutable category snapshot.

@@ -80,6 +80,7 @@ const managerPaths = [
   "/app/manager/users",
   "/app/manager/requests",
   "/app/manager/chats",
+  "/app/manager/request-support",
   "/app/manager/support",
   "/app/manager/payments",
   "/app/manager/balances",
@@ -112,6 +113,7 @@ const adminPaths = [
   "/app/admin/responses",
   "/app/admin/chats",
   "/app/admin/chats/chat-1",
+  "/app/admin/request-support",
   "/app/admin/support",
   "/app/admin/balances",
   "/app/admin/payments",
@@ -174,6 +176,26 @@ assert.equal(legacyAppRedirectPath("/admin/payments"), "/app/admin/payments");
 assert.equal(effectiveRoleForUser({ role: "admin", effectiveRole: "client" } as any), "client");
 assert.equal(effectiveRoleForUser({ role: "admin", effectiveRole: "performer" } as any), "performer");
 
+const serviceTreeSelector = read("components/ServiceTreeSelector.tsx");
+const requestCreationDraftForm = read("components/RequestCreationForm.tsx");
+const requestSupportPanel = read("components/RequestDraftSupportCasesPanel.tsx");
+const categoryImport = read("utils/categoryImport.ts");
+assert.match(serviceTreeSelector, /function TreeNode/);
+assert.match(serviceTreeSelector, /Входит в выбранную задачу/);
+assert.match(serviceTreeSelector, /Также часто требуется/);
+assert.match(serviceTreeSelector, /includedBy\.has\(node\.slug\)/);
+assert.match(requestCreationDraftForm, /30_000/);
+assert.match(requestCreationDraftForm, /Ваши черновики/);
+assert.match(requestCreationDraftForm, /Сохранить черновик/);
+assert.match(requestCreationDraftForm, /Нужна помощь администратора\/менеджера/);
+assert.match(requestCreationDraftForm, /Черновик изменён в другом окне/);
+assert.match(requestCreationDraftForm, /Без отдельной доплаты/);
+assert.match(requestSupportPanel, /Запросы помощи по заявкам/);
+assert.match(requestSupportPanel, /Данные заявки доступны сотруднику только для просмотра/);
+assert.match(categoryImport, /Ограничения узлов/);
+assert.ok(adminNavigation.flatMap((group) => group.items).some((item) => item.label === "Запросы помощи по заявкам"));
+assert.ok(managerNavigation.flatMap((group) => group.items).some((item) => item.label === "Запросы помощи по заявкам"));
+
 const appLayout = read("components/AppLayout.tsx");
 assert.match(appLayout, /logout\(\);/);
 assert.match(appLayout, /navigate\("\/app", \{ replace: true \}\)/);
@@ -221,7 +243,7 @@ assert.match(requestCreationForm, /Визиты не должны пересек
 assert.match(requestCreationForm, /scrollIntoView/);
 assert.match(requestCreationForm, /focus\(\{ preventScroll: true \}\)/);
 assert.match(requestCreationForm, /dynamic-task-fields/);
-assert.match(requestCreationForm, /Также часто требуется/);
+assert.match(serviceTreeSelector, /Также часто требуется/);
 assert.match(requestCreationForm, /taskFieldValues/);
 assert.match(requestCreationForm, /task\.aliases/);
 assert.match(requestCreationForm, /isDynamicFieldVisible/);

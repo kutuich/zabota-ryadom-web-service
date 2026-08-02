@@ -21,6 +21,7 @@
     "db:generate": "prisma generate --schema backend/prisma/schema.prisma",
     "db:push": "prisma db push --schema backend/prisma/schema.prisma",
     "db:seed": "node --import tsx backend/prisma/seed.ts",
+    "db:seed-service-tree-v3": "node --import tsx backend/prisma/seedServiceTreeV3.ts",
     "db:seed-demo": "node --import tsx backend/prisma/seedDemo.ts",
     "db:reset-demo": "node --import tsx backend/prisma/resetDemo.ts"
   },

@@ -83,6 +83,7 @@ const commonSafetyRules = [
 ] as const;
 
 export type CategoryImportPayload = {
+  schemaVersion?: string;
   version?: string;
   scope: { type: CategoryScopeType; regionId?: string | null; regionSlug?: string | null; cityId?: string | null; citySlug?: string | null };
   passport?: {
@@ -93,7 +94,7 @@ export type CategoryImportPayload = {
     comment?: string | null;
     parentStructureId?: string | null;
   };
-  categories: Array<{
+  categories?: Array<{
     slug: string;
     parentSlug?: string | null;
     title: string;
@@ -145,6 +146,38 @@ export type CategoryImportPayload = {
   }>;
   safetyRules?: Array<{ categorySlug: string; ruleKey?: string; title: string; description: string; severity?: string; isBlocking?: boolean; applicability?: SafetyRuleApplicability; active?: boolean; showToCustomer?: boolean; showToHelper?: boolean; showToManager?: boolean; sortOrder?: number }>;
   pricingRules?: Array<{ categorySlug: string; taskSlug?: string | null; packageCode?: string | null; coveredTaskSlugs?: string[]; recommendedMinPrice?: number | null; recommendedMaxPrice?: number | null; defaultDurationMinutes?: number | null; priceComment?: string | null; active?: boolean }>;
+  nodes?: Array<{
+    slug: string;
+    stableKey?: string;
+    parentSlug?: string | null;
+    nodeType: "category" | "group" | "task" | "subtask" | "option" | "package" | "informational";
+    title: string;
+    descriptionForCustomer?: string | null;
+    descriptionForHelper?: string | null;
+    sortOrder?: number;
+    active?: boolean;
+    selectable?: boolean;
+    visible?: boolean;
+    selectionMode?: "multiple" | "single" | "none";
+    aliases?: string[];
+    formFields?: Array<Record<string, unknown>>;
+    constraints?: Record<string, unknown>;
+    durationEffect?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  }>;
+  relations?: Array<{
+    sourceSlug: string;
+    targetSlug: string;
+    relationType: "includes" | "suggests" | "requires" | "excludes" | "alternative_to" | "available_separately" | "included_when_selected" | "sequence_after" | "sequence_before" | "conditional";
+    active?: boolean;
+    sortOrder?: number;
+    conditions?: Record<string, unknown>;
+    pricingBehavior?: string | null;
+    uiBehavior?: string | null;
+    metadata?: Record<string, unknown>;
+  }>;
+  nodePricingRules?: Array<{ nodeSlug: string; packageCode?: string | null; coveredNodeSlugs?: string[]; recommendedMinPrice?: number | null; recommendedMaxPrice?: number | null; defaultDurationMinutes?: number | null; priceComment?: string | null; conditions?: Record<string, unknown>; active?: boolean }>;
+  nodeSafetyRules?: Array<{ nodeSlug?: string | null; ruleKey: string; title: string; description: string; severity?: string; isBlocking?: boolean; applicability?: Record<string, unknown>; active?: boolean; sortOrder?: number }>;
 };
 
 export type SafetyRuleCondition = {
@@ -443,13 +476,17 @@ export async function buildRegionTemplateExport(regionId: string, adminId: strin
 export function validateCategoryImport(payload: CategoryImportPayload) {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const usesNodeSchema = payload.schemaVersion === "3" || Boolean(payload.nodes?.length);
   if (!CATEGORY_SCOPE_TYPES.includes(payload.scope?.type)) errors.push("Некорректный тип структуры.");
   if (payload.passport?.versionNumber) {
     try { normalizeSemanticVersion(payload.passport.versionNumber); } catch { errors.push("Версия структуры должна иметь формат v2.0 или v2.0.1."); }
   }
   if (payload.scope?.type === "region" && !payload.scope.regionId && !payload.scope.regionSlug) errors.push("Для региональной структуры нужен regionId или regionSlug.");
   if (payload.scope?.type === "city" && !payload.scope.cityId && !payload.scope.citySlug) errors.push("Для городской структуры нужен cityId или citySlug.");
-  if (!Array.isArray(payload.categories) || payload.categories.length === 0) errors.push("Добавьте хотя бы одну категорию.");
+  if (!usesNodeSchema && (!Array.isArray(payload.categories) || payload.categories.length === 0)) errors.push("Добавьте хотя бы одну категорию.");
+  if (usesNodeSchema && (!Array.isArray(payload.nodes) || payload.nodes.length === 0)) errors.push("Добавьте хотя бы один узел структуры.");
+
+  const treeSummary = usesNodeSchema ? validateNodeTree(payload, errors) : null;
 
   const slugs = new Set<string>();
   for (const category of payload.categories ?? []) {
@@ -542,14 +579,74 @@ export function validateCategoryImport(payload: CategoryImportPayload) {
     errors: [...new Set(errors)],
     warnings: [...new Set(warnings)],
     summary: {
+      schemaVersion: usesNodeSchema ? "3" : "2",
       scopeType: payload.scope?.type,
       categories: payload.categories?.filter((item) => !item.parentSlug).length ?? 0,
       subcategories: payload.categories?.filter((item) => item.parentSlug).length ?? 0,
       taskTemplates: payload.taskTemplates?.length ?? 0,
+      nodes: payload.nodes?.length ?? 0,
+      rootNodes: treeSummary?.rootNodes ?? 0,
+      maxDepth: treeSummary?.maxDepth ?? (payload.categories?.some((item) => item.parentSlug) ? 2 : 1),
+      selectableNodes: payload.nodes?.filter((item) => item.selectable).length ?? 0,
+      relations: payload.relations?.length ?? 0,
+      includedRelations: payload.relations?.filter((item) => ["includes", "included_when_selected"].includes(item.relationType)).length ?? 0,
       safetyRules: payload.safetyRules?.length ?? 0,
-      pricingRules: payload.pricingRules?.length ?? 0
+      pricingRules: (payload.pricingRules?.length ?? 0) + (payload.nodePricingRules?.length ?? 0)
     }
   };
+}
+
+const SERVICE_NODE_TYPES = ["category", "group", "task", "subtask", "option", "package", "informational"] as const;
+const SERVICE_NODE_RELATION_TYPES = ["includes", "suggests", "requires", "excludes", "alternative_to", "available_separately", "included_when_selected", "sequence_after", "sequence_before", "conditional"] as const;
+
+function validateNodeTree(payload: CategoryImportPayload, errors: string[]) {
+  const nodes = payload.nodes ?? [];
+  const bySlug = new Map<string, NonNullable<CategoryImportPayload["nodes"]>[number]>();
+  for (const node of nodes) {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(node.slug ?? "")) errors.push(`Некорректный slug узла: ${node.slug || "пусто"}.`);
+    if (bySlug.has(node.slug)) errors.push(`Slug узла повторяется: ${node.slug}.`);
+    if (!SERVICE_NODE_TYPES.includes(node.nodeType)) errors.push(`Некорректный тип узла ${node.slug}.`);
+    if (node.parentSlug === node.slug) errors.push(`Узел ${node.slug} не может быть родителем самому себе.`);
+    bySlug.set(node.slug, node);
+  }
+  for (const node of nodes) if (node.parentSlug && !bySlug.has(node.parentSlug)) errors.push(`Родительский узел не найден: ${node.parentSlug}.`);
+
+  let maxDepth = 0;
+  const state = new Map<string, number>();
+  const resolvedDepth = new Map<string, number>();
+  const depth = (slug: string): number => {
+    if (state.get(slug) === 1) {
+      errors.push(`Обнаружен цикл дерева у узла ${slug}.`);
+      return 0;
+    }
+    if (state.get(slug) === 2) return resolvedDepth.get(slug) ?? 0;
+    state.set(slug, 1);
+    const node = bySlug.get(slug);
+    const value = node?.parentSlug ? depth(node.parentSlug) + 1 : 1;
+    state.set(slug, 2);
+    resolvedDepth.set(slug, value);
+    maxDepth = Math.max(maxDepth, value);
+    if (value > 64) errors.push("Глубина структуры превышает защитный предел 64 уровня.");
+    return value;
+  };
+  for (const node of nodes) depth(node.slug);
+
+  const relationKeys = new Set<string>();
+  for (const relation of payload.relations ?? []) {
+    if (!SERVICE_NODE_RELATION_TYPES.includes(relation.relationType)) errors.push(`Некорректный тип связи ${relation.relationType}.`);
+    if (!bySlug.has(relation.sourceSlug) || !bySlug.has(relation.targetSlug)) errors.push(`Связь ${relation.sourceSlug} → ${relation.targetSlug} ссылается на неизвестный узел.`);
+    if (relation.sourceSlug === relation.targetSlug) errors.push(`Связь узла ${relation.sourceSlug} с самим собой запрещена.`);
+    const key = `${relation.sourceSlug}:${relation.targetSlug}:${relation.relationType}`;
+    if (relationKeys.has(key)) errors.push(`Связь повторяется: ${key}.`);
+    relationKeys.add(key);
+  }
+  for (const rule of payload.nodePricingRules ?? []) if (!bySlug.has(rule.nodeSlug)) errors.push(`Узел ${rule.nodeSlug} для цены не найден.`);
+  for (const rule of payload.nodeSafetyRules ?? []) {
+    if (rule.nodeSlug && !bySlug.has(rule.nodeSlug)) errors.push(`Узел ${rule.nodeSlug} для ограничения не найден.`);
+    const applicability = rule.applicability ?? {};
+    if (rule.isBlocking && Object.keys(applicability).length === 0) errors.push(`Для блокирующего правила ${rule.ruleKey} необходимо указать машиночитаемое условие применимости.`);
+  }
+  return { rootNodes: nodes.filter((node) => !node.parentSlug).length, maxDepth };
 }
 
 export async function previewCategoryImport(payload: CategoryImportPayload) {
@@ -596,7 +693,8 @@ export async function createDraftFromImport(payload: CategoryImportPayload, admi
       comment: payload.passport?.comment,
       importFileName: fileName,
       importHash,
-      metadataJson: JSON.stringify({ warnings: preview.warnings })
+      metadataJson: JSON.stringify({ warnings: preview.warnings }),
+      schemaVersion: payload.schemaVersion === "3" || payload.nodes?.length ? "3" : "2"
     } });
     await populateStructureFromImportTx(tx, created.id, payload);
     await writeAudit(adminId, "admin.category_structure.import", "category_structure", created.id, { fileName, importHash, warnings: preview.warnings }, tx);
@@ -1052,7 +1150,8 @@ async function cloneStructureTx(tx: Prisma.TransactionClient, sourceId: string, 
     qualityStatus: "draft",
     source: target.source,
     createdByAdminId: target.createdByAdminId,
-    comment: target.comment
+    comment: target.comment,
+    schemaVersion: source.schemaVersion
   } });
   const categoryIdMap = new Map<string, string>();
   for (const category of [...source.categories].sort((a, b) => a.level - b.level || a.sortOrder - b.sortOrder)) {
@@ -1092,13 +1191,48 @@ async function cloneStructureTx(tx: Prisma.TransactionClient, sourceId: string, 
     for (const rule of category.safetyRules) await tx.categorySafetyRule.create({ data: { categoryId: created.id, ruleKey: rule.ruleKey, title: rule.title, description: rule.description, severity: rule.severity, isBlocking: rule.isBlocking, applicabilityJson: rule.applicabilityJson, isActive: rule.isActive, showToCustomer: rule.showToCustomer, showToHelper: rule.showToHelper, showToManager: rule.showToManager, sortOrder: rule.sortOrder } });
     for (const price of category.pricingRules) await tx.categoryPricingRule.create({ data: { categoryId: created.id, taskTemplateId: price.taskTemplateId ? taskIdMap.get(price.taskTemplateId) : null, recommendedPackageCode: price.recommendedPackageCode, recommendedMinPrice: price.recommendedMinPrice, recommendedMaxPrice: price.recommendedMaxPrice, defaultDurationMinutes: price.defaultDurationMinutes, priceComment: price.priceComment, coveredTaskSlugsJson: price.coveredTaskSlugsJson, isActive: price.isActive } });
   }
+  const serviceNodeIdMap = new Map<string, string>();
+  for (const node of [...source.serviceNodes].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())) {
+    const created = await tx.serviceNode.create({ data: {
+      structureId: structure.id, parentId: node.parentId ? serviceNodeIdMap.get(node.parentId) : null,
+      slug: node.slug, stableKey: node.stableKey, nodeType: node.nodeType, title: node.title,
+      descriptionForCustomer: node.descriptionForCustomer, descriptionForHelper: node.descriptionForHelper,
+      sortOrder: node.sortOrder, isActive: node.isActive, isSelectable: node.isSelectable, isVisible: node.isVisible,
+      selectionMode: node.selectionMode, aliasesJson: node.aliasesJson, formFieldsJson: node.formFieldsJson,
+      constraintsJson: node.constraintsJson, durationEffectJson: node.durationEffectJson, metadataJson: node.metadataJson
+    } });
+    serviceNodeIdMap.set(node.id, created.id);
+  }
+  for (const relation of source.serviceNodeRelations) await tx.serviceNodeRelation.create({ data: {
+    structureId: structure.id, sourceNodeId: relation.sourceNodeId ? serviceNodeIdMap.get(relation.sourceNodeId) : null,
+    targetNodeId: relation.targetNodeId ? serviceNodeIdMap.get(relation.targetNodeId) : null,
+    sourceSlug: relation.sourceSlug, targetSlug: relation.targetSlug, relationType: relation.relationType,
+    isActive: relation.isActive, sortOrder: relation.sortOrder, conditionsJson: relation.conditionsJson,
+    pricingBehavior: relation.pricingBehavior, uiBehavior: relation.uiBehavior, metadataJson: relation.metadataJson
+  } });
+  for (const rule of source.serviceNodePricingRules) await tx.serviceNodePricingRule.create({ data: {
+    structureId: structure.id, nodeId: rule.nodeId ? serviceNodeIdMap.get(rule.nodeId) : null, nodeSlug: rule.nodeSlug,
+    packageCode: rule.packageCode, coveredNodeSlugsJson: rule.coveredNodeSlugsJson,
+    recommendedMinPrice: rule.recommendedMinPrice, recommendedMaxPrice: rule.recommendedMaxPrice,
+    defaultDurationMinutes: rule.defaultDurationMinutes, priceComment: rule.priceComment,
+    conditionsJson: rule.conditionsJson, isActive: rule.isActive
+  } });
+  for (const rule of source.serviceNodeSafetyRules) await tx.serviceNodeSafetyRule.create({ data: {
+    structureId: structure.id, nodeId: rule.nodeId ? serviceNodeIdMap.get(rule.nodeId) : null, nodeSlug: rule.nodeSlug,
+    ruleKey: rule.ruleKey, title: rule.title, description: rule.description, severity: rule.severity,
+    isBlocking: rule.isBlocking, applicabilityJson: rule.applicabilityJson, isActive: rule.isActive, sortOrder: rule.sortOrder
+  } });
   return structure;
 }
 
 async function populateStructureFromImportTx(tx: Prisma.TransactionClient, structureId: string, payload: CategoryImportPayload) {
+  if (payload.schemaVersion === "3" || payload.nodes?.length) {
+    await populateServiceNodesFromImportTx(tx, structureId, payload);
+    return;
+  }
   const bySlug = new Map<string, string>();
   const taskByKey = new Map<string, string>();
-  const pending = [...payload.categories];
+  const pending = [...(payload.categories ?? [])];
   while (pending.length) {
     const index = pending.findIndex((item) => !item.parentSlug || bySlug.has(item.parentSlug));
     if (index < 0) throw new HttpError(400, "Не удалось построить дерево категорий", "category_tree_invalid");
@@ -1141,6 +1275,77 @@ async function populateStructureFromImportTx(tx: Prisma.TransactionClient, struc
   for (const row of payload.pricingRules ?? []) await tx.categoryPricingRule.create({ data: { categoryId: bySlug.get(row.categorySlug)!, taskTemplateId: row.taskSlug ? taskByKey.get(`${row.categorySlug}:${row.taskSlug}`) : null, recommendedPackageCode: row.packageCode, recommendedMinPrice: row.recommendedMinPrice, recommendedMaxPrice: row.recommendedMaxPrice, defaultDurationMinutes: row.defaultDurationMinutes, priceComment: row.priceComment, coveredTaskSlugsJson: JSON.stringify(row.coveredTaskSlugs ?? []), isActive: row.active ?? true } });
 }
 
+async function populateServiceNodesFromImportTx(tx: Prisma.TransactionClient, structureId: string, payload: CategoryImportPayload) {
+  const nodeIdBySlug = new Map<string, string>();
+  const pending = [...(payload.nodes ?? [])];
+  while (pending.length) {
+    const index = pending.findIndex((item) => !item.parentSlug || nodeIdBySlug.has(item.parentSlug));
+    if (index < 0) throw new HttpError(400, "Не удалось построить дерево узлов", "service_node_tree_invalid");
+    const [row] = pending.splice(index, 1);
+    const created = await tx.serviceNode.create({ data: {
+      structureId,
+      parentId: row.parentSlug ? nodeIdBySlug.get(row.parentSlug) : null,
+      slug: row.slug,
+      stableKey: row.stableKey ?? row.slug,
+      nodeType: row.nodeType,
+      title: row.title,
+      descriptionForCustomer: row.descriptionForCustomer,
+      descriptionForHelper: row.descriptionForHelper,
+      sortOrder: row.sortOrder ?? 100,
+      isActive: row.active ?? true,
+      isSelectable: row.selectable ?? ["task", "subtask", "option"].includes(row.nodeType),
+      isVisible: row.visible ?? true,
+      selectionMode: row.selectionMode ?? "multiple",
+      aliasesJson: JSON.stringify(row.aliases ?? []),
+      formFieldsJson: JSON.stringify(row.formFields ?? []),
+      constraintsJson: JSON.stringify(row.constraints ?? {}),
+      durationEffectJson: JSON.stringify(row.durationEffect ?? {}),
+      metadataJson: JSON.stringify(row.metadata ?? {})
+    } });
+    nodeIdBySlug.set(row.slug, created.id);
+  }
+  for (const row of payload.relations ?? []) await tx.serviceNodeRelation.create({ data: {
+    structureId,
+    sourceNodeId: nodeIdBySlug.get(row.sourceSlug),
+    targetNodeId: nodeIdBySlug.get(row.targetSlug),
+    sourceSlug: row.sourceSlug,
+    targetSlug: row.targetSlug,
+    relationType: row.relationType,
+    isActive: row.active ?? true,
+    sortOrder: row.sortOrder ?? 100,
+    conditionsJson: JSON.stringify(row.conditions ?? {}),
+    pricingBehavior: row.pricingBehavior,
+    uiBehavior: row.uiBehavior,
+    metadataJson: JSON.stringify(row.metadata ?? {})
+  } });
+  for (const row of payload.nodePricingRules ?? []) await tx.serviceNodePricingRule.create({ data: {
+    structureId,
+    nodeId: nodeIdBySlug.get(row.nodeSlug),
+    nodeSlug: row.nodeSlug,
+    packageCode: row.packageCode,
+    coveredNodeSlugsJson: JSON.stringify(row.coveredNodeSlugs ?? []),
+    recommendedMinPrice: row.recommendedMinPrice,
+    recommendedMaxPrice: row.recommendedMaxPrice,
+    defaultDurationMinutes: row.defaultDurationMinutes,
+    priceComment: row.priceComment,
+    conditionsJson: JSON.stringify(row.conditions ?? {}),
+    isActive: row.active ?? true
+  } });
+  for (const row of payload.nodeSafetyRules ?? []) await tx.serviceNodeSafetyRule.create({ data: {
+    structureId,
+    nodeId: row.nodeSlug ? nodeIdBySlug.get(row.nodeSlug) : null,
+    nodeSlug: row.nodeSlug,
+    ruleKey: row.ruleKey,
+    title: row.title,
+    description: row.description,
+    severity: row.severity ?? "warning",
+    isBlocking: row.isBlocking ?? false,
+    applicabilityJson: JSON.stringify(row.applicability ?? {}),
+    isActive: row.active ?? true,
+    sortOrder: row.sortOrder ?? 100
+  } });
+}
+
 function exportBundle(structure: any, options: { targetCity?: any; targetRegion?: any; warning?: string; generatedBy: string }) {
   const payload = structureToImportPayload(structure, options);
   const targetRegion = options.targetRegion ?? options.targetCity?.regionRecord ?? structure.scopeRegion;
@@ -1165,6 +1370,19 @@ function exportBundle(structure: any, options: { targetCity?: any; targetRegion?
 }
 
 function structureToImportPayload(structure: any, options: { targetCity?: any; targetRegion?: any; warning?: string }) : CategoryImportPayload {
+  if (structure.schemaVersion === "3" || structure.serviceNodes?.length) {
+    const nodeById = new Map(structure.serviceNodes.map((node: any) => [node.id, node]));
+    return {
+      schemaVersion: "3",
+      version: "2",
+      scope: { type: options.targetCity ? "city" : options.targetRegion ? "region" : structure.scopeType, regionId: options.targetRegion?.id ?? options.targetCity?.regionId ?? structure.scopeRegionId, cityId: options.targetCity?.id ?? structure.scopeCityId },
+      passport: { title: options.targetCity ? `Структура города ${options.targetCity.name}` : options.targetRegion ? `Структура региона ${options.targetRegion.name}` : structure.title, description: structure.description, versionNumber: nextTemplateVersion(structure.versionNumber), qualityStatus: "draft", parentStructureId: structure.id, comment: options.warning },
+      nodes: structure.serviceNodes.map((node: any) => ({ slug: node.slug, stableKey: node.stableKey, parentSlug: node.parentId ? (nodeById.get(node.parentId) as any)?.slug : null, nodeType: node.nodeType, title: node.title, descriptionForCustomer: node.descriptionForCustomer, descriptionForHelper: node.descriptionForHelper, sortOrder: node.sortOrder, active: node.isActive, selectable: node.isSelectable, visible: node.isVisible, selectionMode: node.selectionMode, aliases: safeJson(node.aliasesJson) ?? [], formFields: safeJson(node.formFieldsJson) ?? [], constraints: safeJson(node.constraintsJson) ?? {}, durationEffect: safeJson(node.durationEffectJson) ?? {}, metadata: safeJson(node.metadataJson) ?? {} })),
+      relations: structure.serviceNodeRelations.map((relation: any) => ({ sourceSlug: relation.sourceSlug, targetSlug: relation.targetSlug, relationType: relation.relationType, active: relation.isActive, sortOrder: relation.sortOrder, conditions: safeJson(relation.conditionsJson) ?? {}, pricingBehavior: relation.pricingBehavior, uiBehavior: relation.uiBehavior, metadata: safeJson(relation.metadataJson) ?? {} })),
+      nodePricingRules: structure.serviceNodePricingRules.map((rule: any) => ({ nodeSlug: rule.nodeSlug, packageCode: rule.packageCode, coveredNodeSlugs: safeJson(rule.coveredNodeSlugsJson) ?? [], recommendedMinPrice: rule.recommendedMinPrice, recommendedMaxPrice: rule.recommendedMaxPrice, defaultDurationMinutes: rule.defaultDurationMinutes, priceComment: rule.priceComment, conditions: safeJson(rule.conditionsJson) ?? {}, active: rule.isActive })),
+      nodeSafetyRules: structure.serviceNodeSafetyRules.map((rule: any) => ({ nodeSlug: rule.nodeSlug, ruleKey: rule.ruleKey, title: rule.title, description: rule.description, severity: rule.severity, isBlocking: rule.isBlocking, applicability: safeJson(rule.applicabilityJson) ?? {}, active: rule.isActive, sortOrder: rule.sortOrder }))
+    };
+  }
   const categoryById = new Map(structure.categories.map((category: any) => [category.id, category]));
   return {
     version: "1",
@@ -1181,7 +1399,13 @@ function exportSheets(payload: CategoryImportPayload, structure: any, options: a
   const passportRows = Object.entries({ scopeType: payload.scope.type, regionId: payload.scope.regionId ?? "", cityId: payload.scope.cityId ?? "", region: options.targetRegion?.name ?? options.targetCity?.region ?? structure.scopeRegion?.name ?? "", city: options.targetCity?.name ?? structure.scopeCity?.name ?? "", title: payload.passport?.title ?? structure.title, parentStructureId: payload.passport?.parentStructureId ?? structure.id, baseScopeType: structure.scopeType, baseRegion: structure.scopeRegion?.name ?? "", baseCity: structure.scopeCity?.name ?? "", baseVersion: structure.versionNumber, targetVersion: payload.passport?.versionNumber, status: "draft", qualityStatus: "draft", generatedAt: new Date().toISOString(), generatedBy: options.generatedBy, warning: options.warning ?? "" });
   return [
     { name: "Паспорт структуры", rows: [["Поле", "Значение"], ...passportRows] },
-    { name: "Категории", rows: [["slug", "parentSlug", "title", "shortTitle", "descriptionForCustomer", "descriptionForHelper", "descriptionForManager", "descriptionForAdmin", "icon", "sortOrder", "status", "visibleForCustomer", "visibleForHelper", "visibleForManager", "visibleForAdmin"], ...payload.categories.map((row) => [row.slug, row.parentSlug ?? "", row.title, row.shortTitle ?? "", row.descriptionForCustomer ?? "", row.descriptionForHelper ?? "", row.descriptionForManager ?? "", row.descriptionForAdmin ?? "", row.icon ?? "", row.sortOrder ?? 100, row.status ?? "active", row.visibleForCustomer ?? true, row.visibleForHelper ?? true, row.visibleForManager ?? true, row.visibleForAdmin ?? true])] },
+    { name: "Категории", rows: [["slug", "parentSlug", "title", "shortTitle", "descriptionForCustomer", "descriptionForHelper", "descriptionForManager", "descriptionForAdmin", "icon", "sortOrder", "status", "visibleForCustomer", "visibleForHelper", "visibleForManager", "visibleForAdmin"], ...(payload.categories ?? []).map((row) => [row.slug, row.parentSlug ?? "", row.title, row.shortTitle ?? "", row.descriptionForCustomer ?? "", row.descriptionForHelper ?? "", row.descriptionForManager ?? "", row.descriptionForAdmin ?? "", row.icon ?? "", row.sortOrder ?? 100, row.status ?? "active", row.visibleForCustomer ?? true, row.visibleForHelper ?? true, row.visibleForManager ?? true, row.visibleForAdmin ?? true])] },
+    ...(payload.schemaVersion === "3" ? [
+      { name: "Узлы", rows: [["slug", "stableKey", "parentSlug", "nodeType", "title", "descriptionForCustomer", "descriptionForHelper", "sortOrder", "selectable", "active", "visible", "selectionMode", "aliases", "formFields", "constraints", "durationEffect", "metadata"], ...(payload.nodes ?? []).map((row) => [row.slug, row.stableKey ?? row.slug, row.parentSlug ?? "", row.nodeType, row.title, row.descriptionForCustomer ?? "", row.descriptionForHelper ?? "", row.sortOrder ?? 100, row.selectable ?? false, row.active ?? true, row.visible ?? true, row.selectionMode ?? "multiple", JSON.stringify(row.aliases ?? []), JSON.stringify(row.formFields ?? []), JSON.stringify(row.constraints ?? {}), JSON.stringify(row.durationEffect ?? {}), JSON.stringify(row.metadata ?? {})])] },
+      { name: "Связи узлов", rows: [["sourceSlug", "targetSlug", "relationType", "active", "sortOrder", "conditions", "pricingBehavior", "uiBehavior", "metadata"], ...(payload.relations ?? []).map((row) => [row.sourceSlug, row.targetSlug, row.relationType, row.active ?? true, row.sortOrder ?? 100, JSON.stringify(row.conditions ?? {}), row.pricingBehavior ?? "", row.uiBehavior ?? "", JSON.stringify(row.metadata ?? {})])] },
+      { name: "Цены узлов", rows: [["nodeSlug", "packageCode", "coveredNodeSlugs", "recommendedMinPrice", "recommendedMaxPrice", "defaultDurationMinutes", "priceComment", "conditions", "active"], ...(payload.nodePricingRules ?? []).map((row) => [row.nodeSlug, row.packageCode ?? "", JSON.stringify(row.coveredNodeSlugs ?? []), row.recommendedMinPrice ?? "", row.recommendedMaxPrice ?? "", row.defaultDurationMinutes ?? "", row.priceComment ?? "", JSON.stringify(row.conditions ?? {}), row.active ?? true])] },
+      { name: "Ограничения узлов", rows: [["nodeSlug", "ruleKey", "title", "description", "severity", "isBlocking", "applicability", "active", "sortOrder"], ...(payload.nodeSafetyRules ?? []).map((row) => [row.nodeSlug ?? "", row.ruleKey, row.title, row.description, row.severity ?? "warning", row.isBlocking ?? false, JSON.stringify(row.applicability ?? {}), row.active ?? true, row.sortOrder ?? 100])] }
+    ] : []),
     { name: "Типовые задачи", rows: [["categorySlug", "taskSlug", "title", "description", "customerHint", "helperHint", "managerHint", "safetyNote", "taskKind", "aliases", "durationEffect", "priceEffect", "requiresComment", "allowedRegions", "formFields", "recommendations", "constraints", "sortOrder", "active"], ...(payload.taskTemplates ?? []).map((row) => [row.categorySlug, row.taskSlug, row.title, row.description ?? "", row.customerHint ?? "", row.helperHint ?? "", row.managerHint ?? "", row.safetyNote ?? "", row.taskKind ?? "standard", JSON.stringify(row.aliases ?? []), JSON.stringify(row.durationEffect ?? {}), JSON.stringify(row.priceEffect ?? {}), row.requiresComment ?? false, JSON.stringify(row.allowedRegions ?? []), JSON.stringify(row.formFields ?? []), JSON.stringify(row.recommendations ?? []), JSON.stringify(row.constraints ?? {}), row.sortOrder ?? 100, row.active ?? true])] },
     { name: "Ограничения", rows: [["categorySlug", "ruleKey", "title", "description", "severity", "isBlocking", "applicability", "active", "showToCustomer", "showToHelper", "showToManager", "sortOrder"], ...(payload.safetyRules ?? []).map((row) => [row.categorySlug, row.ruleKey, row.title, row.description, row.severity ?? "warning", row.isBlocking ?? false, JSON.stringify(row.applicability ?? {}), row.active ?? true, row.showToCustomer ?? true, row.showToHelper ?? true, row.showToManager ?? true, row.sortOrder ?? 100])] },
     { name: "Рекомендуемые цены", rows: [["categorySlug", "taskSlug", "packageCode", "coveredTaskSlugs", "recommendedMinPrice", "recommendedMaxPrice", "defaultDurationMinutes", "priceComment", "active"], ...(payload.pricingRules ?? []).map((row) => [row.categorySlug, row.taskSlug ?? "", row.packageCode ?? "", JSON.stringify(row.coveredTaskSlugs ?? []), row.recommendedMinPrice ?? "", row.recommendedMaxPrice ?? "", row.defaultDurationMinutes ?? "", row.priceComment ?? "", row.active ?? true])] },
@@ -1413,5 +1637,9 @@ const structureDetailInclude = {
       safetyRules: { orderBy: { sortOrder: "asc" as const } },
       pricingRules: { orderBy: { createdAt: "asc" as const }, include: { taskTemplate: true } }
     }
-  }
+  },
+  serviceNodes: { orderBy: [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }] },
+  serviceNodeRelations: { orderBy: [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }] },
+  serviceNodePricingRules: { orderBy: { createdAt: "asc" as const } },
+  serviceNodeSafetyRules: { orderBy: [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }] }
 } satisfies Prisma.CategoryStructureInclude;

@@ -63,3 +63,6 @@ Legacy snapshots без `schemaVersion: 2` продолжают читаться
 Demo seed создаёт и активирует отсутствующие версии 2.0 идемпотентно. В production импорт и активация выполняются администратором отдельно; feature не меняет production env и не выполняет deploy.
 
 См. [калькулятор](REQUEST_CALCULATOR.md) и [импорт/экспорт](CATEGORY_IMPORT_EXPORT.md).
+# Дополнение schema v3
+
+Универсальное дерево, stable-key merge и relation types описаны в [SERVICE_STRUCTURE_TREE_V1.md](SERVICE_STRUCTURE_TREE_V1.md). Legacy Category/TaskTemplate сохранены как compatibility layer.

@@ -54,3 +54,6 @@ Task contract включает `taskKind`, `aliases`, `durationEffect`, `priceEf
   }]
 }
 ```
+# Schema v3
+
+JSON/XLSX schema v3 импортирует узлы, связи, node pricing и node safety. XLSX-листы: «Узлы», «Связи узлов», «Цены узлов», «Ограничения узлов». `npm run db:seed-service-tree-v3` создаёт только черновики и не активирует их.

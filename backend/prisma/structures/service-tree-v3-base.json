@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "3",
+  "version": "2",
+  "scope": { "type": "federal" },
+  "passport": { "title": "Дерево услуг РФ", "versionNumber": "3.0", "qualityStatus": "draft", "description": "Черновик универсального дерева услуг для проверки перед активацией." },
+  "nodes": [
+    { "slug": "home-help", "nodeType": "category", "title": "Помощь по дому", "sortOrder": 10 },
+    { "slug": "home-routine", "parentSlug": "home-help", "nodeType": "group", "title": "Повседневные задачи", "sortOrder": 10 },
+    { "slug": "light-cleaning", "parentSlug": "home-routine", "nodeType": "task", "title": "Лёгкая уборка", "descriptionForCustomer": "Поддержать порядок без профессионального клининга.", "selectable": true, "sortOrder": 10 },
+    { "slug": "take-out-trash", "parentSlug": "light-cleaning", "nodeType": "subtask", "title": "Вынос мусора", "selectable": true, "sortOrder": 10 },
+    { "slug": "simple-meal", "parentSlug": "home-routine", "nodeType": "task", "title": "Приготовить простую еду", "selectable": true, "sortOrder": 20 },
+    { "slug": "cooking-dishes", "parentSlug": "simple-meal", "nodeType": "subtask", "title": "Вымыть посуду, использованную при приготовлении", "selectable": false, "sortOrder": 10 },
+    { "slug": "wash-accumulated-dishes", "parentSlug": "home-routine", "nodeType": "task", "title": "Вымыть накопившуюся посуду", "selectable": true, "sortOrder": 30 },
+    { "slug": "supervision", "nodeType": "category", "title": "Уход на дому", "sortOrder": 20 },
+    { "slug": "stay-near", "parentSlug": "supervision", "nodeType": "task", "title": "Побыть рядом", "selectable": true, "sortOrder": 10 },
+    { "slug": "walk-supervision", "parentSlug": "supervision", "nodeType": "task", "title": "Прогулка и присмотр", "selectable": true, "formFields": [{ "id": "duration_minutes", "label": "Продолжительность прогулки, минут", "type": "number", "required": true, "min": 30, "max": 240 }], "sortOrder": 20 },
+    { "slug": "shopping", "nodeType": "category", "title": "Покупки и поручения", "sortOrder": 30 },
+    { "slug": "buy-products", "parentSlug": "shopping", "nodeType": "task", "title": "Купить продукты", "selectable": true, "formFields": [{ "id": "shopping_list", "label": "Список покупок", "type": "textarea", "required": true }], "sortOrder": 10 },
+    { "slug": "accompaniment", "nodeType": "category", "title": "Сопровождение", "sortOrder": 40 },
+    { "slug": "accompany", "parentSlug": "accompaniment", "nodeType": "task", "title": "Сопроводить", "selectable": true, "formFields": [{ "id": "destination", "label": "Куда нужно сопроводить?", "type": "text", "required": true }, { "id": "duration_minutes", "label": "Продолжительность, минут", "type": "number", "required": true, "min": 30, "max": 480 }], "sortOrder": 10 }
+  ],
+  "relations": [
+    { "sourceSlug": "light-cleaning", "targetSlug": "take-out-trash", "relationType": "includes" },
+    { "sourceSlug": "take-out-trash", "targetSlug": "light-cleaning", "relationType": "available_separately" },
+    { "sourceSlug": "simple-meal", "targetSlug": "cooking-dishes", "relationType": "included_when_selected" },
+    { "sourceSlug": "light-cleaning", "targetSlug": "wash-accumulated-dishes", "relationType": "suggests" }
+  ],
+  "nodePricingRules": [
+    { "nodeSlug": "light-cleaning", "packageCode": "home-help-2h", "coveredNodeSlugs": ["take-out-trash"], "recommendedMinPrice": 700, "recommendedMaxPrice": 1100, "defaultDurationMinutes": 120 },
+    { "nodeSlug": "take-out-trash", "recommendedMinPrice": 400, "recommendedMaxPrice": 700, "defaultDurationMinutes": 60 },
+    { "nodeSlug": "simple-meal", "recommendedMinPrice": 700, "recommendedMaxPrice": 1100, "defaultDurationMinutes": 120 },
+    { "nodeSlug": "wash-accumulated-dishes", "recommendedMinPrice": 400, "recommendedMaxPrice": 700, "defaultDurationMinutes": 60 },
+    { "nodeSlug": "stay-near", "recommendedMinPrice": 700, "recommendedMaxPrice": 1200, "defaultDurationMinutes": 120 },
+    { "nodeSlug": "walk-supervision", "recommendedMinPrice": 700, "recommendedMaxPrice": 1200, "defaultDurationMinutes": 120 },
+    { "nodeSlug": "buy-products", "recommendedMinPrice": 400, "recommendedMaxPrice": 700, "defaultDurationMinutes": 60 },
+    { "nodeSlug": "accompany", "recommendedMinPrice": 800, "recommendedMaxPrice": 1500, "defaultDurationMinutes": 120 }
+  ],
+  "nodeSafetyRules": [
+    { "ruleKey": "general-safety", "title": "Ограничения сервиса", "description": "Опасные и требующие специальных полномочий действия не принимаются.", "severity": "warning", "isBlocking": false }
+  ]
+}

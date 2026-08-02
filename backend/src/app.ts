@@ -39,6 +39,7 @@ import { authenticate } from "./middleware/auth";
 import { sendError } from "./utils/http";
 import { adminVisitsRouter, visitsRouter } from "./routes/visits";
 import { accountSecurityRouter, temporaryPasswordRouter } from "./routes/accountSecurity";
+import { requestDraftsRouter, requestDraftSupportRouter } from "./routes/requestDrafts";
 
 export function createApp() {
   const app = express();
@@ -65,6 +66,7 @@ export function createApp() {
   app.use("/api/settlements", settlementsRouter);
   app.use("/api/me/cities", meCitiesRouter);
   app.use("/api/me", accountSecurityRouter);
+  app.use("/api/me/request-drafts", requestDraftsRouter);
   app.use("/api/auth", authRouter);
   app.use("/api/auth", temporaryPasswordRouter);
   app.use("/api/requests", requestsRouter);
@@ -90,6 +92,7 @@ export function createApp() {
   app.use("/api/admin/broadcasts", adminBroadcastsRouter);
   app.use("/api/admin/category-structures", adminCategoryStructuresRouter);
   app.use("/api/admin/visits", adminVisitsRouter);
+  app.use("/api/admin/request-support-cases", requestDraftSupportRouter);
   app.use("/api/admin", adminRouter);
 
   if (env.nodeEnv === "production") {

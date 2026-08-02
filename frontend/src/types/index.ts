@@ -228,6 +228,93 @@ export type CategoriesForCity = {
   }>;
 };
 
+export type ServiceTreeNode = {
+  id: string;
+  slug: string;
+  stableKey: string;
+  parentSlug?: string | null;
+  nodeType: "category" | "group" | "task" | "subtask" | "option" | "package" | "informational";
+  title: string;
+  description?: string | null;
+  helperDescription?: string | null;
+  sortOrder: number;
+  isSelectable: boolean;
+  isVisible: boolean;
+  selectionMode: string;
+  aliases: string[];
+  formFields: DynamicRequestField[];
+  constraints: Record<string, unknown>;
+  durationEffect: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  path: string[];
+  children: ServiceTreeNode[];
+};
+
+export type EffectiveServiceTree = {
+  schemaVersion: string;
+  status: CategoryCityStatus["status"];
+  structure: { id: string; title: string; versionNumber: string; scopeType: string };
+  layers: Array<{ id: string; title: string; versionNumber: string; scopeType: string }>;
+  roots: ServiceTreeNode[];
+  flatNodes: ServiceTreeNode[];
+  relations: Array<{ sourceSlug: string; targetSlug: string; relationType: string; conditions: Record<string, unknown>; pricingBehavior?: string | null; uiBehavior?: string | null }>;
+  pricingRules: unknown[];
+  safetyRules: Array<{ id: string; nodeSlug?: string | null; ruleKey: string; title: string; description: string; severity: string; isBlocking: boolean }>;
+};
+
+export type ServiceTreeQuote = {
+  schemaVersion: string;
+  selectedNodes: Array<{ nodeSlug: string; title: string; path: string[] }>;
+  includedNodes: Array<{ nodeSlug: string; title: string; path: string[]; includedBy: string }>;
+  separatelyPricedNodes: Array<{ nodeSlug: string; title: string; path: string[]; amount: number | null; minAmount?: number | null; maxAmount?: number | null; pricingSource: string; packageTitle?: string | null; includedChildren: Array<{ nodeSlug: string; title: string; path: string[] }> }>;
+  perVisit: Array<{ id: string; sequence: number; date: string; startTime: string; durationMinutes: number; lineItems: ServiceTreeQuote["separatelyPricedNodes"]; helpAmount: number | null; calculatedSubtotal: number }>;
+  totals: { visitCount: number; totalDurationMinutes: number; helpAmount: number | null; calculatedSubtotal: number; customerServiceFeeTotal: number; helperServiceFeeTotal: number };
+  unpricedNodes: Array<{ nodeSlug: string; title: string; path: string[] }>;
+  warnings: string[];
+};
+
+export type RequestDraft = {
+  id: string;
+  cityId?: string | null;
+  city?: { id: string; name: string } | null;
+  structureId?: string | null;
+  status: "active" | "converted" | "deleted";
+  title?: string | null;
+  revision: number;
+  lastAutosavedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  convertedRequestId?: string | null;
+  selectedNodeSlugs: string[];
+  expandedNodeSlugs?: string[];
+  formData?: Record<string, unknown>;
+  dynamicFieldValues?: Record<string, Record<string, unknown>>;
+  scheduleDraft?: Record<string, unknown>;
+  addressDraft?: Record<string, unknown>;
+  beneficiaryDraft?: Record<string, unknown>;
+  latestQuote?: ServiceTreeQuote | null;
+  validationState?: Record<string, unknown>;
+  supportCase?: RequestDraftSupportCase | null;
+  supportCases?: RequestDraftSupportCase[];
+};
+
+export type RequestDraftSupportCase = {
+  id: string;
+  publicNumber: string;
+  draftId: string;
+  status: "new" | "in_progress" | "waiting_for_client" | "resolved" | "closed";
+  subject: string;
+  priority: string;
+  assignedManagerId?: string | null;
+  draftRevisionAtCreation: number;
+  lastMessageAt: string;
+  createdAt: string;
+  updatedAt: string;
+  messages?: Array<{ id: string; title?: string | null; body: string; senderRole: string; createdAt: string; isReadByUser: boolean }>;
+  client?: Pick<User, "id" | "displayName" | "role">;
+  draft?: RequestDraft;
+};
+
 export type StructuredRequestPriceQuote = {
   visitCount?: number;
   totalDurationMinutes?: number;

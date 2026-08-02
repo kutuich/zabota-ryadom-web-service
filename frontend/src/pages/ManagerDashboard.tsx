@@ -14,6 +14,7 @@ import { ServiceCommunicationsPage } from "./ServiceCommunicationsPage";
 import { UserServiceCommunicationPanel } from "../components/UserServiceCommunicationPanel";
 import { VisitReservePanel } from "../components/VisitReservePanel";
 import { AccountSecurityPanel } from "../components/AccountSecurityPanel";
+import { RequestDraftSupportCasesPanel } from "../components/RequestDraftSupportCasesPanel";
 
 type ManagerRecord = Record<string, any>;
 
@@ -239,6 +240,7 @@ export function ManagerDashboard() {
         </div>
       )}
       {activeTab === "Чаты" && <ServiceCommunicationsPage canBroadcast={false} requestChats={<ReadOnlyRows title="Чаты" rows={chats} render={(row) => chatRow(row, () => void openDetail("chat", row.id))} />} />}
+      {activeTab === "Запросы помощи по заявкам" && <RequestDraftSupportCasesPanel />}
       {activeTab === "Обращения" && <ReadOnlyRows title="Обращения" rows={complaints} render={(row) => complaintRow(row, () => void openDetail("complaint", row.id))} />}
       {activeTab === "Платежи" && <ReadOnlyRows title="Платежи" rows={payments} render={paymentRow} />}
       {activeTab === "Операции баланса" && <ReadOnlyRows title="Операции баланса" rows={transactions} render={transactionRow} />}

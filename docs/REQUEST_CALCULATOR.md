@@ -64,3 +64,6 @@ helperServiceFeeTotal = visitCount × 50
 - слоты не пересекаются и не выходят за сутки;
 - устаревшие totals frontend не принимаются;
 - старые snapshots не переписываются.
+# Tree pricing
+
+Для schema v3 калькулятор выбирает правило node → ближайший parent → root, предварительно вычисляет included/covered узлы и владельца каждого packageCode. Поэтому порядок выбранных slug не меняет итог, а included child не начисляется повторно. Quote содержит разбивку по каждому визиту.

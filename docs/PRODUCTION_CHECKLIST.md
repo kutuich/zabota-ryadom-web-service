@@ -76,3 +76,11 @@
 - [ ] Сброс пароля отзывает старый JWT и требует обязательной смены.
 - [ ] Временный пароль отсутствует в AuditLog, логах и сервисных сообщениях.
 - [ ] `TEMPORARY_PASSWORD_TTL_HOURS` не обязателен; безопасный default равен 24 часам.
+# Service Structure Tree v3
+
+- Сделать резервную копию БД.
+- Импортировать v3 как draft и проверить preview/compare.
+- Проверить effective tree, dynamic fields, blocking safety и pricing breakdown на тестовом городе.
+- Проверить legacy structure/snapshot compatibility.
+- Проверить empty/partial draft, autosave conflict, publish idempotency и support reply.
+- Активировать слои только вручную; `db:seed-service-tree-v3` публикацию не выполняет.

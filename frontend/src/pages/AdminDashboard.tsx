@@ -24,6 +24,7 @@ import { formatDateRu, formatDateTimeRu, formatTimeRu } from "../utils/dateTime"
 import { useAuth } from "../context/AuthContext";
 import { VisitReservePanel } from "../components/VisitReservePanel";
 import { AccountSecurityPanel } from "../components/AccountSecurityPanel";
+import { RequestDraftSupportCasesPanel } from "../components/RequestDraftSupportCasesPanel";
 
 const summaryLabels: Record<string, string> = {
   usersTotal: "Пользователей",
@@ -995,6 +996,8 @@ export function AdminDashboard() {
           {activeChatId ? <ChatPanel chatId={activeChatId} /> : <EmptyState title="Выберите чат из списка." />}
         </div>} />
       )}
+
+      {activeTab === "Запросы помощи по заявкам" && <RequestDraftSupportCasesPanel />}
 
       {activeTab === "Обращения" && (
         <div className="data-table">
@@ -2205,6 +2208,7 @@ function adminTabFromPath(pathname: string) {
   if (pathname.startsWith("/app/admin/requests")) return "Заявки";
   if (pathname.startsWith("/app/admin/responses")) return "Отклики";
   if (pathname.startsWith("/app/admin/chats")) return "Чаты";
+  if (pathname.startsWith("/app/admin/request-support")) return "Запросы помощи по заявкам";
   if (pathname.startsWith("/app/admin/support")) return "Обращения";
   if (pathname.startsWith("/app/admin/balances")) return "Балансы";
   if (pathname.startsWith("/app/admin/npd-register")) return "Мой налог";

@@ -31,6 +31,7 @@ import {
   validateMultiTaskSafety,
   type RequestScheduleInput
 } from "../services/requestScheduleService";
+import { calculateServiceTreeQuote } from "../services/serviceTreeService";
 
 export const requestsRouter = Router();
 
@@ -207,6 +208,16 @@ requestsRouter.post(
   "/calculate-price",
   requireRole("client"),
   asyncHandler(async (req, res) => {
+    if (Array.isArray(req.body?.selectedNodeSlugs)) {
+      const input = z.object({
+        cityId: z.string().min(1),
+        selectedNodeSlugs: z.array(z.string().min(1)).min(1).max(500),
+        dynamicFieldValues: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+        schedule: scheduleV2Schema.optional(),
+        visits: z.array(z.object({ id: z.string().min(1).max(80), date: z.string(), startTime: z.string(), durationMinutes: z.number().int().min(0).max(1440) })).max(5000).optional()
+      }).strict().parse(req.body);
+      return res.json(await calculateServiceTreeQuote(input));
+    }
     if (Array.isArray(req.body?.selectedTasks)) {
       const input = multiTaskPriceSchema.parse(req.body);
       return res.json(await calculateMultiTaskRequest({

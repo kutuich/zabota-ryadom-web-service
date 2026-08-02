@@ -69,6 +69,7 @@ export const adminNavigation: NavGroup[] = [
       { label: "Заявки", path: `${APP_ADMIN_PREFIX}/requests` },
       { label: "Отклики", path: `${APP_ADMIN_PREFIX}/responses` },
       { label: "Чаты", path: `${APP_ADMIN_PREFIX}/chats` },
+      { label: "Запросы помощи по заявкам", path: `${APP_ADMIN_PREFIX}/request-support` },
       { label: "Обращения", path: `${APP_ADMIN_PREFIX}/support` }
     ]
   },
@@ -117,6 +118,7 @@ export const managerNavigation: NavGroup[] = [
       { label: "Пользователи", path: `${APP_MANAGER_PREFIX}/users` },
       { label: "Заявки", path: `${APP_MANAGER_PREFIX}/requests` },
       { label: "Чаты", path: `${APP_MANAGER_PREFIX}/chats` },
+      { label: "Запросы помощи по заявкам", path: `${APP_MANAGER_PREFIX}/request-support` },
       { label: "Обращения", path: `${APP_MANAGER_PREFIX}/support` }
     ]
   },

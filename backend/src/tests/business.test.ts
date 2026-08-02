@@ -96,6 +96,8 @@ import {
   sendServiceMessage
 } from "../services/serviceCommunicationService";
 import { prepareServiceAttachments, removeSavedServiceAttachments } from "../services/serviceMessageStorage";
+import { calculateServiceTreeQuote, getEffectiveServiceTree } from "../services/serviceTreeService";
+import { createDraftSupportCase, createRequestDraft, deleteRequestDraft, getRequestDraft, listDraftSupportCases, publishRequestDraft, replyToDraftSupportCase, updateRequestDraft } from "../services/requestDraftService";
 
 async function run() {
   assert.deepEqual(parseSemanticVersion("v2.0.1"), { major: 2, minor: 0, patch: 1 });
@@ -605,10 +607,128 @@ async function run() {
   await runUserLifecycleTests();
   await runUploadStorageTests();
   await runCategoryStructureTests();
+  await runServiceTreeAndDraftTests();
   runRequestScheduleTests();
   await runServiceCommunicationTests();
 
   console.log("Business tests passed");
+}
+
+async function runServiceTreeAndDraftTests() {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const region = await prisma.region.create({ data: { name: `Tree region ${suffix}`, slug: `tree-region-${suffix}` } });
+  const city = await prisma.city.create({ data: { name: `Tree city ${suffix}`, slug: `tree-city-${suffix}`, normalizedName: `tree city ${suffix}`, region: region.name, regionId: region.id, status: "active", serviceStatus: "active", isActive: true, mapCenterLat: 60, mapCenterLng: 60 } });
+  const customer = await prisma.user.create({ data: { role: "client", rolesJson: '["client"]', displayName: `Tree customer ${suffix}`, phone: `+79${String(Date.now()).slice(-9)}`, status: "active", cityId: city.id } });
+  const otherCustomer = await prisma.user.create({ data: { role: "client", rolesJson: '["client"]', displayName: `Other customer ${suffix}`, status: "active", cityId: city.id } });
+  const manager = await prisma.user.create({ data: { role: "manager", rolesJson: '["manager"]', displayName: `Tree manager ${suffix}`, status: "active" } });
+  const admin = await prisma.user.findFirstOrThrow({ where: { role: "superadmin" } });
+  await prisma.userCity.create({ data: { userId: customer.id, cityId: city.id, roleScope: "customer", isActive: true } });
+  await prisma.userCity.create({ data: { userId: otherCustomer.id, cityId: city.id, roleScope: "customer", isActive: true } });
+  const payload: any = {
+    schemaVersion: "3", scope: { type: "city", cityId: city.id }, passport: { title: "Тестовое дерево", versionNumber: "v3.0", qualityStatus: "tested" },
+    nodes: [
+      { slug: "home", nodeType: "category", title: "Помощь по дому" },
+      { slug: "household", parentSlug: "home", nodeType: "group", title: "Бытовые задачи" },
+      { slug: "cleaning", parentSlug: "household", nodeType: "task", title: "Лёгкая уборка", selectable: true },
+      { slug: "trash", parentSlug: "cleaning", nodeType: "subtask", title: "Вынос мусора", selectable: true },
+      { slug: "trash-bags", parentSlug: "trash", nodeType: "option", title: "Пакеты для мусора", selectable: true },
+      { slug: "dishes", parentSlug: "household", nodeType: "task", title: "Вымыть накопившуюся посуду", selectable: true },
+      { slug: "laundry", parentSlug: "household", nodeType: "task", title: "Постирать", selectable: true },
+      { slug: "ironing", parentSlug: "household", nodeType: "task", title: "Погладить", selectable: true },
+      { slug: "walk", parentSlug: "home", nodeType: "task", title: "Прогулка", selectable: true, formFields: [{ id: "minutes", label: "Продолжительность", type: "number", required: true, min: 15, max: 240 }] }
+    ],
+    relations: [
+      { sourceSlug: "cleaning", targetSlug: "trash", relationType: "includes" },
+      { sourceSlug: "trash", targetSlug: "cleaning", relationType: "available_separately" },
+      { sourceSlug: "cleaning", targetSlug: "dishes", relationType: "suggests" },
+      { sourceSlug: "ironing", targetSlug: "laundry", relationType: "requires" },
+      { sourceSlug: "cleaning", targetSlug: "walk", relationType: "excludes" },
+      { sourceSlug: "walk", targetSlug: "trash-bags", relationType: "conditional", conditions: { fieldId: "minutes", equals: 60 } }
+    ],
+    nodePricingRules: [
+      { nodeSlug: "cleaning", packageCode: "home-clean", coveredNodeSlugs: ["trash"], recommendedMinPrice: 900, recommendedMaxPrice: 900 },
+      { nodeSlug: "trash", recommendedMinPrice: 300, recommendedMaxPrice: 300 },
+      { nodeSlug: "dishes", recommendedMinPrice: 700, recommendedMaxPrice: 700 },
+      { nodeSlug: "household", recommendedMinPrice: 400, recommendedMaxPrice: 400 },
+      { nodeSlug: "walk", recommendedMinPrice: 500, recommendedMaxPrice: 500 }
+    ]
+  };
+  const invalidCycle = structuredClone(payload); invalidCycle.nodes[0].parentSlug = "trash-bags";
+  assert.equal(validateCategoryImport(invalidCycle).valid, false);
+  const invalidOrphan = structuredClone(payload); invalidOrphan.nodes[2].parentSlug = "missing";
+  assert.equal(validateCategoryImport(invalidOrphan).valid, false);
+  const invalidDuplicate = structuredClone(payload); invalidDuplicate.nodes.push({ ...invalidDuplicate.nodes[2] });
+  assert.equal(validateCategoryImport(invalidDuplicate).valid, false);
+  assert.equal(validateCategoryImport(payload).summary.maxDepth, 5);
+
+  let structureId = "";
+  const draftIds: string[] = [];
+  const requestIds: string[] = [];
+  try {
+    const structure = await createDraftFromImport(payload, admin.id, "tree-v3.json"); structureId = structure.id;
+    await publishCategoryStructure(structure.id, admin.id);
+    const tree = await getEffectiveServiceTree(city.id);
+    assert.equal(tree.schemaVersion, "3");
+    assert.equal(tree.flatNodes.find((node) => node.slug === "trash-bags")?.path.length, 5);
+    assert.ok(tree.relations.some((relation: any) => relation.relationType === "sequence_before") === false);
+
+    const visit = { id: "v1", date: "2030-01-10", startTime: "10:00", durationMinutes: 120 };
+    const cleaningTrash = await calculateServiceTreeQuote({ cityId: city.id, selectedNodeSlugs: ["cleaning", "trash"], visits: [visit] });
+    const trashCleaning = await calculateServiceTreeQuote({ cityId: city.id, selectedNodeSlugs: ["trash", "cleaning"], visits: [visit] });
+    assert.equal(cleaningTrash.totals.helpAmount, 900);
+    assert.equal(cleaningTrash.separatelyPricedNodes.length, 1);
+    assert.deepEqual(cleaningTrash.separatelyPricedNodes, trashCleaning.separatelyPricedNodes);
+    assert.ok(cleaningTrash.includedNodes.some((node: any) => node.nodeSlug === "trash"));
+    assert.equal((await calculateServiceTreeQuote({ cityId: city.id, selectedNodeSlugs: ["trash"], visits: [visit] })).totals.helpAmount, 300);
+    assert.equal((await calculateServiceTreeQuote({ cityId: city.id, selectedNodeSlugs: ["cleaning", "dishes"], visits: [visit] })).totals.helpAmount, 1600);
+    assert.equal((await calculateServiceTreeQuote({ cityId: city.id, selectedNodeSlugs: ["laundry"], visits: [visit] })).totals.helpAmount, 400);
+    assert.equal((await calculateServiceTreeQuote({ cityId: city.id, selectedNodeSlugs: ["cleaning", "dishes"], visits: [visit, { ...visit, id: "v2" }] })).totals.helpAmount, 3200);
+    await assert.rejects(calculateServiceTreeQuote({ cityId: city.id, selectedNodeSlugs: ["ironing"], visits: [visit] }), (error: any) => error?.code === "service_node_required");
+    await assert.rejects(calculateServiceTreeQuote({ cityId: city.id, selectedNodeSlugs: ["cleaning", "walk"], dynamicFieldValues: { walk: { minutes: 60 } }, visits: [visit] }), (error: any) => error?.code === "service_node_excluded");
+    await assert.rejects(calculateServiceTreeQuote({ cityId: city.id, selectedNodeSlugs: ["walk"], visits: [visit] }), (error: any) => error?.code === "service_node_fields_invalid");
+
+    const emptyDraft = await createRequestDraft(customer.id, {}); draftIds.push(emptyDraft.id);
+    assert.deepEqual(emptyDraft.selectedNodeSlugs, []);
+    const partial = await createRequestDraft(customer.id, { cityId: city.id, title: "Частичный черновик", selectedNodeSlugs: ["cleaning"] }); draftIds.push(partial.id);
+    const updated = await updateRequestDraft(customer.id, partial.id, { revision: partial.revision, title: "Обновлённый черновик", autosave: true });
+    assert.equal(updated.revision, 2);
+    await assert.rejects(updateRequestDraft(customer.id, partial.id, { revision: 1, title: "Конфликт" }), (error: any) => error?.code === "request_draft_revision_conflict");
+    await assert.rejects(updateRequestDraft(otherCustomer.id, partial.id, { revision: 2 }), (error: any) => error?.code === "request_draft_not_found");
+    await assert.rejects(publishRequestDraft(customer.id, partial.id, updated.revision), (error: any) => error?.code === "request_draft_publish_validation_failed");
+
+    const complete = await createRequestDraft(customer.id, { cityId: city.id, title: "Готовая заявка", selectedNodeSlugs: ["cleaning", "trash"], formData: { cityId: city.id, contactName: customer.displayName, contactPhone: customer.phone, recipientType: "self", dependentMainState: "independent", frequency: "once", address: { street: "Мира", house: "1" }, comment: "Тест" }, scheduleDraft: { frequency: "once", startDate: "2030-01-10", slots: [visit] }, addressDraft: { street: "Мира", house: "1" } }); draftIds.push(complete.id);
+    const published = await publishRequestDraft(customer.id, complete.id, complete.revision); requestIds.push(published.requestId);
+    const publishedAgain = await publishRequestDraft(customer.id, complete.id, complete.revision);
+    assert.equal(publishedAgain.requestId, published.requestId); assert.equal(publishedAgain.idempotent, true);
+    assert.equal(await prisma.clientRequest.count({ where: { id: published.requestId } }), 1);
+    const snapshot = JSON.parse((await prisma.requestCategorySnapshot.findFirstOrThrow({ where: { requestId: published.requestId } })).snapshotJson);
+    assert.ok(snapshot.includedNodes.some((node: any) => node.nodeSlug === "trash"));
+
+    const support = await createDraftSupportCase(customer.id, partial.id, { subject: "Нужна помощь", message: "Подскажите по задаче", revision: updated.revision });
+    assert.equal((await listDraftSupportCases({ id: manager.id, realRole: "manager" })).some((item) => item.id === support.id), true);
+    await replyToDraftSupportCase({ id: manager.id, realRole: "manager" }, support.id, "Проверьте выбранную задачу.");
+    const afterReply = await getRequestDraft(customer.id, partial.id);
+    assert.equal(afterReply.revision, updated.revision);
+    assert.ok(afterReply.supportCases[0].messages.some((message: any) => message.body.includes("Проверьте")));
+    await assert.rejects(getRequestDraft(otherCustomer.id, partial.id), (error: any) => error?.code === "request_draft_not_found");
+    await deleteRequestDraft(customer.id, partial.id);
+    assert.ok(await prisma.requestDraftSupportCase.findUnique({ where: { id: support.id } }));
+  } finally {
+    const supportCases = await prisma.requestDraftSupportCase.findMany({ where: { draftId: { in: draftIds } }, select: { id: true } });
+    await prisma.serviceMessage.deleteMany({ where: { relatedRequestDraftSupportCaseId: { in: supportCases.map((item) => item.id) } } });
+    await prisma.requestDraftSupportCase.deleteMany({ where: { id: { in: supportCases.map((item) => item.id) } } });
+    await prisma.requestCategorySnapshot.deleteMany({ where: { requestId: { in: requestIds } } });
+    await prisma.clientRequest.deleteMany({ where: { id: { in: requestIds } } });
+    await prisma.requestDraftRevision.deleteMany({ where: { draftId: { in: draftIds } } });
+    await prisma.requestDraft.deleteMany({ where: { id: { in: draftIds } } });
+    await prisma.serviceConversation.deleteMany({ where: { userId: { in: [customer.id, otherCustomer.id] } } });
+    await prisma.auditLog.deleteMany({ where: { actorUserId: { in: [customer.id, otherCustomer.id, manager.id] }, entityType: { in: ["request_draft", "request_draft_support_case"] } } });
+    if (structureId) await prisma.categoryStructure.deleteMany({ where: { id: structureId } });
+    await prisma.userCity.deleteMany({ where: { userId: { in: [customer.id, otherCustomer.id] } } });
+    await prisma.user.deleteMany({ where: { id: { in: [customer.id, otherCustomer.id, manager.id] } } });
+    await prisma.city.delete({ where: { id: city.id } });
+    await prisma.region.delete({ where: { id: region.id } });
+  }
 }
 
 async function runUserManagementSecurityTests() {

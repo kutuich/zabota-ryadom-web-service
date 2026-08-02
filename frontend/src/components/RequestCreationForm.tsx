@@ -1,8 +1,9 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Trash2, X } from "lucide-react";
-import { api } from "../api/client";
-import type { CategoriesForCity, City, DynamicRequestField, StructuredRequestPriceQuote, User } from "../types";
+import { HelpCircle, Plus, Save, Trash2, X } from "lucide-react";
+import { ApiError, api } from "../api/client";
+import type { CategoriesForCity, City, DynamicRequestField, EffectiveServiceTree, RequestDraft, ServiceTreeQuote, StructuredRequestPriceQuote, User } from "../types";
 import { CityCombobox } from "./CityCombobox";
+import { ServiceTreeSelector } from "./ServiceTreeSelector";
 
 type CatalogTask = NonNullable<CategoriesForCity["directions"]>[number]["tasks"][number];
 type SelectedTask = CatalogTask & { categoryTitle: string };
@@ -26,7 +27,9 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
   const [mainState, setMainState] = useState("");
   const [features, setFeatures] = useState<string[]>([]);
   const [catalog, setCatalog] = useState<CategoriesForCity | null>(null);
+  const [serviceTree, setServiceTree] = useState<EffectiveServiceTree | null>(null);
   const [openDirections, setOpenDirections] = useState<string[]>([]);
+  const [selectedNodeSlugs, setSelectedNodeSlugs] = useState<string[]>([]);
   const [selectedTasks, setSelectedTasks] = useState<SelectedTask[]>([]);
   const [taskFieldValues, setTaskFieldValues] = useState<Record<string, Record<string, unknown>>>({});
   const [taskSearch, setTaskSearch] = useState("");
@@ -44,21 +47,30 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
   const [waitingMinutes, setWaitingMinutes] = useState(30);
   const [address, setAddress] = useState({ street: "", house: "", apartment: "", entrance: "", floor: "", intercom: "", district: "", comment: "" });
   const [comment, setComment] = useState("");
-  const [quote, setQuote] = useState<StructuredRequestPriceQuote | null>(null);
+  const [quote, setQuote] = useState<StructuredRequestPriceQuote | ServiceTreeQuote | null>(null);
   const [errors, setErrors] = useState<FormError[]>([]);
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [drafts, setDrafts] = useState<RequestDraft[]>([]);
+  const [activeDraft, setActiveDraft] = useState<RequestDraft | null>(null);
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [saveStatus, setSaveStatus] = useState("Есть несохранённые изменения");
+  const [supportOpen, setSupportOpen] = useState(false);
+  const [supportForm, setSupportForm] = useState({ subject: "Помощь с заполнением заявки", message: "" });
   const formRef = useRef<HTMLFormElement>(null);
+  const supportDialogRef = useRef<HTMLElement>(null);
   const quoteRequestId = useRef(0);
+  const initializedDraftState = useRef(false);
+
+  useEffect(() => { void reloadDrafts(); }, []);
 
   useEffect(() => {
     if (!cityId) return setCatalog(null);
-    api.categoriesForRequest(cityId).then((result) => {
-      setCatalog(result);
-      setSelectedTasks([]);
-      setTaskFieldValues({});
-      setOpenDirections(result.directions?.map((direction) => direction.id) ?? []);
-    }).catch(() => setCatalog(null));
+    Promise.all([api.categoriesForRequest(cityId), api.effectiveServiceTree(cityId)]).then(([result, tree]) => {
+      setCatalog(result); setServiceTree(tree);
+      if (!activeDraft) { setSelectedTasks([]); setSelectedNodeSlugs([]); setTaskFieldValues({}); }
+      setOpenDirections(activeDraft?.expandedNodeSlugs ?? tree.roots.map((node) => node.slug));
+    }).catch(() => { setCatalog(null); setServiceTree(null); });
   }, [cityId]);
 
   const visibleDirections = useMemo(() => {
@@ -69,7 +81,8 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
     })).filter((direction) => direction.tasks.length > 0);
   }, [catalog, taskSearch]);
   const medicalWarning = containsMedicalQuery(taskSearch);
-  const hasAccompaniment = selectedTasks.some((task) => task.categorySlug === "accompaniment");
+  const selectedTreeNodes = useMemo(() => (serviceTree?.flatNodes ?? []).filter((node) => selectedNodeSlugs.includes(node.slug)), [serviceTree, selectedNodeSlugs]);
+  const hasAccompaniment = selectedTreeNodes.some((node) => node.path.includes("accompaniment")) || selectedTasks.some((task) => task.categorySlug === "accompaniment");
   const usesLegacyAccompanimentFields = hasAccompaniment && !selectedTasks.some((task) => task.categorySlug === "accompaniment" && (task.formFields?.length ?? 0) > 0);
   const recommendedTasks = useMemo(() => {
     const allTasks = (catalog?.directions ?? []).flatMap((direction) => direction.tasks.map((task) => ({ ...task, categoryTitle: direction.title })));
@@ -92,17 +105,15 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
 
   useEffect(() => {
     const requestId = ++quoteRequestId.current;
-    if (!cityId || !recipientType || !mainState || selectedTasks.length === 0) return setQuote(null);
+    if (!cityId || !recipientType || !mainState || selectedNodeSlugs.length === 0) return setQuote(null);
     const handle = window.setTimeout(() => {
-      api.calculateRequestPrice({
-        cityId,
-        recipientType,
-        dependentState: { mainState, features },
-        selectedTasks: selectedTasks.map(taskPayload),
-        taskFieldValues,
-        frequency,
-        schedule,
-        accompanimentWaitingMinutes: usesLegacyAccompanimentFields && waitingRequired ? waitingMinutes : 0,
+      const treeRequest = serviceTree?.schemaVersion === "3";
+      api.calculateRequestPrice(treeRequest ? {
+        cityId, selectedNodeSlugs, dynamicFieldValues: taskFieldValues,
+        schedule
+      } : {
+        cityId, recipientType, dependentState: { mainState, features }, selectedTasks: selectedTasks.map(taskPayload),
+        taskFieldValues, frequency, schedule, accompanimentWaitingMinutes: usesLegacyAccompanimentFields && waitingRequired ? waitingMinutes : 0,
         queryText: `${taskSearch} ${comment}`
       }).then((result) => {
         if (quoteRequestId.current === requestId) setQuote(result);
@@ -111,7 +122,15 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
       });
     }, 250);
     return () => window.clearTimeout(handle);
-  }, [cityId, recipientType, mainState, features, selectedTasks, taskFieldValues, frequency, schedule, usesLegacyAccompanimentFields, waitingRequired, waitingMinutes, taskSearch, comment]);
+  }, [cityId, recipientType, mainState, features, selectedTasks, selectedNodeSlugs, serviceTree, taskFieldValues, frequency, schedule, usesLegacyAccompanimentFields, waitingRequired, waitingMinutes, taskSearch, comment]);
+
+  useEffect(() => {
+    if (!serviceTree || serviceTree.schemaVersion === "3") return;
+    const selected = selectedNodeSlugs.map((slug) => serviceTree.flatNodes.find((node) => node.slug === slug)).filter(Boolean);
+    const compatibilityTasks = selected.map((node) => node!.metadata.compatibilitySelection as { categoryId: string; subcategoryId?: string | null; taskTemplateId?: string | null } | undefined).filter(Boolean);
+    const allTasks = (catalog?.directions ?? []).flatMap((direction) => direction.tasks.map((task) => ({ ...task, categoryTitle: direction.title })));
+    setSelectedTasks(allTasks.filter((task) => compatibilityTasks.some((item) => item!.categoryId === task.categoryId && item!.subcategoryId === task.subcategoryId && item!.taskTemplateId === task.taskTemplateId)));
+  }, [selectedNodeSlugs, serviceTree, catalog]);
 
   function buildSchedule() {
     const finite = repeating ? {
@@ -130,6 +149,91 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
     }
     return { frequency, startDate: frequency === "urgent_today" ? today : startDate, ...finite, slots: globalSlots };
   }
+
+  const draftFingerprint = useMemo(() => JSON.stringify({ cityId, contact, recipientType, dependentName, dependentAge, mainState, features, selectedNodeSlugs, openDirections, taskFieldValues, schedule, address, comment }), [cityId, contact, recipientType, dependentName, dependentAge, mainState, features, selectedNodeSlugs, openDirections, taskFieldValues, schedule, address, comment]);
+  useEffect(() => {
+    if (!initializedDraftState.current) { initializedDraftState.current = true; return; }
+    setDraftDirty(true); setSaveStatus("Есть несохранённые изменения");
+  }, [draftFingerprint]);
+  useEffect(() => {
+    const interval = window.setInterval(() => { if (draftDirty) void saveDraft(true); }, 30_000);
+    return () => window.clearInterval(interval);
+  }, [draftDirty, activeDraft, draftFingerprint]);
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => { if (draftDirty) { event.preventDefault(); event.returnValue = ""; } };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => window.removeEventListener("beforeunload", beforeUnload);
+  }, [draftDirty]);
+  useEffect(() => {
+    if (!supportOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setSupportOpen(false); return; }
+      if (event.key !== "Tab") return;
+      const controls = Array.from(supportDialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? []);
+      if (!controls.length) return;
+      const first = controls[0]; const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [supportOpen]);
+
+  async function reloadDrafts() { try { setDrafts(await api.requestDrafts()); } catch { setDrafts([]); } }
+
+  function currentDraftPayload(autosave: boolean) {
+    return {
+      cityId: cityId || null,
+      title: selectedTreeNodes.slice(0, 3).map((node) => node.title).join(", ") || "Новый черновик",
+      formData: { cityId, contactName: contact.name, contactPhone: contact.phone, recipientType, dependentName, dependentAge: dependentAge ? Number(dependentAge) : null, dependentMainState: mainState, dependentStateFeatures: features, frequency, schedule, address, comment },
+      selectedNodeSlugs, expandedNodeSlugs: openDirections, dynamicFieldValues: taskFieldValues,
+      scheduleDraft: schedule, addressDraft: address, beneficiaryDraft: { recipientType, dependentName, dependentAge, mainState, features },
+      latestQuote: quote as unknown as Record<string, unknown> | null,
+      validationState: { completionPercent: completionPercent() }, autosave
+    };
+  }
+
+  async function saveDraft(autosave = false) {
+    try {
+      setSaveStatus("Сохраняем…");
+      const saved = activeDraft
+        ? await api.updateRequestDraft(activeDraft.id, { ...currentDraftPayload(autosave), revision: activeDraft.revision })
+        : await api.createRequestDraft(currentDraftPayload(autosave));
+      setActiveDraft(saved); setDraftDirty(false);
+      setSaveStatus(`Сохранено в ${new Date(saved.updatedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`);
+      await reloadDrafts();
+      return saved;
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "request_draft_revision_conflict") setSaveStatus("Черновик изменён в другом окне. Загрузите последнюю версию или сохраните копию.");
+      else setSaveStatus("Не удалось сохранить");
+      throw error;
+    }
+  }
+
+  async function continueDraft(item: RequestDraft) {
+    const draft = await api.requestDraft(item.id);
+    const form = draft.formData ?? {};
+    setActiveDraft(draft); setCityId(String(draft.cityId ?? form.cityId ?? ""));
+    setContact({ name: String(form.contactName ?? user.displayName ?? ""), phone: String(form.contactPhone ?? user.phone ?? "") });
+    setRecipientType(String(form.recipientType ?? "")); setDependentName(String(form.dependentName ?? "")); setDependentAge(form.dependentAge == null ? "" : String(form.dependentAge));
+    setMainState(String(form.dependentMainState ?? "")); setFeatures(Array.isArray(form.dependentStateFeatures) ? form.dependentStateFeatures.map(String) : []);
+    setSelectedNodeSlugs(draft.selectedNodeSlugs); setOpenDirections(draft.expandedNodeSlugs ?? []); setTaskFieldValues(draft.dynamicFieldValues ?? {});
+    const nextSchedule = draft.scheduleDraft ?? {}; setFrequency(String(nextSchedule.frequency ?? "once")); setStartDate(String(nextSchedule.startDate ?? localDate(1)));
+    const nextAddress = draft.addressDraft ?? {}; setAddress({ street: String(nextAddress.street ?? ""), house: String(nextAddress.house ?? ""), apartment: String(nextAddress.apartment ?? ""), entrance: String(nextAddress.entrance ?? ""), floor: String(nextAddress.floor ?? ""), intercom: String(nextAddress.intercom ?? ""), district: String(nextAddress.district ?? ""), comment: String(nextAddress.comment ?? "") });
+    setComment(String(form.comment ?? "")); setQuote(draft.latestQuote ?? null); setDraftDirty(false); setSaveStatus(`Сохранено в ${new Date(draft.updatedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`);
+  }
+
+  function newDraft() { setActiveDraft(null); setSelectedNodeSlugs([]); setSelectedTasks([]); setTaskFieldValues({}); setComment(""); setDraftDirty(false); setSaveStatus("Есть несохранённые изменения"); }
+
+  async function sendSupportRequest() {
+    if (!supportForm.message.trim()) return;
+    const saved = await saveDraft(false);
+    await api.createDraftSupportCase(saved.id, { subject: supportForm.subject, message: supportForm.message, revision: saved.revision });
+    setSupportOpen(false); setSupportForm({ subject: "Помощь с заполнением заявки", message: "" }); setMessage("Обращение отправлено. Ответ появится в этом черновике и в сообщениях от сервиса.");
+    await reloadDrafts();
+  }
+
+  function completionPercent() { const checks = [cityId, contact.name, contact.phone, recipientType, mainState, selectedNodeSlugs.length, startDate, address.street, address.house]; return Math.round(checks.filter(Boolean).length / checks.length * 100); }
 
   function toggleTask(task: CatalogTask, direction: { title: string; slug: string }) {
     const current = selectedTasks.some((item) => item.id === task.id);
@@ -171,7 +275,7 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
     if (recipientType && recipientType !== "self" && !dependentName.trim()) next.push({ path: "dependentName", message: "Укажите имя Подопечного." });
     if (recipientType === "child" && !dependentAge) next.push({ path: "dependentAge", message: "Укажите возраст Подопечного." });
     if (!mainState) next.push({ path: "dependentMainState", message: "Выберите основное состояние Подопечного." });
-    if (selectedTasks.length === 0) next.push({ path: "selectedTasks", message: "Выберите хотя бы одну задачу." });
+    if (selectedNodeSlugs.length === 0) next.push({ path: "selectedTasks", message: "Выберите хотя бы одну задачу." });
     for (const task of selectedTasks) {
       for (const field of task.formFields ?? []) {
         const value = taskFieldValues[taskIdentity(task)]?.[field.id];
@@ -179,6 +283,10 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
         if (isDynamicFieldRequired(field, values) && (value === undefined || value === null || value === "" || value === false)) next.push({ path: `taskFieldValues.${taskIdentity(task)}.${field.id}`, message: `Заполните поле «${field.label}».` });
       }
       if (task.requiresComment && !comment.trim()) next.push({ path: "comment", message: `Добавьте комментарий для задачи «${task.title}».` });
+    }
+    for (const node of selectedTreeNodes) for (const field of node.formFields ?? []) {
+      const values = taskFieldValues[node.slug] ?? {}; const value = values[field.id];
+      if (isDynamicFieldRequired(field, values) && (value === undefined || value === null || value === "" || value === false)) next.push({ path: `taskFieldValues.${node.slug}.${field.id}`, message: `Заполните поле «${field.label}».` });
     }
     if (!startDate) next.push({ path: "schedule.startDate", message: "Укажите дату." });
     if (repeating && periodMode === "endDate" && !endDate) next.push({ path: "schedule.endDate", message: "Укажите дату окончания." });
@@ -226,6 +334,12 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
     }
     try {
       setSubmitting(true);
+      if (serviceTree?.schemaVersion === "3") {
+        const saved = await saveDraft(false);
+        await api.publishRequestDraft(saved.id, saved.revision);
+        setMessage("Заявка создана."); setActiveDraft(null); setDraftDirty(false); await reloadDrafts(); await onCreated();
+        return;
+      }
       const created = await api.createRequest({
         cityId,
         contactName: contact.name,
@@ -250,6 +364,7 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
         comment: comment || undefined
       });
       await api.publishRequest(created.id);
+      if (activeDraft) await api.deleteRequestDraft(activeDraft.id);
       setMessage("Заявка создана.");
       await onCreated();
     } catch (error: any) {
@@ -268,6 +383,11 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
   return (
     <form className="request-builder" onSubmit={submit} ref={formRef} noValidate>
       {message && <p className="notice">{message}</p>}
+      <section className="request-drafts-panel">
+        <div className="section-heading"><div><h2>Ваши черновики</h2><p>Продолжайте заполнение без потери данных.</p></div><button type="button" className="secondary-button" onClick={newDraft}><Plus size={17} />Новая заявка</button></div>
+        {drafts.length === 0 ? <p className="empty-state">Сохранённых черновиков пока нет.</p> : <div className="request-draft-list">{drafts.map((draft) => <article key={draft.id} className={activeDraft?.id === draft.id ? "is-active" : ""}><div><strong>{draft.title || "Черновик заявки"}</strong><span>{draft.city?.name ?? "Город не выбран"} · изменён {new Date(draft.updatedAt).toLocaleString("ru-RU")}</span><span>Заполнено: {Number((draft.validationState as any)?.completionPercent ?? 0)}%</span>{draft.supportCase && <span className="status-badge">{draft.supportCase.status === "waiting_for_client" ? "Есть ответ сотрудника" : `Обращение: ${draft.supportCase.status}`}</span>}</div><div className="button-row"><button type="button" className="primary-button" onClick={() => void continueDraft(draft)}>Продолжить</button><button type="button" className="secondary-button" onClick={async () => { await api.duplicateRequestDraft(draft.id); await reloadDrafts(); }}>Создать копию</button><button type="button" className="icon-button danger" title="Удалить черновик" onClick={async () => { if (window.confirm("Удалить черновик? История обращения сохранится.")) { await api.deleteRequestDraft(draft.id); if (activeDraft?.id === draft.id) newDraft(); await reloadDrafts(); } }}><Trash2 size={18} /></button></div></article>)}</div>}
+      </section>
+      <div className="draft-save-toolbar"><span>{saveStatus}</span><button type="button" className="secondary-button" onClick={() => void saveDraft(false)}><Save size={17} />Сохранить черновик</button></div>
       <FormSection number="1" title="Город и контактное лицо">
         <div data-field-path="cityId" tabIndex={-1} className={fieldError("cityId") ? "field-error" : ""}>
           <CityCombobox cities={cities} value={cityId} onChange={setCityId} label="Город Подопечного" />
@@ -298,15 +418,13 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
       </FormSection>
 
       <FormSection number="4" title="Что нужно сделать?">
-        <label className="task-search">Найти задачу<input value={taskSearch} onChange={(event) => setTaskSearch(event.target.value)} /></label>
         {medicalWarning && <p className="notice">Сервис не принимает задачи с медицинскими процедурами. При угрозе жизни или здоровью обращайтесь в экстренные службы.</p>}
         <div className="task-directions" data-field-path="selectedTasks" tabIndex={-1}>
-          {visibleDirections.map((direction) => <section className="task-direction" key={direction.id}><button type="button" className="task-direction__head" onClick={() => setOpenDirections(toggle(openDirections, direction.id))}><span><strong>{direction.title}</strong>{direction.subtitle && <small>{direction.subtitle}</small>}</span><span>{openDirections.includes(direction.id) ? "−" : "+"}</span></button>{openDirections.includes(direction.id) && <div className="task-options">{direction.tasks.map((task) => <label key={task.id}><input type="checkbox" checked={selectedTasks.some((item) => item.id === task.id)} onChange={() => toggleTask(task, direction)} /><span><strong>{task.title}</strong>{task.description && <small>{task.description}</small>}{task.customerHint && <small>{task.customerHint}</small>}</span></label>)}</div>}</section>)}
+          {serviceTree ? <ServiceTreeSelector tree={serviceTree} selected={selectedNodeSlugs} expanded={openDirections} search={taskSearch} onSearch={setTaskSearch} onSelectedChange={setSelectedNodeSlugs} onExpandedChange={setOpenDirections} /> : <p>Выберите город, чтобы загрузить структуру услуг.</p>}
         </div>
         <FieldError text={fieldError("selectedTasks")} />
-        {selectedTasks.length > 0 && <div className="selected-tasks"><strong>Вы выбрали</strong>{selectedTasks.map((task) => <span key={task.id}>{task.title}<button type="button" aria-label={`Убрать ${task.title}`} onClick={() => toggleTask(task, { title: task.categoryTitle, slug: task.categorySlug })}><X size={15} /></button></span>)}<p>Выбранные задачи будут выполняться во время каждого визита.</p></div>}
-        {recommendedTasks.length > 0 && <div className="task-recommendations"><strong>Также часто требуется</strong>{recommendedTasks.map((task) => <button type="button" className="secondary-button" key={task.id} onClick={() => toggleTask(task, { title: task.categoryTitle, slug: task.categorySlug })}><Plus size={16} />{task.title}</button>)}<small>Добавьте только если это действительно нужно.</small></div>}
-        {selectedTasks.some((task) => (task.formFields?.length ?? 0) > 0) && <div className="dynamic-task-fields">{selectedTasks.filter((task) => (task.formFields?.length ?? 0) > 0).map((task) => { const values = taskFieldValues[taskIdentity(task)] ?? {}; return <section key={task.id}><h4>{task.title}</h4>{task.formFields!.filter((field) => isDynamicFieldVisible(field, values)).map((field) => <DynamicField key={field.id} task={task} field={field} required={isDynamicFieldRequired(field, values)} value={values[field.id]} onChange={(value) => setTaskFieldValues((current) => ({ ...current, [taskIdentity(task)]: { ...(current[taskIdentity(task)] ?? {}), [field.id]: value } }))} error={fieldError(`taskFieldValues.${taskIdentity(task)}.${field.id}`)} />)}</section>; })}</div>}
+        {selectedTreeNodes.length > 0 && <div className="selected-tasks"><strong>Вы выбрали</strong>{selectedTreeNodes.map((node) => <span key={node.slug}>{node.path.map((slug) => serviceTree?.flatNodes.find((item) => item.slug === slug)?.title).filter(Boolean).join(" → ")}<button type="button" aria-label={`Убрать ${node.title}`} onClick={() => setSelectedNodeSlugs(selectedNodeSlugs.filter((slug) => slug !== node.slug))}><X size={15} /></button></span>)}<p>Выбранные задачи будут выполняться во время каждого визита.</p></div>}
+        {selectedTreeNodes.some((node) => node.formFields.length > 0) && <div className="dynamic-task-fields">{selectedTreeNodes.filter((node) => node.formFields.length > 0).map((node) => { const values = taskFieldValues[node.slug] ?? {}; return <section key={node.slug}><h4>{node.title}</h4>{node.formFields.filter((field) => isDynamicFieldVisible(field, values)).map((field) => <DynamicNodeField key={field.id} nodeSlug={node.slug} field={field} required={isDynamicFieldRequired(field, values)} value={values[field.id]} onChange={(value) => setTaskFieldValues((current) => ({ ...current, [node.slug]: { ...(current[node.slug] ?? {}), [field.id]: value } }))} error={fieldError(`taskFieldValues.${node.slug}.${field.id}`)} />)}</section>; })}</div>}
         {usesLegacyAccompanimentFields && <div className="notice"><p>Укажите место назначения в комментарии.</p><label className="checkbox-row"><input type="checkbox" checked={waitingRequired} onChange={(event) => setWaitingRequired(event.target.checked)} />Нужно ожидание</label>{waitingRequired && <label>Продолжительность ожидания, минут<input type="number" step="30" min="30" value={waitingMinutes} onChange={(event) => setWaitingMinutes(Number(event.target.value))} /></label>}</div>}
       </FormSection>
 
@@ -317,7 +435,7 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
         {repeating && <div className="finite-period"><strong>Конечный период</strong><select value={periodMode} onChange={(event) => setPeriodMode(event.target.value)}><option value="endDate">Дата окончания</option><option value="weeks">Количество недель</option><option value="visits">Точное количество визитов</option></select>{periodMode === "endDate" && <input data-field-path="schedule.endDate" type="date" min={startDate} value={endDate} onChange={(event) => setEndDate(event.target.value)} />}{periodMode === "weeks" && <input data-field-path="schedule.weeksCount" type="number" min="1" value={weeksCount} onChange={(event) => setWeeksCount(event.target.value)} />}{periodMode === "visits" && <input data-field-path="schedule.visitCount" type="number" min="1" value={visitCount} onChange={(event) => setVisitCount(event.target.value)} />}</div>}
         {!usesDaySchedule ? <VisitSlots slots={globalSlots} errors={errors} onChange={(id, patch) => updateSlot(null, id, patch)} onAdd={() => addSlot(null)} onRemove={(id) => removeSlot(null, id)} /> : selectedDays.map((day) => <div className="day-schedule" key={day}><h4>{weekdays.find(([value]) => value === day)?.[1]}</h4><VisitSlots slots={slotsByDay[day] ?? globalSlots} errors={errors} onChange={(id, patch) => updateSlot(day, id, patch)} onAdd={() => addSlot(day)} onRemove={(id) => removeSlot(day, id)} /></div>)}
         {usesDaySchedule && selectedDays.length > 1 && <button className="secondary-button" type="button" onClick={() => { const first = slotsByDay[selectedDays[0]] ?? globalSlots; setSlotsByDay(Object.fromEntries(selectedDays.map((day) => [day, first.map((slot) => ({ ...slot, id: crypto.randomUUID() }))]))); }}>Скопировать время на выбранные дни</button>}
-        {quote && <p className="visit-total"><strong>{quote.visitCount ?? 0} визитов · {formatDuration(quote.totalDurationMinutes ?? 0)}</strong></p>}
+        {quote && <p className="visit-total"><strong>{quoteSummary(quote).visitCount} визитов · {formatDuration(quoteSummary(quote).totalDurationMinutes)}</strong></p>}
       </FormSection>
 
       <FormSection number="6" title="Где нужна помощь">
@@ -326,14 +444,15 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
       </FormSection>
 
       <FormSection number="7" title="Рекомендуемая стоимость">
-        {selectedTasks.length === 0 ? <p>Выберите хотя бы одну задачу, чтобы увидеть ориентировочную сумму.</p> : !quote ? <p>Укажите длительность визита, чтобы рассчитать точную ориентировочную сумму.</p> : <div className="request-quote"><p className="request-quote__amount">{quote.totalHelpAmount == null ? "Часть задач требует согласования" : <>Ориентировочная сумма помощи: <strong>{formatMoney(quote.totalHelpAmount)}</strong></>}</p><p>{quote.visitCount ?? 0} визитов · {formatDuration(quote.totalDurationMinutes ?? 0)}</p><div className="request-quote__visits">{quote.expandedVisits?.map((visit) => <article key={visit.id}><strong>Визит {visit.sequence}</strong><span>{new Date(`${visit.date}T00:00:00`).toLocaleDateString("ru-RU")} · {visit.startTime}–{visit.endTime}</span><span>{formatDuration(visit.durationMinutes)} · {visit.calculatedHelpPrice == null ? `Рассчитанная часть ${formatMoney(visit.calculatedSubtotal ?? 0)}` : formatMoney(visit.calculatedHelpPrice)}</span></article>)}</div><p>Сервисный сбор Заказчика: {formatMoney(quote.customerServiceFeeTotal ?? 0)}</p><p>Сервисный сбор Помощника: {formatMoney(quote.helperServiceFeeTotal ?? 0)}</p><p>{quote.sourceMessage}</p>{(quote.unpricedTasks?.length ?? 0) > 0 && <p>Без ориентира: {quote.unpricedTasks?.map((task) => task.taskTemplateTitle).join(", ")}. Рассчитанная часть не является точным итогом; условия уточняются в чате.</p>}<p>Оплата помощи производится Помощнику напрямую. Сервисный сбор списывается с внутреннего баланса сервиса.</p></div>}
+        {selectedNodeSlugs.length === 0 ? <p>Выберите хотя бы одну задачу, чтобы увидеть ориентировочную сумму.</p> : !quote ? <p>Укажите длительность визита, чтобы рассчитать ориентировочную сумму.</p> : <PricingBreakdown quote={quote} tree={serviceTree} />}
       </FormSection>
 
       <FormSection number="8" title="Комментарий">
         <label>Комментарий к заявке<textarea data-field-path="comment" value={comment} onChange={(event) => setComment(event.target.value)} /></label><FieldError text={fieldError("comment")} />
       </FormSection>
       <details className="request-safety"><summary>Ограничения и безопасность · Подробнее</summary><p>Сервис принимает бытовые и организационные задачи. Медицинские процедуры не принимаются.</p>{safetyRules.length > 0 && <ul>{safetyRules.map((rule) => <li key={`${rule.title}:${rule.description}`}><strong>{rule.title}.</strong> {rule.description}</li>)}</ul>}</details>
-      <section className="request-builder__submit"><h2>Проверка и создание</h2><button className="primary-button" type="submit" disabled={submitting}>{submitting ? "Создаём..." : "Создать заявку"}</button></section>
+      <section className="request-builder__submit"><h2>Проверка и создание</h2><div className="button-row"><button className="secondary-button" type="button" onClick={() => setSupportOpen(true)}><HelpCircle size={18} />Нужна помощь администратора/менеджера</button><button className="primary-button" type="submit" disabled={submitting}>{submitting ? "Создаём..." : "Создать заявку"}</button></div></section>
+      {supportOpen && <div className="modal-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSupportOpen(false); }}><section ref={supportDialogRef} className="modal-card support-case-modal" role="dialog" aria-modal="true" aria-labelledby="support-case-title"><h2 id="support-case-title">Нужна помощь с заявкой</h2><p>Перед отправкой текущие данные будут сохранены в черновике.</p><label>Тема<input autoFocus value={supportForm.subject} maxLength={120} onChange={(event) => setSupportForm({ ...supportForm, subject: event.target.value })} /></label><label>Сообщение<textarea value={supportForm.message} maxLength={5000} onChange={(event) => setSupportForm({ ...supportForm, message: event.target.value })} /></label><div className="button-row"><button type="button" className="secondary-button" onClick={() => setSupportOpen(false)}>Отмена</button><button type="button" className="primary-button" disabled={!supportForm.message.trim()} onClick={() => void sendSupportRequest()}>Отправить</button></div></section></div>}
     </form>
   );
 }
@@ -341,16 +460,36 @@ export function RequestCreationForm({ cities, user, onCreated }: { cities: City[
 function FormSection({ number, title, children }: { number: string; title: string; children: React.ReactNode }) { return <section className="request-builder__section"><h2><span>{number}</span>{title}</h2>{children}</section>; }
 function Choice({ selected, onClick, children }: { selected: boolean; onClick: () => void; children: React.ReactNode }) { return <button type="button" className={`choice-button${selected ? " is-selected" : ""}`} onClick={onClick}>{children}</button>; }
 function FieldError({ text }: { text?: string }) { return text ? <span className="field-error-text">{text}</span> : null; }
+function DynamicNodeField({ nodeSlug, field, required, value, onChange, error }: { nodeSlug: string; field: DynamicRequestField; required: boolean; value: unknown; onChange: (value: unknown) => void; error?: string }) {
+  const path = `taskFieldValues.${nodeSlug}.${field.id}`;
+  const control = dynamicFieldControl(field, value, onChange);
+  return <label className={error ? "field-error" : ""} data-field-path={path}>{field.label}{required && <strong> *</strong>}{control}{field.helpText && <small>{field.helpText}</small>}<FieldError text={error} /></label>;
+}
 function DynamicField({ task, field, required, value, onChange, error }: { task: SelectedTask; field: DynamicRequestField; required: boolean; value: unknown; onChange: (value: unknown) => void; error?: string }) {
   const path = `taskFieldValues.${taskIdentity(task)}.${field.id}`;
-  const control = field.type === "textarea"
+  const control = dynamicFieldControl(field, value, onChange);
+  return <label className={error ? "field-error" : ""} data-field-path={path}>{field.label}{required && <strong> *</strong>}{control}{field.helpText && <small>{field.helpText}</small>}<FieldError text={error} /></label>;
+}
+function dynamicFieldControl(field: DynamicRequestField, value: unknown, onChange: (value: unknown) => void) {
+  return field.type === "textarea"
     ? <textarea value={String(value ?? "")} placeholder={field.placeholder ?? undefined} onChange={(event) => onChange(event.target.value)} />
     : field.type === "select"
       ? <select value={String(value ?? "")} onChange={(event) => onChange(event.target.value)}><option value="">Выберите</option>{field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
       : field.type === "checkbox"
         ? <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
         : <input type={field.type} value={String(value ?? "")} min={field.min ?? undefined} max={field.max ?? undefined} placeholder={field.placeholder ?? undefined} onChange={(event) => onChange(field.type === "number" ? event.target.value === "" ? "" : Number(event.target.value) : event.target.value)} />;
-  return <label className={error ? "field-error" : ""} data-field-path={path}>{field.label}{required && <strong> *</strong>}{control}{field.helpText && <small>{field.helpText}</small>}<FieldError text={error} /></label>;
+}
+function PricingBreakdown({ quote, tree }: { quote: StructuredRequestPriceQuote | ServiceTreeQuote; tree: EffectiveServiceTree | null }) {
+  if ("schemaVersion" in quote && quote.schemaVersion === "3") return <div className="service-pricing-breakdown">
+    {quote.separatelyPricedNodes.map((line) => <article key={line.nodeSlug}><div><strong>{line.title}</strong><span>{line.path.map((slug) => tree?.flatNodes.find((node) => node.slug === slug)?.title).filter(Boolean).join(" → ")}</span></div><strong>{line.amount == null ? "По согласованию" : formatMoney(line.amount)}</strong>{line.includedChildren.length > 0 && <p>Включено: {line.includedChildren.map((item) => item.title).join(", ")}</p>}</article>)}
+    {quote.includedNodes.length > 0 && <p className="included-price-note">Без отдельной доплаты: {quote.includedNodes.map((item) => item.title).join(", ")}.</p>}
+    <div className="service-pricing-total"><span>Помощь за все визиты</span><strong>{quote.totals.helpAmount == null ? "По согласованию" : formatMoney(quote.totals.helpAmount)}</strong></div>
+    <div className="service-pricing-fees"><span>Сервисный сбор Заказчика: {formatMoney(quote.totals.customerServiceFeeTotal)}</span><span>Сервисный сбор Помощника: {formatMoney(quote.totals.helperServiceFeeTotal)}</span></div>
+    <div className="request-quote__visits"><strong>Расчёт по визитам</strong>{quote.perVisit.map((visit) => <span key={visit.id}>Визит {visit.sequence}: {formatDuration(visit.durationMinutes)} · {visit.helpAmount == null ? "по согласованию" : formatMoney(visit.helpAmount)}</span>)}</div>
+    {quote.warnings.map((warning) => <p className="notice" key={warning}>{warning}</p>)}
+  </div>;
+  const legacy = quote as StructuredRequestPriceQuote;
+  return <div className="service-pricing-breakdown">{legacy.breakdown.map((line, index) => <article key={`${line.kind}:${index}`}><div><strong>{line.taskTemplateTitle ?? line.subcategoryTitle ?? line.categoryTitle}</strong><span>{line.pricingComment ?? line.categoryTitle}</span></div><strong>{line.calculatedRecommendedPrice == null ? "По согласованию" : formatMoney(line.calculatedRecommendedPrice)}</strong></article>)}<div className="service-pricing-total"><span>Помощь за все визиты</span><strong>{legacy.totalHelpAmount == null ? "По согласованию" : formatMoney(legacy.totalHelpAmount)}</strong></div><div className="request-quote__visits"><strong>Расчёт по визитам</strong>{legacy.expandedVisits?.map((visit) => <span key={visit.id}>Визит {visit.sequence}: {formatDuration(visit.durationMinutes)} · {visit.helpAmount == null ? "по согласованию" : formatMoney(visit.helpAmount)}</span>)}</div>{legacy.warnings.map((warning) => <p className="notice" key={warning}>{warning}</p>)}</div>;
 }
 function isDynamicFieldVisible(field: DynamicRequestField, values: Record<string, unknown>) { return !field.requiredWhen || values[field.requiredWhen.fieldId] === field.requiredWhen.equals; }
 function isDynamicFieldRequired(field: DynamicRequestField, values: Record<string, unknown>) { return Boolean(field.required || (field.requiredWhen && values[field.requiredWhen.fieldId] === field.requiredWhen.equals)); }
@@ -363,6 +502,7 @@ function normalize(value: string) { return value.toLocaleLowerCase("ru-RU").repl
 function containsMedicalQuery(value: string) { const query = normalize(value); return ["укол", "инъекц", "капельниц", "перевяз", "обработка ран", "диагност", "лечение"].some((term) => query.includes(term)); }
 function slotEnd(slot: Slot) { const [h, m] = slot.startTime.split(":").map(Number); const total = h * 60 + m + slot.durationMinutes; return total > 1440 ? "за пределами суток" : `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`; }
 function timeMinutes(value: string) { const [hours = 0, minutes = 0] = value.split(":").map(Number); return hours * 60 + minutes; }
+function quoteSummary(quote: StructuredRequestPriceQuote | ServiceTreeQuote) { return "schemaVersion" in quote ? quote.totals : { visitCount: quote.visitCount ?? 0, totalDurationMinutes: quote.totalDurationMinutes ?? 0 }; }
 function formatMoney(value: number) { return `${value.toLocaleString("ru-RU")} ₽`; }
 function formatDuration(minutes: number) { return minutes % 60 ? `${Math.floor(minutes / 60)} ч ${minutes % 60} мин` : `${minutes / 60} ч`; }
 function localDate(offsetDays: number) { const date = new Date(); date.setDate(date.getDate() + offsetDays); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
