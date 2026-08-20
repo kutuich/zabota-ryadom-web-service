@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { test } from "vitest";
 import {
   buildPublicAddressFromRequest,
   buildYandexExactAddressFromRequest,
@@ -31,6 +32,7 @@ import {
   paymentRefreshResultMessage
 } from "../utils/paymentDisplay";
 
+test("current frontend navigation and terminology characterization baseline", () => {
 const sourceRoot = fileURLToPath(new URL("..", import.meta.url));
 const backendSourceRoot = fileURLToPath(new URL("../../../backend/src/", import.meta.url));
 
@@ -1032,3 +1034,4 @@ for (const label of forbiddenUserLabels) {
 }
 
 console.log("Navigation and terminology tests passed");
+});

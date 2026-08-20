@@ -837,6 +837,10 @@ export type PerformerDocument = {
   type: string;
   fileName: string;
   fileUrl: string;
+  originalFileName?: string | null;
+  mimeType?: string | null;
+  fileSize?: number | null;
+  checksum?: string | null;
   status: string;
   uploadedAt: string;
   verifiedAt?: string | null;
@@ -975,6 +979,18 @@ export type Chat = {
     customerConfirmedAt?: string | null;
     helperConfirmedAt?: string | null;
     finalizedAt?: string | null;
+    contract?: {
+      id: string;
+      templateVersion: string;
+      documentVersion: number;
+      status: string;
+      title: string;
+      checksum: string;
+      fileName: string;
+      mimeType: string;
+      fileSize: number;
+      createdAt: string;
+    } | null;
   } | null;
   conditionsJson?: string | null;
   archivedAt?: string | null;

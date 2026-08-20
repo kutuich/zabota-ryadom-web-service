@@ -12,6 +12,7 @@ import { serializeAgreedTerms } from "../services/agreementTermsService";
 import { PRICING_ADDONS, PRICING_PACKAGES } from "../services/pricingService";
 import { asyncHandler, HttpError } from "../utils/http";
 import { confirmAgreementVersionTx, createAgreementVersionTx, finalizeAgreementBatchTx } from "../services/agreementWorkflowService";
+import { serializeAgreementContract } from "./agreementContracts";
 
 export const chatsRouter = Router();
 
@@ -31,7 +32,7 @@ const chatInclude = {
     include: { sender: { select: { id: true, displayName: true, role: true } } },
     orderBy: { createdAt: "asc" as const }
   },
-  agreementVersions: { orderBy: { version: "desc" as const }, take: 1 }
+  agreementVersions: { include: { contract: true }, orderBy: { version: "desc" as const }, take: 1 }
 };
 
 const agreementTermsSchema = z.object({
@@ -733,7 +734,8 @@ function serializeChat(chat: any, viewer: { id: string; role: string }) {
       termsHash: agreementVersion.termsHash,
       customerConfirmedAt: agreementVersion.customerConfirmedAt,
       helperConfirmedAt: agreementVersion.helperConfirmedAt,
-      finalizedAt: agreementVersion.finalizedAt
+      finalizedAt: agreementVersion.finalizedAt,
+      contract: agreementVersion.contract ? serializeAgreementContract(agreementVersion.contract) : null
     } : null,
     conditionsJson: chat.conditionsJson,
     notAgreedAt: chat.notAgreedAt,

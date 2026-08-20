@@ -755,13 +755,22 @@ requestsRouter.post(
     }
     await ensureNonNegativeBalance(req.user!.id);
 
-    const performerProfile = await prisma.performerProfile.findUnique({
-      where: { userId: req.user!.id }
+    const performer = await prisma.user.findUniqueOrThrow({
+      where: { id: req.user!.id },
+      include: {
+        performerProfile: true,
+        userCities: { where: { isActive: true } }
+      }
     });
+    const match = evaluateRequestMatch(request, performer);
+    if (match.status === "not_fit") {
+      await writeAudit(req.user!.id, "response.blocked_by_matching", "request", request.id, { reasons: match.reasons });
+      throw new HttpError(403, "Отклик недоступен: профиль Помощника не соответствует обязательным условиям заявки", "request_match_blocked", { reasons: match.reasons });
+    }
 
     const childcareWarning =
       request.category.isChildcare &&
-      performerProfile?.criminalRecordCertificateStatus !== "criminal_record_verified";
+      performer.performerProfile?.criminalRecordCertificateStatus !== "criminal_record_verified";
 
     const response = await prisma.$transaction(async (tx) => {
       const created = await tx.requestResponse.upsert({

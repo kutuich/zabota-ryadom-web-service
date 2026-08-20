@@ -61,6 +61,8 @@
 - [ ] Маркетинговая рассылка исключает пользователей без согласия.
 - [ ] Service-message attachments хранятся в `/data/uploads/service-messages` и скачиваются через protected endpoint.
 - [ ] Прямой `/uploads/service-messages/...` закрыт.
+- [ ] Весь `/uploads` закрыт для публичного доступа; документы Помощников скачиваются только через `/api/performer-documents/:id/download`.
+- [ ] Проекты договоров хранятся в `/data/uploads/agreement-contracts` и скачиваются только через `/api/agreement-contracts/:id/download`.
 
 ## Документация и rollback
 

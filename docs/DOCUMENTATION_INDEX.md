@@ -1,22 +1,23 @@
 # Индекс документации
 
 > Статус: ACTIVE INDEX  
-> Актуализировано: 2026-07-30
+> Актуализировано: 2026-08-20
 
 ## Разрешение конфликтов
 
-1. Утверждённое решение пользователя в текущей задаче.
-2. [`ZABOTA_RYADOM_CURRENT_SOURCE_OF_TRUTH.md`](../ZABOTA_RYADOM_CURRENT_SOURCE_OF_TRUTH.md).
-3. Доменный технический документ.
-4. Фактическая schema/API как реализация; расхождение с нормативным документом фиксируется как bug или documentation gap.
+1. Явное решение пользователя в текущей задаче, если оно не противоречит утверждённой архитектуре.
+2. Утверждённая продуктовая архитектура проекта в Notion.
+3. Фактический код, schema и API в GitHub/локальной рабочей копии как источник текущего технического состояния.
+4. Доменный технический документ как описание реализации.
 5. README и operational checklist.
-6. Historical/obsolete документы.
+6. Historical/obsolete документы только как история, но не как текущие требования.
+
+Notion отвечает на вопрос «как продукт должен работать». Репозиторий отвечает на вопрос «как он реализован сейчас». Расхождение между ними фиксируется явно и не разрешается ссылкой на устаревший локальный сводный документ.
 
 ## Активные документы
 
 | Документ | Статус | Назначение | Когда обновлять | Главнее какого документа |
 |---|---|---|---|---|
-| [`ZABOTA_RYADOM_CURRENT_SOURCE_OF_TRUTH.md`](../ZABOTA_RYADOM_CURRENT_SOURCE_OF_TRUTH.md) | source_of_truth | Продуктовые решения и границы | При изменении утверждённого решения | Всех технических и operational документов |
 | [`README.md`](../README.md) | active | Короткий onboarding и запуск | При изменении запуска, стека или верхнеуровневой архитектуры | Только component README |
 | [`AGENTS.md`](../AGENTS.md) | active | Обязательный процесс для разработчика/Codex | При изменении обязательных правил работы | README по процессу разработки |
 | [`REQUEST_WORKFLOW_V2.md`](REQUEST_WORKFLOW_V2.md) | active | Модели, API, lifecycle, fees, visits, reserve, disputes | При изменении request/chat/visit workflow | Operational checklist по реализации |
@@ -34,6 +35,7 @@
 | [`DEPLOY_BUTTON.md`](DEPLOY_BUTTON.md) | operational | Работа deploy command | При изменении deploy script | Не главнее deploy guide |
 | [`CODE_AUDIT_BUTTON.md`](CODE_AUDIT_BUTTON.md) | operational | Read-only code audit | При изменении audit script/checks | Не главнее source/domain docs |
 | [`VISUAL_AUDIT_BUTTON.md`](VISUAL_AUDIT_BUTTON.md) | operational | Локальный mock visual audit | При изменении visual script/routes/viewports | Не заменяет E2E docs |
+| [`TESTING.md`](TESTING.md) | active | Vitest baseline, characterization coverage и подготовка test DB | При изменении test runner или стратегии тестирования | Локальные заметки о запуске тестов |
 | [`SECURITY_PRODUCTION_CHECKLIST.md`](../SECURITY_PRODUCTION_CHECKLIST.md) | operational | Security review production | При изменении auth/storage/payments/workflow | Не главнее domain security rules |
 | [`CHANGE_MANAGEMENT.md`](CHANGE_MANAGEMENT.md) | active | Процесс будущих изменений | При изменении engineering process | README по процессу |
 | [`DECISIONS_LOG.md`](DECISIONS_LOG.md) | historical | Краткая история утверждённых решений | При каждом новом/изменённом решении | Старые отчёты, но не current source |
@@ -42,7 +44,6 @@
 
 ## Правило статусов
 
-- `source_of_truth` — нормативное продуктовое решение;
 - `active` — актуальное техническое или процессное описание;
 - `operational` — инструкция выполнения операции;
 - `draft` — неутверждённый проект;

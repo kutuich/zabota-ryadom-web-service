@@ -1,6 +1,6 @@
 # Заявка, согласование и визиты v2
 
-> Статус: ACTIVE TECHNICAL DOCUMENT. Продуктовые правила задаёт [source of truth](../ZABOTA_RYADOM_CURRENT_SOURCE_OF_TRUTH.md).
+> Статус: ACTIVE TECHNICAL DOCUMENT. Продуктовые правила задаёт утверждённая архитектура проекта в Notion; этот файл описывает фактический технический контракт реализации.
 
 ## Модели и связи
 

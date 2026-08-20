@@ -2,7 +2,7 @@
 
 Web-сервис бытовой помощи семье, дому и близким. Заказчик создаёт заявку, Помощник откликается, стороны согласуют конечный график в чате и подтверждают одну версию условий.
 
-Нормативные требования: [`ZABOTA_RYADOM_CURRENT_SOURCE_OF_TRUTH.md`](ZABOTA_RYADOM_CURRENT_SOURCE_OF_TRUTH.md). Карта документации: [`docs/DOCUMENTATION_INDEX.md`](docs/DOCUMENTATION_INDEX.md).
+Продуктовая архитектура и требования утверждаются в Notion. Репозиторий фиксирует фактическую реализацию, технические контракты и эксплуатационные инструкции; карта документов находится в [`docs/DOCUMENTATION_INDEX.md`](docs/DOCUMENTATION_INDEX.md).
 
 ## Стек
 
@@ -14,6 +14,8 @@ Web-сервис бытовой помощи семье, дому и близк�
 - mock и T-Bank adapters для пополнения внутреннего баланса.
 
 ## Локальный запуск
+
+Проект закреплён на Node.js 22 LTS (`.nvmrc`, `package.json#engines`), как и Docker runtime.
 
 ```bash
 cp .env.example .env

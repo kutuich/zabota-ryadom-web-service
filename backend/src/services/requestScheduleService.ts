@@ -326,7 +326,12 @@ export async function calculateMultiTaskRequest(input: {
   const hasUnpricedTasks = exactAmounts.some((amount) => amount === null);
   const totalHelpAmount = hasUnpricedTasks ? null : exactAmounts.reduce<number>((sum, amount) => sum + (amount ?? 0), 0);
   const distinctAmounts = new Set(exactAmounts.filter((amount): amount is number => amount !== null));
-  const perVisitHelpAmount = !hasUnpricedTasks && distinctAmounts.size === 1 ? exactAmounts[0] : null;
+  const distinctVisitPricing = new Set(calculatedVisits.map((visit) => JSON.stringify({
+    durationMinutes: visit.durationMinutes,
+    calculatedHelpPrice: visit.calculatedHelpPrice,
+    pricing: visit.pricingBreakdown.map((row) => ({ pricingRuleId: row.pricingRuleId, amount: row.amount }))
+  })));
+  const perVisitHelpAmount = !hasUnpricedTasks && distinctAmounts.size === 1 && distinctVisitPricing.size === 1 ? exactAmounts[0] : null;
   const customerServiceFeeTotal = visits.length * settings.clientServiceFeeAmount;
   const helperServiceFeeTotal = visits.length * settings.performerCommissionAmount;
   const pricedRules = [...pricingGroups.values()].map(({ pricing, coveredTaskKeys }) => ({
@@ -535,7 +540,15 @@ function evaluateApplicableSafetyRules(categories: any[], tasks: any[], taskFiel
         if (values[confirmation.fieldId] !== (confirmation.value ?? true)) matchedConditions.push(`requiredConfirmation:${confirmation.fieldId}`);
       }
       if (applicability.conditions?.length && !(applicability.forbiddenValues?.length || applicability.numericLimits?.length || applicability.requiredConfirmation?.length)) matchedConditions.push("conditions");
-      const result: AppliedSafetyRule["result"] = rule.isBlocking ? matchedConditions.length > 0 ? "blocked" : "passed" : "warning";
+      const hasConditionalApplicability = Boolean(
+        applicability.conditions?.length
+        || applicability.forbiddenValues?.length
+        || applicability.numericLimits?.length
+        || applicability.requiredConfirmation?.length
+      );
+      const result: AppliedSafetyRule["result"] = rule.isBlocking
+        ? (!hasConditionalApplicability || matchedConditions.length > 0 ? "blocked" : "passed")
+        : "warning";
       const evaluation: AppliedSafetyRule = {
         id: rule.id,
         ruleKey: rule.ruleKey,

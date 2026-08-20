@@ -4,7 +4,6 @@ import type { NextFunction, Response } from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { env } from "./config/env";
-import { uploadsRoot } from "./services/uploadStorage";
 import { adminRouter } from "./routes/admin";
 import { authRouter } from "./routes/auth";
 import { balanceRouter } from "./routes/balance";
@@ -40,6 +39,7 @@ import { sendError } from "./utils/http";
 import { adminVisitsRouter, visitsRouter } from "./routes/visits";
 import { accountSecurityRouter, temporaryPasswordRouter } from "./routes/accountSecurity";
 import { requestDraftsRouter, requestDraftSupportRouter } from "./routes/requestDrafts";
+import { agreementContractsRouter } from "./routes/agreementContracts";
 
 export function createApp() {
   const app = express();
@@ -55,8 +55,7 @@ export function createApp() {
   app.use(cors({ origin: env.corsOrigin, credentials: true }));
   app.use("/api/admin/service-conversations", authenticate, express.json({ limit: "70mb" }), adminServiceConversationsRouter);
   app.use(express.json({ limit: "8mb" }));
-  app.use("/uploads/service-messages", (_req, res) => res.status(404).send("Not found"));
-  app.use("/uploads", express.static(uploadsRoot));
+  app.use("/uploads", (_req, res) => res.status(404).send("Not found"));
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok", service: "zabota-ryadom-web-service" });
@@ -76,6 +75,7 @@ export function createApp() {
   app.use("/api/knowledge", knowledgeRouter);
   app.use("/api/legal", legalRouter);
   app.use("/api/chats", chatsRouter);
+  app.use("/api/agreement-contracts", agreementContractsRouter);
   app.use("/api/visits", visitsRouter);
   app.use("/api/balance", balanceRouter);
   app.use("/api/payments", paymentsRouter);

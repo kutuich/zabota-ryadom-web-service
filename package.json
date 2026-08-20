@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "description": "Zabota Ryadom 2.0 web application",
+  "engines": {
+    "node": "22.x"
+  },
   "workspaces": [
     "backend",
     "frontend"
@@ -27,6 +30,7 @@
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
-    "playwright": "^1.61.1"
+    "playwright": "^1.61.1",
+    "vitest": "^3.2.4"
   }
 }

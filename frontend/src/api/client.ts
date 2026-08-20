@@ -108,6 +108,19 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
   return payload as T;
 }
 
+async function downloadProtectedFile(path: string, fileName: string, errorMessage: string) {
+  const response = await fetch(`${API_BASE}${path}`, { headers: { Authorization: `Bearer ${getStoredToken() ?? ""}` } });
+  if (!response.ok) throw new ApiError(response.status, errorMessage);
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export const api = {
   bootstrap: () => apiFetch<Bootstrap>("/public/bootstrap"),
   visitReserveSummary: () => apiFetch<any>("/admin/visits/reserve-summary"),
@@ -251,6 +264,8 @@ export const api = {
     apiFetch("/complaints", { method: "POST", body: JSON.stringify(body) }),
   knowledge: (audience: string) => apiFetch<KnowledgeArticle[]>(`/knowledge?audience=${audience}`),
   performerDocuments: () => apiFetch<PerformerDocument[]>("/performer-documents"),
+  downloadPerformerDocument: (id: string, fileName: string) => downloadProtectedFile(`/performer-documents/${id}/download`, fileName, "Не удалось скачать документ"),
+  downloadAgreementContract: (id: string, fileName: string) => downloadProtectedFile(`/agreement-contracts/${id}/download`, fileName, "Не удалось скачать проект договора"),
   updatePerformerProfile: (body: Record<string, unknown>) =>
     apiFetch("/performer-profile/me", { method: "PATCH", body: JSON.stringify(body) }),
   categoriesForRequest: (cityId: string) => apiFetch<CategoriesForCity>(`/categories/for-request?cityId=${encodeURIComponent(cityId)}`),

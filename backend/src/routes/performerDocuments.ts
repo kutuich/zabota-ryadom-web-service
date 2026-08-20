@@ -1,61 +1,67 @@
 import { Router } from "express";
+import fs from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { authenticate, requireRole } from "../middleware/auth";
 import { prisma } from "../db/prisma";
 import { writeAudit } from "../services/auditService";
 import { requireFeatureConsent } from "../services/legalService";
-import { savePerformerDocumentFile } from "../services/uploadStorage";
-import { asyncHandler } from "../utils/http";
+import { resolvePerformerDocumentPath, savePerformerDocumentFile } from "../services/uploadStorage";
+import { asyncHandler, HttpError } from "../utils/http";
 
 export const performerDocumentsRouter = Router();
 
-performerDocumentsRouter.use(authenticate, requireRole("performer"));
+performerDocumentsRouter.use(authenticate);
 
 performerDocumentsRouter.get(
   "/",
+  requireRole("performer"),
   asyncHandler(async (req, res) => {
     res.json(
-      await prisma.performerDocument.findMany({
+      (await prisma.performerDocument.findMany({
         where: { performerId: req.user!.id },
         orderBy: { uploadedAt: "desc" }
-      })
+      })).map(serializePerformerDocument)
     );
   })
 );
 
 performerDocumentsRouter.post(
   "/",
+  requireRole("performer"),
   requireFeatureConsent("upload_helper_document"),
   asyncHandler(async (req, res) => {
     const input = z.object({
       type: z.enum(["self_employed", "criminal_record"]),
       fileName: z.string().min(3).max(240),
-      fileData: z.string().optional(),
-      fileUrl: z.string().min(3).max(1000).optional()
-    }).refine((value) => value.fileData || value.fileUrl, {
-      message: "Выберите файл документа"
+      fileData: z.string().min(1)
     }).parse(req.body);
 
-    const storedFile = input.fileData
-      ? await savePerformerDocumentFile({
-          performerId: req.user!.id,
-          type: input.type,
-          fileName: input.fileName,
-          fileData: input.fileData
-        })
-      : { fileUrl: input.fileUrl! };
+    const storedFile = await savePerformerDocumentFile({
+      performerId: req.user!.id,
+      type: input.type,
+      fileName: input.fileName,
+      fileData: input.fileData
+    });
 
     const existing = await prisma.performerDocument.findFirst({
       where: { performerId: req.user!.id, type: input.type },
       orderBy: { uploadedAt: "desc" }
     });
 
+    const documentId = existing?.id ?? randomUUID();
+    const protectedFileUrl = `/api/performer-documents/${documentId}/download`;
     const document = existing
       ? await prisma.performerDocument.update({
           where: { id: existing.id },
           data: {
             fileName: input.fileName,
-            fileUrl: storedFile.fileUrl,
+            fileUrl: protectedFileUrl,
+            originalFileName: storedFile.originalFileName,
+            storagePath: storedFile.storagePath,
+            mimeType: storedFile.mimeType,
+            fileSize: storedFile.size,
+            checksum: storedFile.checksum,
             status: "uploaded",
             uploadedAt: new Date(),
             verifiedAt: null,
@@ -63,11 +69,17 @@ performerDocumentsRouter.post(
           }
         })
       : await prisma.performerDocument.create({
-          data: {
+        data: {
+            id: documentId,
             performerId: req.user!.id,
             type: input.type,
             fileName: input.fileName,
-            fileUrl: storedFile.fileUrl,
+            fileUrl: protectedFileUrl,
+            originalFileName: storedFile.originalFileName,
+            storagePath: storedFile.storagePath,
+            mimeType: storedFile.mimeType,
+            fileSize: storedFile.size,
+            checksum: storedFile.checksum,
             status: "uploaded"
           }
         });
@@ -75,8 +87,40 @@ performerDocumentsRouter.post(
     await writeAudit(req.user!.id, existing ? "performer_document.replace" : "performer_document.upload", "performer_document", document.id, {
       type: input.type,
       fileName: input.fileName,
-      fileUrl: storedFile.fileUrl
+      checksum: storedFile.checksum
     });
-    res.status(201).json(document);
+    res.status(201).json(serializePerformerDocument(document));
   })
 );
+
+performerDocumentsRouter.get(
+  "/:id/download",
+  asyncHandler(async (req, res) => {
+    const document = await prisma.performerDocument.findUnique({ where: { id: req.params.id } });
+    if (!document) throw new HttpError(404, "Документ не найден", "performer_document_not_found");
+    const isOwner = document.performerId === req.user!.id;
+    assertPerformerDocumentDownloadAccess(req.user!, document);
+    const filePath = resolvePerformerDocumentPath(document);
+    let bytes: Buffer;
+    try { bytes = await fs.readFile(filePath); } catch { throw new HttpError(404, "Файл документа не найден", "performer_document_file_missing"); }
+    if (document.checksum && createHash("sha256").update(bytes).digest("hex") !== document.checksum) {
+      throw new HttpError(409, "Контрольная сумма документа не совпадает", "performer_document_checksum_mismatch");
+    }
+    await writeAudit(req.user!.id, isOwner ? "performer_document.download" : "admin.performer_document.download", "performer_document", document.id, {
+      performerId: document.performerId
+    });
+    res.type(document.mimeType ?? "application/octet-stream");
+    res.download(filePath, document.originalFileName ?? document.fileName);
+  })
+);
+
+export function serializePerformerDocument<T extends { id: string; storagePath?: string | null; fileUrl: string }>(document: T) {
+  const { storagePath: _storagePath, ...safe } = document;
+  return { ...safe, fileUrl: `/api/performer-documents/${document.id}/download` };
+}
+
+export function assertPerformerDocumentDownloadAccess(viewer: { id: string; realRole: string }, document: { performerId: string }) {
+  if (document.performerId !== viewer.id && viewer.realRole !== "superadmin") {
+    throw new HttpError(403, "Нет доступа к документу", "performer_document_access_denied");
+  }
+}

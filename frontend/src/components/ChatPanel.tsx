@@ -191,6 +191,15 @@ export function ChatPanel({ chatId }: { chatId: string }) {
               <p>{chat.agreementVersion.visitCount} визитов, {formatDuration(chat.agreementVersion.totalDurationMinutes)}.</p>
               <p>Сервисный сбор Заказчика за график: {formatRubles(chat.agreementVersion.customerServiceFeeTotal)} ₽.</p>
               <p>Сервисный сбор Помощника за график: {formatRubles(chat.agreementVersion.helperServiceFeeTotal)} ₽.</p>
+              {chat.agreementVersion.contract && (
+                <div className="details-box stack">
+                  <strong>Проект договора · шаблон v{chat.agreementVersion.contract.templateVersion}</strong>
+                  <span>Экземпляр связан с версией условий {chat.agreementVersion.contract.documentVersion}. Контрольная сумма: {chat.agreementVersion.contract.checksum.slice(0, 12)}...</span>
+                  <button className="secondary-button" type="button" onClick={() => void api.downloadAgreementContract(chat.agreementVersion!.contract!.id, chat.agreementVersion!.contract!.fileName)}>
+                    Скачать проект договора
+                  </button>
+                </div>
+              )}
               <div className="agreement-visit-list">
                 {chat.agreementVersion.expandedVisits.map((visit) => (
                   <div key={`${visit.sequence}:${visit.date}:${visit.startTime}`}>

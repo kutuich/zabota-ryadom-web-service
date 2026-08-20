@@ -38,6 +38,7 @@ import {
 import { signUserToken, type ActingRole } from "../services/authTokenService";
 import { assignManagerRole, blockUser, revokeManagerRole, unblockUser } from "../services/userAccessService";
 import { createRequestCategorySnapshotTx } from "../services/categoryStructureService";
+import { serializePerformerDocument } from "./performerDocuments";
 import { passwordResetReasonCodes, resetPasswordBySuperadmin } from "../services/accountSecurityService";
 
 export const adminRouter = Router();
@@ -177,7 +178,11 @@ adminRouter.get(
       take: 200
     });
 
-    res.json(users.map(({ passwordHash, authTokenVersion: _authTokenVersion, ...user }) => ({ ...user, hasPassword: Boolean(passwordHash) })));
+    res.json(users.map(({ passwordHash, authTokenVersion: _authTokenVersion, ...user }) => ({
+      ...user,
+      performerDocuments: user.performerDocuments.map(serializePerformerDocument),
+      hasPassword: Boolean(passwordHash)
+    })));
   })
 );
 
@@ -352,7 +357,7 @@ adminRouter.post(
       }
     });
     const { passwordHash: _passwordHash, authTokenVersion: _authTokenVersion, ...safeUser } = updated;
-    res.json({ user: safeUser, safety: result.safety });
+    res.json({ user: { ...safeUser, performerDocuments: safeUser.performerDocuments.map(serializePerformerDocument) }, safety: result.safety });
   })
 );
 
@@ -803,7 +808,7 @@ adminRouter.patch(
       }
     });
     await writeAudit(req.user!.id, "performer_document.status_update", "performer_document", document.id, input);
-    res.json(document);
+    res.json(serializePerformerDocument(document));
   })
 );
 
