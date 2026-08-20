@@ -1,19 +1,17 @@
 import { spawn, spawnSync } from "node:child_process";
-import { dirname, isAbsolute, resolve } from "node:path";
-import { mkdirSync } from "node:fs";
 import { PrismaClient } from "@prisma/client";
 
 process.env.NODE_ENV ||= "production";
 process.env.PORT ||= "4000";
-process.env.DATABASE_URL ||= "file:/data/zabota.db";
+if (!process.env.DATABASE_URL?.trim()) {
+  throw new Error("DATABASE_URL is required. PostgreSQL schema changes are applied with prisma migrate deploy.");
+}
 process.env.DATABASE_URL = stripSurroundingQuotes(process.env.DATABASE_URL);
-
-const databasePath = sqlitePathFromDatabaseUrl(process.env.DATABASE_URL);
-if (databasePath) {
-  mkdirSync(dirname(databasePath), { recursive: true });
+if (!/^postgres(ql)?:\/\//.test(process.env.DATABASE_URL)) {
+  throw new Error("DATABASE_URL must point to PostgreSQL. SQLite is supported only as an explicit migration source.");
 }
 
-run("npx", ["prisma", "db", "push", "--schema", "backend/prisma/schema.prisma", "--skip-generate"]);
+run("npx", ["prisma", "migrate", "deploy", "--schema", "backend/prisma/schema.prisma"]);
 run("node", ["backend/dist/src/scripts/bootstrapCityDirectory.js"]);
 
 const prisma = new PrismaClient();
@@ -64,12 +62,6 @@ function run(command, args) {
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }
-}
-
-function sqlitePathFromDatabaseUrl(databaseUrl) {
-  if (!databaseUrl.startsWith("file:")) return null;
-  const rawPath = databaseUrl.slice("file:".length).split("?")[0];
-  return isAbsolute(rawPath) ? rawPath : resolve(process.cwd(), rawPath);
 }
 
 function stripSurroundingQuotes(value) {

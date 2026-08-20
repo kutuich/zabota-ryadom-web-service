@@ -58,6 +58,10 @@ systemctl status caddy --no-pager
 - изменение финализированного графика с финансовой дельтой не реализовано;
 - agreement schedule остаётся technical draft до юридического утверждения.
 
+## PostgreSQL transition
+
+Репозиторий подготовлен к локальной PostgreSQL-репетиции, но этот факт не меняет production автоматически. Production по-прежнему использует `/opt/zabota/data/zabota.db`. Версию с PostgreSQL Prisma provider нельзя разворачивать обычным deploy до отдельного backup, rehearsal на production-копии, provision PostgreSQL, controlled cutover и проверенного rollback.
+
 Deploy procedure: [DEPLOY_TIMEWEB.md](DEPLOY_TIMEWEB.md). Checklist: [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md).
 # User Management & Security v1.0
 

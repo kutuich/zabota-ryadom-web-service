@@ -24,18 +24,17 @@ npm run test -w frontend
 
 ## Изолированная база
 
-Для локального прогона рекомендуется временная SQLite-база. `TEST_DATABASE_URL` переопределяет `DATABASE_URL` только внутри тестового процесса:
+Backend characterization suite выполняется на отдельной PostgreSQL-базе. `TEST_DATABASE_URL` переопределяет `DATABASE_URL` только внутри тестового процесса:
 
 ```bash
 nvm use
-DATABASE_URL='file:./test.db' npm run db:push
-DATABASE_URL='file:./test.db' npm run db:seed
-TEST_DATABASE_URL='file:./test.db' npm run test -w backend
+docker compose -f compose.postgres-rehearsal.yml up -d
+DATABASE_URL='postgresql://zabota_local:zabota_local_only@127.0.0.1:55432/zabota_test?schema=public' npm run db:migrate:deploy
+DATABASE_URL='postgresql://zabota_local:zabota_local_only@127.0.0.1:55432/zabota_test?schema=public' npm run db:seed
+TEST_DATABASE_URL='postgresql://zabota_local:zabota_local_only@127.0.0.1:55432/zabota_test?schema=public' npm run test -w backend
 ```
 
-Для Prisma относительный SQLite URL разрешается от `backend/prisma`, поэтому этот пример создаёт `backend/prisma/test.db`. Файл предназначен только для локального тестового запуска и не коммитится.
-
-Текущий Prisma provider остаётся `sqlite`. Наличие `TEST_DATABASE_URL` не означает поддержку PostgreSQL: после отдельной миграции provider и SQL-совместимости тот же вход конфигурации позволит направить suite на изолированную PostgreSQL test database.
+Перед повторным полным прогоном test schema нужно очистить, повторно применить migration history и seed. Не направлять suite на rehearsal, development или production database.
 
 ## Characterization coverage
 

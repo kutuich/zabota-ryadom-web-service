@@ -4,6 +4,10 @@
 
 ## Инфраструктура и данные
 
+- [ ] Перед deploy PostgreSQL-target версии выполнен отдельный утверждённый production cutover; пока production SQLite, deploy заблокирован организационно.
+- [ ] PostgreSQL schema применена только через `prisma migrate deploy`, статус migration history проверен.
+- [ ] SQLite source backup и PostgreSQL backup хранятся отдельно, restore обоих проверен.
+
 - [ ] DNS и HTTPS работают; HTTP перенаправляется на HTTPS.
 - [ ] Caddy слушает 80/443, `zabota-web` опубликован только на `127.0.0.1:4000`.
 - [ ] `/`, `/app`, `/api/health` и публичные `/legal/*` доступны.

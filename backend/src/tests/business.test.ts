@@ -1135,9 +1135,9 @@ async function runCategoryStructureTests() {
   assert.deepEqual(cityAccompaniment.formFields, federalAccompaniment.formFields);
   assert.deepEqual(cityAccompaniment.durationEffect, federalAccompaniment.durationEffect);
   assert.ok(federalV2.safetyRules.length >= 7);
-  const admin = await prisma.user.findFirstOrThrow({ where: { role: "superadmin" } });
-  const helper = await prisma.user.findFirstOrThrow({ where: { role: "performer" } });
-  const customer = await prisma.user.findFirstOrThrow({ where: { role: "client" } });
+  const admin = await prisma.user.findUniqueOrThrow({ where: { email: "admin@zabota.local" } });
+  const helper = await prisma.user.findUniqueOrThrow({ where: { email: "performer@zabota.local" } });
+  const customer = await prisma.user.findUniqueOrThrow({ where: { email: "client@zabota.local" } });
   const legacyCategory = await prisma.serviceCategory.findFirstOrThrow();
   const yugorsk = await prisma.city.findFirstOrThrow({ where: { slug: "yugorsk" } });
   const yugorskCatalog = await categoriesForCity(yugorsk.id, "customer");
@@ -2957,6 +2957,9 @@ async function runProductionStartupTests() {
   assert.match(startupScript, /backend\/dist\/prisma\/seed\.js/);
   assert.match(startupScript, /scripts\/bootstrap-production-admin\.mjs/);
   assert.match(startupScript, /bootstrapCityDirectory\.js/);
+  assert.match(startupScript, /"migrate", "deploy"/);
+  assert.doesNotMatch(startupScript, /"db", "push"/);
+  assert.match(startupScript, /DATABASE_URL must point to PostgreSQL/);
   assert.match(startupScript, /PRODUCTION_ADMIN_EMAIL/);
   assert.match(startupScript, /PRODUCTION_ADMIN_PASSWORD/);
   assert.match(startupScript, /PRODUCTION_ADMIN_PHONE/);
@@ -2972,6 +2975,7 @@ async function runProductionStartupTests() {
   assert.doesNotMatch(productionBootstrapScript, /password123/);
 
   assert.match(productionEnvExample, /SEED_DEMO_DATA=false/);
+  assert.match(productionEnvExample, /DATABASE_URL="postgresql:\/\//);
   assert.match(productionEnvExample, /PRODUCTION_ADMIN_EMAIL=/);
   assert.match(productionEnvExample, /PRODUCTION_ADMIN_PASSWORD=/);
   assert.match(productionEnvExample, /PRODUCTION_ADMIN_PHONE=/);
@@ -3451,6 +3455,7 @@ async function runBonusServiceFeeTests() {
 
     const clientToken = tokenFor(client.id, "client");
     const performerToken = tokenFor(performer.id, "performer");
+    const requestDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
     let response = await apiRequest(app, "/api/requests", {
       method: "POST",
       token: clientToken,
@@ -3461,6 +3466,10 @@ async function runBonusServiceFeeTests() {
         description: "Бытовая помощь для проверки баланса",
         addressStreet: "ул. Мира",
         addressHouse: "10",
+        date: requestDate,
+        timeFrom: "12:00",
+        timeTo: "14:00",
+        expectedDurationHours: 2,
         additionalActions: [],
         dependentState: []
       }
@@ -3504,7 +3513,11 @@ async function runBonusServiceFeeTests() {
     response = await apiRequest(app, `/api/chats/${chatId}/terms`, {
       method: "PATCH",
       token: clientToken,
-      body: { agreedHelperAmount: 700, agreedDurationMinutes: 120, agreedTermsComment: "Бытовая помощь по заявке" }
+      body: {
+        agreedHelperAmount: 700,
+        agreedDurationMinutes: 120,
+        agreedTermsComment: "Бытовая помощь по заявке"
+      }
     });
     assert.equal(response.status, 200, JSON.stringify(response.payload));
 
@@ -3603,13 +3616,23 @@ async function runBonusServiceFeeTests() {
         status: "open"
       }
     });
-    await apiRequest(app, `/api/chats/${combinedChat.id}/terms`, {
+    response = await apiRequest(app, `/api/chats/${combinedChat.id}/terms`, {
       method: "PATCH",
       token: clientToken,
-      body: { agreedHelperAmount: 700 }
+      body: {
+        agreedHelperAmount: 700,
+        schedule: {
+          frequency: "once",
+          startDate: requestDate,
+          slots: [{ id: "combined-fee", startTime: "12:00", durationMinutes: 120 }]
+        }
+      }
     });
-    await apiRequest(app, `/api/chats/${combinedChat.id}/client-confirm`, { method: "POST", token: clientToken });
+    assert.equal(response.status, 200, JSON.stringify(response.payload));
+    response = await apiRequest(app, `/api/chats/${combinedChat.id}/client-confirm`, { method: "POST", token: clientToken });
+    assert.equal(response.status, 200, JSON.stringify(response.payload));
     response = await apiRequest(app, `/api/chats/${combinedChat.id}/performer-confirm`, { method: "POST", token: performerToken });
+    assert.equal(response.status, 200, JSON.stringify(response.payload));
     assert.equal(response.payload.status, "in_work");
     assert.deepEqual(
       await prisma.user.findUniqueOrThrow({ where: { id: client.id }, select: { balance: true, bonusBalance: true } }),
@@ -3999,6 +4022,11 @@ async function runCriticalSafetyTests() {
         agreedAddons: ["shopping"],
         agreedDurationMinutes: 120,
         agreedScheduledAt: "2030-08-01T10:00:00.000Z",
+        schedule: {
+          frequency: "once",
+          startDate: "2030-08-01",
+          slots: [{ id: "critical-safety", startTime: "10:00", durationMinutes: 120 }]
+        },
         agreedTermsComment: "Две бытовые задачи и покупки"
       }
     });

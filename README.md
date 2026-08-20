@@ -8,7 +8,7 @@ Web-сервис бытовой помощи семье, дому и близк�
 
 - React, TypeScript, Vite, plain CSS;
 - Node.js, Express, TypeScript;
-- Prisma и SQLite;
+- Prisma и PostgreSQL 16; SQLite поддерживается только как источник миграционной репетиции;
 - JWT; OAuth VK ID включается env-флагами;
 - Docker; production HTTPS через Caddy;
 - mock и T-Bank adapters для пополнения внутреннего баланса.
@@ -21,7 +21,8 @@ Web-сервис бытовой помощи семье, дому и близк�
 cp .env.example .env
 npm install
 npm run db:generate
-npm run db:push
+docker compose -f compose.postgres-rehearsal.yml up -d
+npm run db:migrate:deploy
 npm run db:seed
 npm run dev
 ```
@@ -41,7 +42,7 @@ docker build -t zabota-web-service .
 docker run --rm -p 4000:4000 --env-file .env.preview -v zabota-local-data:/data zabota-web-service
 ```
 
-SQLite внутри контейнера всегда требует persistent volume для `/data`. Без него база и uploads не переживут пересоздание контейнера.
+Локальный PostgreSQL запускается через `compose.postgres-rehearsal.yml`. Uploads остаются файловыми и требуют persistent storage отдельно от БД.
 
 На macOS `start-zabota-local.command` собирает и запускает локальный контейнер, а `stop-zabota-local.command` его останавливает. Флаг `SEED_DEMO_DATA=true` допустим только для локальной demo-среды.
 
@@ -70,7 +71,7 @@ npm run visual:audit
 npm run db:generate
 ```
 
-`npm run db:push` выполняется только для явно выбранной локальной или временной базы. Destructive push и `--accept-data-loss` не используются.
+Schema применяется через `npm run db:migrate:deploy`. Репетиция SQLite -> PostgreSQL описана в [`docs/POSTGRESQL_MIGRATION_REHEARSAL.md`](docs/POSTGRESQL_MIGRATION_REHEARSAL.md).
 
 ## Структура
 
@@ -98,6 +99,6 @@ npm run db:generate
 - изменение уже финализированного графика с финансовой дельтой не реализовано;
 - соглашение о графике остаётся техническим черновиком до юридического утверждения;
 - частичный банковский возврат требует ручной проверки;
-- SQLite допустим для одного production-инстанса с persistent storage и backup; PostgreSQL нужен перед горизонтальным масштабированием;
+- текущий production остаётся на SQLite до отдельного контролируемого cutover; код этого этапа нельзя деплоить до миграции production данных;
 - встроенное геокодирование Яндекс.Карт не подключено;
 - внешняя отправка сервисных сообщений по email/SMS не реализована.

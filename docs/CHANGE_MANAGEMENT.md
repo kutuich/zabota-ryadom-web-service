@@ -60,7 +60,7 @@ npm run build
 git diff --check
 ```
 
-Prisma generate выполняется при изменении schema. `db:push` направляется только на явно выбранную локальную/временную DB и никогда не использует `--accept-data-loss`. UI проверяется visual audit и, где требуется, реальным E2E, потому что mock routes не проверяют backend.
+Prisma generate выполняется при изменении schema. Изменения PostgreSQL schema оформляются версионной migration и применяются через `prisma migrate deploy`; production `db push` запрещён. UI проверяется visual audit и, где требуется, реальным E2E, потому что mock routes не проверяют backend.
 
 Изменение фоновой задачи должно иметь env switch, ручной single-run для тестов, управляемые часы, защиту от параллельного запуска и корректную остановку процесса. Однопроцессный lock нельзя описывать как распределённую гарантию.
 # User Management & Security

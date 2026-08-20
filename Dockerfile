@@ -38,7 +38,6 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=4000
-ENV DATABASE_URL=file:/data/zabota.db
 ENV UPLOADS_DIR=/data/uploads
 
 RUN apt-get update \

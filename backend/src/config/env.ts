@@ -40,7 +40,7 @@ const visitReconciliation = resolveVisitReconciliationConfig();
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? "development",
   port: Number(process.env.PORT ?? 4000),
-  databaseUrl: process.env.DATABASE_URL ?? "file:./dev.db",
+  databaseUrl: process.env.DATABASE_URL ?? "postgresql://zabota_local:zabota_local_only@127.0.0.1:55432/zabota_rehearsal?schema=public",
   jwtSecret: process.env.JWT_SECRET ?? "local-development-secret-change-me",
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
   temporaryPasswordTtlHours: resolveTemporaryPasswordTtlHours(),

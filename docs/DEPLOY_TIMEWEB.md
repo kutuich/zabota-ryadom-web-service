@@ -2,6 +2,8 @@
 
 > Статус: OPERATIONAL. Выполнять только по отдельному разрешению. Текущее состояние: [PRODUCTION_CURRENT_STATE.md](PRODUCTION_CURRENT_STATE.md).
 
+> Важно: текущий production остаётся на SQLite, а основной Prisma provider репозитория подготовлен для PostgreSQL. Обычный deploy этой версии запрещён до отдельного production migration/cutover. Локальная репетиция описана в [POSTGRESQL_MIGRATION_REHEARSAL.md](POSTGRESQL_MIGRATION_REHEARSAL.md).
+
 ## Архитектура
 
 ```text
@@ -33,7 +35,7 @@ NODE_ENV=production
 PORT=4000
 APP_BASE_URL=https://zabota-ugorsk.ru
 PUBLIC_SITE_URL=https://zabota-ugorsk.ru
-DATABASE_URL=file:/data/zabota.db
+DATABASE_URL=postgresql://APP_USER:REPLACE_ME@POSTGRES_HOST:5432/zabota?schema=public
 CORS_ORIGIN=https://zabota-ugorsk.ru
 UPLOADS_DIR=/data/uploads
 DEFAULT_SERVICE_FEE_AMOUNT=50
@@ -51,7 +53,7 @@ T-Bank URLs используют HTTPS. Credentials и JWT существуют 
 
 1. Проверить `git status` и release diff.
 2. Выполнить `npm run check`, `npm test`, `npm run build`, Docker build.
-3. Создать timestamped backup `/opt/zabota/data/zabota.db` и `.env.production` без печати содержимого.
+3. До PostgreSQL cutover создать timestamped backup `/opt/zabota/data/zabota.db` и `.env.production` без печати содержимого; после cutover использовать проверенный PostgreSQL backup плюс backup uploads.
 4. Проверить свободное место и существование `/opt/zabota/data/uploads`.
 5. Не запускать prune с volumes и не удалять data directory.
 
@@ -69,7 +71,7 @@ docker run -d \
   zabota-web-service
 ```
 
-Приложение не занимает внешний 80. Startup выполняет non-destructive Prisma sync и bootstrap только по явным flags; production demo seed выключен.
+Приложение не занимает внешний 80. Startup выполняет `prisma migrate deploy`, затем bootstrap системных данных; production demo seed выключен. `db push` в production не используется.
 
 ## Health и smoke
 

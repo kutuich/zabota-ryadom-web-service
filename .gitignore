@@ -21,6 +21,7 @@ build/
 !.env.local.docker.example
 !.env.production.example
 !.env.tbank.test.example
+!.env.postgres-rehearsal.example
 
 # Databases and runtime data
 .local-data/
@@ -46,6 +47,7 @@ visual-audit/
 visual-audit-reports/
 audit-output/
 code-audit-reports/
+postgres-rehearsal-reports/
 
 # Logs
 *.log
