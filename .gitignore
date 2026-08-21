@@ -48,6 +48,7 @@ visual-audit-reports/
 audit-output/
 code-audit-reports/
 postgres-rehearsal-reports/
+backend/generated/
 
 # Logs
 *.log

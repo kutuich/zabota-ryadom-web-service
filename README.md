@@ -29,6 +29,8 @@ npm run dev
 
 - frontend: `http://localhost:5173`;
 - backend health: `http://localhost:4000/api/health`.
+- Swagger UI: `http://localhost:4000/api/docs` (вне production по умолчанию);
+- OpenAPI JSON: `http://localhost:4000/api/openapi.json` (вне production по умолчанию).
 
 Локальные безопасные значения: `PAYMENT_PROVIDER=mock`, `TBANK_TERMINAL_MODE=test`, `PAYMENT_RECEIPT_ENABLED=false`, `ALLOW_LEGACY_MOCK_TOP_UP=false`. Секреты из examples необходимо заменить; реальные значения не коммитятся.
 
@@ -67,11 +69,13 @@ docker run --rm -p 4000:4000 --env-file .env.preview -v zabota-local-data:/data 
 npm run check
 npm test
 npm run build
+npm run api:openapi
 npm run visual:audit
 npm run db:generate
 ```
 
 Schema применяется через `npm run db:migrate:deploy`. Репетиция SQLite -> PostgreSQL описана в [`docs/POSTGRESQL_MIGRATION_REHEARSAL.md`](docs/POSTGRESQL_MIGRATION_REHEARSAL.md).
+Правила генерации и проверки фактического API contract описаны в [`docs/API_OPENAPI.md`](docs/API_OPENAPI.md); generated JSON не хранится в Git.
 
 ## Структура
 

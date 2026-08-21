@@ -13,6 +13,7 @@ import { signUserToken } from "../../../services/authTokenService";
 import { linkUserCityTx, normalizeSettlementName, sanitizeSettlementText } from "../../../services/settlementService";
 import { isUserRole, type UserRole } from "../../../types/domain";
 import { HttpError } from "../../../utils/http";
+import { ApiZodBody } from "../../openapi/zod-openapi";
 import { assertPasswordPolicy, normalizeDisplayName } from "../../../services/accountSecurityService";
 import {
   VK_OAUTH_SESSION_COOKIE,
@@ -38,7 +39,7 @@ const consentTypes = [
   "payment_rules"
 ] as const;
 
-const registerSchema = z.object({
+export const registerSchema = z.object({
   role: z.enum(["client", "performer"]),
   phone: z.string().min(7),
   email: z.string().email().optional().or(z.literal("")),
@@ -54,7 +55,7 @@ const registerSchema = z.object({
   helperNoMedicalServicesConfirmed: z.boolean().default(false)
 }).refine((value) => Boolean(value.cityId || value.citySuggestion), { message: "Выберите или предложите населённый пункт", path: ["cityId"] });
 
-const loginSchema = z.object({
+export const loginSchema = z.object({
   phoneOrEmail: z.string().min(3),
   password: z.string().min(1)
 });
@@ -358,6 +359,7 @@ export class AuthController {
 
   @Post("/register")
   @HttpCode(200)
+  @ApiZodBody(registerSchema)
   async postregister6(@Req() req: Request, @Res() res: Response) {
     const input = registerSchema.parse(req.body);
     input.displayName = normalizeDisplayName(input.displayName);
@@ -509,6 +511,7 @@ export class AuthController {
 
   @Post("/login")
   @HttpCode(200)
+  @ApiZodBody(loginSchema)
   async postlogin7(@Req() req: Request, @Res() res: Response) {
     const input = loginSchema.parse(req.body);
     const login = input.phoneOrEmail.trim();

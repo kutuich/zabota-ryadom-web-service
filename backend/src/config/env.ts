@@ -34,11 +34,18 @@ export function resolveTemporaryPasswordTtlHours(source: NodeJS.ProcessEnv = pro
   return Number.isFinite(value) && value >= 1 && value <= 168 ? value : 24;
 }
 
+export function resolveBooleanFlag(name: string, fallback: boolean, source: NodeJS.ProcessEnv = process.env) {
+  const value = source[name]?.trim().toLowerCase();
+  if (value === undefined || value === "") return fallback;
+  return value === "true" || value === "1";
+}
+
 const defaultServiceFeeAmount = resolveDefaultServiceFeeAmount();
 const visitReconciliation = resolveVisitReconciliationConfig();
+const nodeEnv = process.env.NODE_ENV ?? "development";
 
 export const env = {
-  nodeEnv: process.env.NODE_ENV ?? "development",
+  nodeEnv,
   port: Number(process.env.PORT ?? 4000),
   databaseUrl: process.env.DATABASE_URL ?? "postgresql://zabota_local:zabota_local_only@127.0.0.1:55432/zabota_rehearsal?schema=public",
   jwtSecret: process.env.JWT_SECRET ?? "local-development-secret-change-me",
@@ -73,7 +80,9 @@ export const env = {
   vkIdClientSecret: process.env.VK_ID_CLIENT_SECRET ?? "",
   vkIdRedirectUri: process.env.VK_ID_REDIRECT_URI ?? "http://localhost:4000/api/auth/oauth/vk/callback",
   vkIdSuccessRedirectPath: process.env.VK_ID_SUCCESS_REDIRECT_PATH ?? "/app/oauth/complete",
-  vkIdFailRedirectPath: process.env.VK_ID_FAIL_REDIRECT_PATH ?? "/app/login?oauthError=vk"
+  vkIdFailRedirectPath: process.env.VK_ID_FAIL_REDIRECT_PATH ?? "/app/login?oauthError=vk",
+  openApiJsonEnabled: resolveBooleanFlag("OPENAPI_JSON_ENABLED", nodeEnv !== "production"),
+  swaggerUiEnabled: resolveBooleanFlag("SWAGGER_UI_ENABLED", nodeEnv !== "production")
 };
 
 if (env.nodeEnv === "production" && env.jwtSecret.includes("change-me")) {

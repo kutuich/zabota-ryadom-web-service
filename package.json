@@ -20,6 +20,7 @@
     "build": "npm run build -w backend && npm run build -w frontend",
     "check": "npm run check -w backend && npm run check -w frontend",
     "test": "npm run test -w backend && npm run test -w frontend",
+    "api:openapi": "npm run api:openapi -w backend",
     "visual:audit": "node scripts/visual-audit.mjs",
     "db:generate": "npm run db:generate:postgres && npm run db:generate:sqlite-source",
     "db:generate:postgres": "prisma generate --schema backend/prisma/schema.prisma",

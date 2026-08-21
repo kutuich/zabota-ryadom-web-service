@@ -9,6 +9,13 @@ import { writeAudit } from "../../../services/auditService";
 import { requireFeatureConsent } from "../../../services/legalService";
 import { resolvePerformerDocumentPath, savePerformerDocumentFile } from "../../../services/uploadStorage";
 import { HttpError } from "../../../utils/http";
+import { ApiZodBody } from "../../openapi/zod-openapi";
+
+export const performerDocumentUploadSchema = z.object({
+  type: z.enum(["self_employed", "criminal_record"]),
+  fileName: z.string().min(3).max(240),
+  fileData: z.string().min(1)
+});
 
 export function serializePerformerDocument<T extends { id: string; storagePath?: string | null; fileUrl: string }>(document: T) {
   const { storagePath: _storagePath, ...safe } = document;
@@ -36,14 +43,11 @@ export class PerformerDocumentsController {
 
   @Post("/")
   @HttpCode(200)
+  @ApiZodBody(performerDocumentUploadSchema, "Base64-encoded protected document upload; this endpoint does not use multipart/form-data")
   @RequireRoles("performer")
   @UseGuards(NestJwtAuthGuard, NestRolesGuard, NestFeatureConsentGuard("upload_helper_document"))
   async postroot1(@Req() req: Request, @Res() res: Response) {
-    const input = z.object({
-      type: z.enum(["self_employed", "criminal_record"]),
-      fileName: z.string().min(3).max(240),
-      fileData: z.string().min(1)
-    }).parse(req.body);
+    const input = performerDocumentUploadSchema.parse(req.body);
 
     const storedFile = await savePerformerDocumentFile({
       performerId: req.user!.id,

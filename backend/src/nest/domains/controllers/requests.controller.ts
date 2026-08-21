@@ -19,6 +19,7 @@ import {
   parseAddressText
 } from "../../../services/addressService";
 import { HttpError } from "../../../utils/http";
+import { ApiZodBody } from "../../openapi/zod-openapi";
 import { activateSettlementTx } from "../../../services/settlementService";
 import {
   calculateStructuredRequestPrice,
@@ -83,7 +84,7 @@ const requestInclude = {
   structureUpdateRevisions: { where: { status: "pending_customer_confirmation" }, orderBy: { createdAt: "desc" as const }, take: 1 }
 };
 
-const createRequestSchema = z.object({
+export const createRequestSchema = z.object({
   cityId: z.string().min(1),
   categoryId: z.string().min(1).optional(),
   structuredCategoryId: z.string().min(1).optional(),
@@ -454,6 +455,7 @@ export class RequestsController {
 
   @Post("/")
   @HttpCode(200)
+  @ApiZodBody(createRequestSchema)
   @RequireRoles("client")
   @UseGuards(NestJwtAuthGuard, NestRolesGuard, NestFeatureConsentGuard("create_request"))
   async postroot2(@Req() req: Request, @Res() res: Response) {

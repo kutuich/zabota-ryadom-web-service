@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
+    "api:openapi": "node --import tsx src/scripts/generateOpenApi.ts",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma && prisma generate --schema prisma/sqlite-source/schema.prisma",
     "db:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
     "db:seed": "node --import tsx prisma/seed.ts"
@@ -17,6 +18,7 @@
     "@nestjs/common": "^11.2.1",
     "@nestjs/core": "^11.2.1",
     "@nestjs/platform-express": "^11.2.1",
+    "@nestjs/swagger": "^11.4.7",
     "@prisma/client": "^6.1.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
@@ -25,7 +27,8 @@
     "jsonwebtoken": "^9.0.2",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
-    "zod": "^3.24.1"
+    "zod": "^3.24.1",
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

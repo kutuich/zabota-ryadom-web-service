@@ -2,6 +2,7 @@ import { Controller, Delete, Get, HttpCode, Patch, Post, Put, Req, Res, UseGuard
 import { NestAdminGuard, NestAdminManagerGuard, NestFeatureConsentGuard, NestJwtAuthGuard, NestRolesGuard, RequireRoles } from "../../common/auth.guards";
 import type { PaymentTransaction, Prisma } from "@prisma/client";
 import type { Request, Response } from "express";
+import { ApiProduces, ApiResponse } from "@nestjs/swagger";
 import { z } from "zod";
 import { env } from "../../../config/env";
 import { prisma } from "../../../db/prisma";
@@ -22,9 +23,21 @@ import { createManualBankRefund } from "../../../services/manualBankRefundServic
 import { syncTbankPaymentStatus } from "../../../services/tbankPaymentSyncService";
 import { verifyTbankToken } from "../../../services/tbankToken";
 import { HttpError } from "../../../utils/http";
+import { ApiZodBody, ApiZodResponse } from "../../openapi/zod-openapi";
 
-const topUpSchema = z.object({
+export const topUpSchema = z.object({
   amount: z.number().int().positive().max(1_000_000)
+});
+
+export const paymentSummarySchema = z.object({
+  id: z.string(),
+  orderId: z.string(),
+  amount: z.number().int(),
+  currency: z.string(),
+  status: z.string(),
+  provider: z.string(),
+  terminalMode: z.string().nullable(),
+  paymentUrl: z.string().nullable()
 });
 
 const refundSchema = z.object({
@@ -41,7 +54,7 @@ const manualBankRefundSchema = z.object({
 });
 
 function serializePaymentSummary(payment: PaymentTransaction) {
-  return {
+  return paymentSummarySchema.parse({
     id: payment.id,
     orderId: payment.orderId,
     amount: payment.amount,
@@ -50,7 +63,7 @@ function serializePaymentSummary(payment: PaymentTransaction) {
     provider: payment.provider,
     terminalMode: payment.terminalMode,
     paymentUrl: payment.paymentUrl
-  };
+  });
 }
 
 function serializePayment(payment: PaymentTransaction, _includeTechnical = false) {
@@ -241,6 +254,8 @@ function appendPaymentReference(baseUrl: string, paymentId: string, orderId: str
 export class PaymentsController {
   @Post("/top-up/init")
   @HttpCode(200)
+  @ApiZodBody(topUpSchema)
+  @ApiZodResponse(201, paymentSummarySchema, "Payment initialization result")
   @UseGuards(NestJwtAuthGuard, NestFeatureConsentGuard("top_up_balance"))
   async posttopUpInit0(@Req() req: Request, @Res() res: Response) {
     const input = topUpSchema.parse(req.body);
@@ -549,6 +564,8 @@ export class PaymentsController {
 
   @Post("/tbank/webhook")
   @HttpCode(200)
+  @ApiProduces("text/plain")
+  @ApiResponse({ status: 200, description: "Provider acknowledgement", schema: { type: "string", example: "OK" } })
   async posttbankWebhook5(@Req() req: Request, @Res() res: Response) {
     const payload = isPlainRecord(req.body) ? req.body : {};
     const rawWebhookJson = JSON.stringify(payload);

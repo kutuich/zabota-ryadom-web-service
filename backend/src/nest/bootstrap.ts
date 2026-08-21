@@ -8,9 +8,11 @@ import { AppModule } from "./app.module";
 import { NestHttpExceptionFilter } from "./common/nest-http-exception.filter";
 import { ZodValidationPipe } from "./common/zod-validation.pipe";
 import { ApplicationLifecycleService } from "./infrastructure/application-lifecycle.service";
+import { buildOpenApiDocument, exposeOpenApi } from "./openapi/openapi";
 
 export type NestApplicationOptions = {
   startScheduler?: boolean;
+  exposeOpenApi?: boolean;
 };
 
 export async function createNestApplication(options: NestApplicationOptions = {}) {
@@ -34,6 +36,13 @@ export async function createNestApplication(options: NestApplicationOptions = {}
   });
   server.use("/api/admin/service-conversations", express.json({ limit: "70mb" }));
   server.use(express.json({ limit: "8mb" }));
+  if (options.exposeOpenApi ?? true) {
+    const document = buildOpenApiDocument(app);
+    exposeOpenApi(app, document, {
+      jsonEnabled: env.openApiJsonEnabled,
+      uiEnabled: env.swaggerUiEnabled
+    });
+  }
   await app.init();
   return app;
 }
