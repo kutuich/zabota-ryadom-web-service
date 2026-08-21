@@ -53,4 +53,4 @@ Notion отвечает на вопрос «как продукт должен �
 - `historical` — снимок прошлого состояния, не источник текущих требований;
 - `obsolete` — не использовать; файл обязан ссылаться на замену;
 - `generated` — машинный артефакт, не редактируется вручную.
-- [User Management & Security](./USER_MANAGEMENT_AND_SECURITY.md) — роли, пароли, отзыв JWT, профиль и security audit.
+- [User Management & Security](./USER_MANAGEMENT_AND_SECURITY.md) — роли, Argon2id, rotating server sessions, credential reset gate и security audit.

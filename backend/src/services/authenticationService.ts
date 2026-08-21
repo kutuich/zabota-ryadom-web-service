@@ -22,6 +22,19 @@ export async function authenticateRequest(input: AuthenticationRequest): Promise
 
   try {
     const payload = jwt.verify(token, env.jwtSecret) as AuthTokenPayload;
+    if (!payload.sessionId) throw new HttpError(401, "Сессия недействительна", "auth_invalid");
+    const now = new Date();
+    const session = await prisma.authSession.findFirst({
+      where: {
+        id: payload.sessionId,
+        userId: payload.sub,
+        revokedAt: null,
+        expiresAt: { gt: now },
+        idleExpiresAt: { gt: now }
+      },
+      select: { id: true, actingRole: true }
+    });
+    if (!session) throw new HttpError(401, "Сессия была завершена. Войдите снова", "session_revoked");
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
       select: { id: true, role: true, cityId: true, status: true, authTokenVersion: true, mustChangePassword: true }
@@ -38,6 +51,10 @@ export async function authenticateRequest(input: AuthenticationRequest): Promise
 
     const realRole = user.role;
     const actingRole = payload.isActingAsRole ? payload.actingRole ?? null : null;
+    const sessionActingRole = session.actingRole === "client" || session.actingRole === "performer" ? session.actingRole : null;
+    if (actingRole !== sessionActingRole) {
+      throw new HttpError(401, "Режим сессии изменён. Обновите авторизацию", "acting_session_invalid");
+    }
     if (actingRole) {
       const validPayload = payload.realRole === realRole
         && payload.role === realRole
@@ -58,7 +75,8 @@ export async function authenticateRequest(input: AuthenticationRequest): Promise
       realAdminUserId: actingRole ? user.id : null,
       cityId: user.cityId,
       authTokenVersion: user.authTokenVersion,
-      mustChangePassword: user.mustChangePassword
+      mustChangePassword: user.mustChangePassword,
+      sessionId: session.id
     };
     if (user.mustChangePassword && !isTemporaryPasswordAllowedPath(input.path)) {
       throw new HttpError(403, "Необходимо создать новый пароль", "temporary_password_change_required");

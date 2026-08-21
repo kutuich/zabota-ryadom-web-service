@@ -11,12 +11,15 @@ export type AuthTokenPayload = {
   actingRole?: ActingRole;
   isActingAsRole?: boolean;
   tokenVersion: number;
+  sessionId: string;
 };
 
-export function signUserToken(userId: string, role: UserRole, tokenVersion = 0, actingRole?: ActingRole) {
-  const options: SignOptions = { expiresIn: env.jwtExpiresIn as SignOptions["expiresIn"] };
+export function signUserToken(userId: string, role: UserRole, tokenVersion: number, sessionId: string, actingRole?: ActingRole) {
+  const adminSession = role === "superadmin" || role === "manager";
+  const expiresIn = `${adminSession ? env.adminAccessTokenTtlMinutes : env.accessTokenTtlMinutes}m`;
+  const options: SignOptions = { expiresIn: expiresIn as SignOptions["expiresIn"], jwtid: sessionId };
   const payload: AuthTokenPayload = actingRole
-    ? { sub: userId, role, realRole: role, actingRole, isActingAsRole: true, tokenVersion }
-    : { sub: userId, role, tokenVersion };
+    ? { sub: userId, role, realRole: role, actingRole, isActingAsRole: true, tokenVersion, sessionId }
+    : { sub: userId, role, tokenVersion, sessionId };
   return jwt.sign(payload, env.jwtSecret, options);
 }

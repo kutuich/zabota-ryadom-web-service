@@ -78,8 +78,11 @@
 
 - [ ] В backup-копии подтверждён ровно один active `superadmin`.
 - [ ] Legacy-пользователи `admin`, если есть, проверены вручную; автоматического повышения до `superadmin` нет.
-- [ ] Существующий пользователь входит со старым bcrypt-паролем.
-- [ ] Сброс пароля отзывает старый JWT и требует обязательной смены.
+- [ ] После backup на авторизованной копии выполнен `npm run auth:credential-inventory`; для каждого `unsupported` credential согласован reset до release.
+- [ ] Bcrypt fallback не включён: legacy credential получает `password_reset_required` и не проверяется.
+- [ ] Сброс пароля отзывает старые access и refresh sessions и требует обязательной смены.
+- [ ] Login/refresh rotation/logout/replay проверены; production cookie имеет `__Host-`, `HttpOnly`, `Secure`, `SameSite=Strict`.
+- [ ] Отдельно проверены сокращённые TTL manager/superadmin.
 - [ ] Временный пароль отсутствует в AuditLog, логах и сервисных сообщениях.
 - [ ] `TEMPORARY_PASSWORD_TTL_HOURS` не обязателен; безопасный default равен 24 часам.
 # Service Structure Tree v3

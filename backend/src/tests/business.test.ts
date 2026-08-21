@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import jwt from "jsonwebtoken";
-import bcrypt from "bcryptjs";
+import { hashPassword } from "../services/passwordService";
 import { test } from "vitest";
 import { createNestApplication } from "../nest/bootstrap";
 import { prisma } from "../db/prisma";
@@ -775,7 +776,7 @@ async function runUserManagementSecurityTests() {
   const superadmin = await prisma.user.findFirstOrThrow({ where: { role: "superadmin", status: "active" } });
   assert.equal(await prisma.user.count({ where: { role: "superadmin", status: "active" } }), 1);
   const suffix = Date.now();
-  const passwordHash = await bcrypt.hash("Original!Pass2026", 10);
+  const passwordHash = await hashPassword("Original!Pass2026");
   const target = await prisma.user.create({
     data: {
       role: "manager",
@@ -1650,7 +1651,7 @@ async function runCategoryStructureTests() {
 
     const manager = await prisma.user.findFirst({ where: { role: "manager" } });
     if (manager) {
-      const managerAccessToken = jwt.sign({ sub: manager.id, role: "manager", tokenVersion: manager.authTokenVersion }, env.jwtSecret);
+      const managerAccessToken = tokenFor(manager.id, "manager");
       const denied = await apiRequest(createApp(), "/api/admin/category-structures/create-from-parent", { method: "POST", token: managerAccessToken, body: { scopeType: "city", cityId: city.id } });
       assert.equal(denied.status, 403);
       const deniedDelete = await apiRequest(createApp(), `/api/admin/category-structures/${rollbackDraft.id}`, { method: "DELETE", token: managerAccessToken, body: { comment: "Нет прав" } });
@@ -1839,9 +1840,13 @@ async function runManagerRoleTests() {
   const startedAt = new Date();
   const [admin, candidate, target] = await Promise.all([
     prisma.user.findFirstOrThrow({ where: { role: { in: ["admin", "superadmin"] }, status: "active" } }),
-    prisma.user.findFirstOrThrow({ where: { role: "client", status: "active", passwordHash: { not: null } } }),
+    prisma.user.findUniqueOrThrow({ where: { email: "client@zabota.local" } }),
     prisma.user.findFirstOrThrow({ where: { role: "performer", status: "active" } })
   ]);
+  assert.equal(candidate.role, "client");
+  assert.equal(candidate.status, "active");
+  assert.ok(candidate.passwordHash);
+  assert.ok(candidate.phone);
   const originalCandidate = {
     role: candidate.role,
     rolesJson: candidate.rolesJson,
@@ -1876,7 +1881,7 @@ async function runManagerRoleTests() {
     assert.equal(response.payload.roleBeforeManager, "client");
 
     const manager = await prisma.user.findUniqueOrThrow({ where: { id: candidate.id } });
-    const managerToken = jwt.sign({ sub: manager.id, role: "manager", tokenVersion: manager.authTokenVersion }, env.jwtSecret);
+    const managerToken = tokenFor(manager.id, "manager");
     const [activeCity, activeCategory] = await Promise.all([
       prisma.city.findFirstOrThrow({ where: { isActive: true, serviceStatus: "active", directoryStatus: { notIn: ["hidden", "duplicate"] } } }),
       prisma.serviceCategory.findFirstOrThrow({ where: { isActive: true } })
@@ -2147,13 +2152,11 @@ async function runAdminActingModeTests() {
     });
     assert.equal(response.status, 403);
 
-    const forgedToken = jwt.sign({
-      sub: customer.id,
-      role: "client",
+    const forgedToken = await materializeTestToken(tokenFor(customer.id, "client"), {
       realRole: "client",
       actingRole: "performer",
       isActingAsRole: true
-    }, env.jwtSecret);
+    });
     response = await apiRequest(app, "/api/auth/me", { method: "GET", token: forgedToken });
     assert.equal(response.status, 401);
 
@@ -3033,7 +3036,7 @@ async function runSettlementDirectoryTests() {
   const user = await prisma.user.create({
     data: { role: "client", rolesJson: '["client"]', displayName: "Тест городов", status: "active" }
   });
-  const token = jwt.sign({ sub: user.id, role: "client" }, env.jwtSecret);
+  const token = tokenFor(user.id, "client");
   const suggestedName = `Посёлок Проверочный ${suffix}`;
   const suggested = await apiRequest(app, "/api/settlements/suggest", {
     method: "POST",
@@ -3176,7 +3179,7 @@ async function runSettlementDirectoryTests() {
       visibilityStatus: "city_visible"
     }
   });
-  const helperToken = jwt.sign({ sub: helper.id, role: "performer" }, env.jwtSecret);
+  const helperToken = tokenFor(helper.id, "performer");
   const helperRequests = await apiRequest(app, "/api/requests", { method: "GET", token: helperToken });
   assert.equal(helperRequests.status, 200);
   assert.ok(helperRequests.payload.some((request: any) => request.id === visibleRequest.id));
@@ -5846,7 +5849,30 @@ function cookieHeader(setCookie: unknown, cookieName?: string) {
 }
 
 function tokenFor(userId: string, role: string) {
-  return jwt.sign({ sub: userId, role }, env.jwtSecret);
+  return `test-session:${userId}:${role}`;
+}
+
+async function materializeTestToken(token: string, payloadOverrides: Record<string, unknown> = {}) {
+  if (!token.startsWith("test-session:")) return token;
+  const [, userId, role] = token.split(":");
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  const session = await prisma.authSession.create({
+    data: {
+      familyId: crypto.randomUUID(),
+      userId,
+      tokenHash: crypto.randomBytes(32).toString("base64url"),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      idleExpiresAt: new Date(Date.now() + 60 * 60 * 1000)
+    }
+  });
+  return jwt.sign({
+    sub: userId,
+    role,
+    tokenVersion: user.authTokenVersion,
+    sessionId: session.id,
+    jti: session.id,
+    ...payloadOverrides
+  }, env.jwtSecret, { expiresIn: "10m" });
 }
 
 function firstFileName(directoryPath: string) {
@@ -5917,7 +5943,7 @@ async function rawAppRequest(
     headers["content-type"] = "application/json";
     headers["content-length"] = String(Buffer.byteLength(bodyText));
   }
-  if (options.token) headers.authorization = `Bearer ${options.token}`;
+  if (options.token) headers.authorization = `Bearer ${await materializeTestToken(options.token)}`;
 
   let bodyPushed = false;
   const req = new Readable({
@@ -5987,11 +6013,19 @@ async function rawAppRequest(
   };
 }
 
-test("current backend business and API characterization baseline", async () => {
+const businessTestScope = process.env.BUSINESS_TEST_SCOPE?.trim();
+
+test(businessTestScope === "manager-role"
+  ? "manager role authentication and authorization characterization"
+  : "current backend business and API characterization baseline", async () => {
   const nestApplication = await createNestApplication({ startScheduler: false });
   nestHttpHandler = nestApplication.getHttpAdapter().getInstance();
   try {
-    await runBusinessRegressionSuite();
+    if (businessTestScope === "manager-role") {
+      await runManagerRoleTests();
+    } else {
+      await runBusinessRegressionSuite();
+    }
   } finally {
     await nestApplication.close();
     nestHttpHandler = null;

@@ -46,7 +46,7 @@ test("NestJS controllers preserve migrated API contracts without a legacy bridge
     assert.equal(response.status, 200);
     const openApi = await response.json() as { openapi: string; paths: Record<string, unknown> };
     assert.match(openApi.openapi, /^3\./);
-    assert.equal(Object.keys(openApi.paths).length, 197);
+    assert.equal(Object.keys(openApi.paths).length, 199);
 
     response = await fetch(`${baseUrl}/api/docs`);
     assert.equal(response.status, 200);
@@ -56,7 +56,7 @@ test("NestJS controllers preserve migrated API contracts without a legacy bridge
     assert.equal(new Set(ownedRoutes).size, ownedRoutes.length);
     const registeredApiRoutes = expressRouteInventory(app)
       .filter((route) => route.path.startsWith("/api/") && !route.path.startsWith("/api/docs") && route.path !== "/api/openapi.json");
-    assert.equal(registeredApiRoutes.length, 221, "220 migrated API routes plus /api/health must be registered");
+    assert.equal(registeredApiRoutes.length, 223, "222 application API routes plus /api/health must be registered");
     const registeredApiKeys = registeredApiRoutes.map((route) => `${route.method} ${route.path}`);
     assert.equal(new Set(registeredApiKeys).size, registeredApiKeys.length, "NestJS must not register duplicate API routes");
   } finally {

@@ -1,7 +1,6 @@
 import { Controller, Delete, Get, HttpCode, Patch, Post, Put, Req, Res, UseGuards } from "@nestjs/common";
 import { NestAdminGuard, NestAdminManagerGuard, NestFeatureConsentGuard, NestJwtAuthGuard, NestRolesGuard, RequireRoles } from "../../common/auth.guards";
 import type { Request, Response } from "express";
-import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { env } from "../../../config/env";
 import { prisma } from "../../../db/prisma";
@@ -9,7 +8,8 @@ import { writeAudit } from "../../../services/auditService";
 import { acceptLatestLegalDocuments, missingAcceptedDocumentTypes } from "../../../services/legalService";
 import { isPhoneLikeLogin, normalizeRussianPhone } from "../../../services/phoneService";
 import { grantTrialBalanceToUser } from "../../../services/trialBalanceService";
-import { signUserToken } from "../../../services/authTokenService";
+import { createAuthSession, logoutAuthSession, refreshAuthSession } from "../../../services/authSessionService";
+import { hashPassword, isArgon2idHash, verifyPassword } from "../../../services/passwordService";
 import { linkUserCityTx, normalizeSettlementName, sanitizeSettlementText } from "../../../services/settlementService";
 import { isUserRole, type UserRole } from "../../../types/domain";
 import { HttpError } from "../../../utils/http";
@@ -262,8 +262,9 @@ export class AuthController {
       throw new HttpError(401, "Профиль VK ID не найден", "vk_session_invalid");
     }
     const profileComplete = await isUserProfileComplete(user.id);
+    const auth = await createAuthSession(user, req, res);
     res.json({
-      token: signUserToken(user.id, toUserRole(user.role), user.authTokenVersion),
+      token: auth.token,
       user: await getUserPayload(user.id),
       profileComplete,
       nextPath: profileComplete ? oauthNextPath(user.role) : "/app/oauth/complete"
@@ -272,9 +273,10 @@ export class AuthController {
 
   @Post("/oauth/cancel")
   @HttpCode(200)
-  postoauthCancel4(@Req() _req: Request, @Res() res: Response) {
+  async postoauthCancel4(@Req() req: Request, @Res() res: Response) {
   clearOAuthCookie(res, VK_OAUTH_TRANSACTION_COOKIE);
   clearOAuthCookie(res, VK_OAUTH_SESSION_COOKIE);
+  await logoutAuthSession(req, res);
   res.json({ ok: true });
 }
 
@@ -435,7 +437,7 @@ export class AuthController {
       }
     }
 
-    const passwordHash = await bcrypt.hash(input.password, 10);
+    const passwordHash = await hashPassword(input.password);
     const user = await prisma.$transaction(async (tx) => {
       const ipAddress = getRequestIp(req);
       const userAgent = getRequestUserAgent(req);
@@ -502,9 +504,10 @@ export class AuthController {
     });
 
     await grantTrialBalanceToUser(user.id, "registration");
+    const auth = await createAuthSession(user, req, res);
 
     res.status(201).json({
-      token: signUserToken(user.id, input.role, user.authTokenVersion),
+      token: auth.token,
       user: await getUserPayload(user.id)
     });
   }
@@ -526,7 +529,10 @@ export class AuthController {
         })
       : await prisma.user.findFirst({ where: { email: login } });
 
-    if (!user || !user.passwordHash || !(await bcrypt.compare(input.password, user.passwordHash))) {
+    if (user?.passwordHash && !isArgon2idHash(user.passwordHash)) {
+      throw new HttpError(401, "Требуется безопасно установить новый пароль", "password_reset_required");
+    }
+    if (!user || !(await verifyPassword(user.passwordHash, input.password))) {
       throw new HttpError(401, "Неверный логин или пароль", "invalid_credentials");
     }
     if (user.role === "admin") {
@@ -552,16 +558,29 @@ export class AuthController {
     if (user.mustChangePassword) {
       await writeAudit(user.id, "USER_TEMPORARY_PASSWORD_LOGIN", "user", user.id, { result: "success" });
     }
+    const auth = await createAuthSession(user, req, res);
 
     res.json({
-      token: signUserToken(user.id, toUserRole(user.role), user.authTokenVersion),
+      token: auth.token,
       user: await getUserPayload(user.id)
     });
   }
 
+  @Post("/refresh")
+  @HttpCode(200)
+  async postrefresh8(@Req() req: Request, @Res() res: Response) {
+    res.json(await refreshAuthSession(req, res));
+  }
+
+  @Post("/logout")
+  @HttpCode(200)
+  async postlogout9(@Req() req: Request, @Res() res: Response) {
+    res.json(await logoutAuthSession(req, res));
+  }
+
   @Get("/me")
   @UseGuards(NestJwtAuthGuard)
-  async getme8(@Req() req: Request, @Res() res: Response) {
+  async getme10(@Req() req: Request, @Res() res: Response) {
     res.json({ user: await getUserPayload(req.user!.id, req.user) });
   }
 }

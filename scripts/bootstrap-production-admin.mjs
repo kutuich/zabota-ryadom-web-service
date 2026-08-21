@@ -1,11 +1,12 @@
-import bcrypt from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
 
 const phoneService = await import("../backend/dist/src/services/phoneService.js");
+const passwordService = await import("../backend/dist/src/services/passwordService.js");
 const normalizeRussianPhone = phoneService.normalizeRussianPhone ?? phoneService.default?.normalizeRussianPhone;
+const hashPassword = passwordService.hashPassword ?? passwordService.default?.hashPassword;
 
-if (typeof normalizeRussianPhone !== "function") {
-  throw new Error("Phone normalization service is not available.");
+if (typeof normalizeRussianPhone !== "function" || typeof hashPassword !== "function") {
+  throw new Error("Required authentication services are not available. Build the backend before bootstrap.");
 }
 
 const email = requiredEnv("PRODUCTION_ADMIN_EMAIL").trim().toLowerCase();
@@ -22,7 +23,7 @@ try {
     process.exit(0);
   }
 
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await hashPassword(password);
   const now = new Date();
 
   await prisma.user.create({

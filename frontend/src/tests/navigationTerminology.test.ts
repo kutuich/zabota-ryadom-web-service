@@ -263,12 +263,16 @@ assert.match(visitReservePanel, /Последнее успешное выпол�
 const authContext = read("context/AuthContext.tsx");
 assert.match(authContext, /api\.startAdminActing\(role\)/);
 assert.match(authContext, /api\.stopAdminActing\(\)/);
-assert.match(authContext, /setStoredToken\(null\)/);
+assert.match(authContext, /setAccessToken\(null\)/);
 assert.match(authContext, /setUser\(null\)/);
 
 const actingApiClient = read("api/client.ts");
 assert.match(actingApiClient, /"\/admin\/acting\/start"/);
 assert.match(actingApiClient, /"\/admin\/acting\/stop"/);
+assert.match(actingApiClient, /credentials: "include"/);
+assert.match(actingApiClient, /"\/auth\/refresh"/);
+assert.match(actingApiClient, /"\/auth\/logout"/);
+assert.doesNotMatch(actingApiClient, /localStorage|sessionStorage|zabota_ryadom_token/);
 
 const appRouter = read("App.tsx");
 assert.match(appRouter, /effectiveRoleForUser\(user\)/);
@@ -513,7 +517,7 @@ assert.match(oauthComplete, /className="consent-optional-label">\(необяза
 
 const oauthAuthContext = read("context/AuthContext.tsx");
 assert.match(oauthAuthContext, /await api\.cancelOAuth\(\)/);
-assert.match(oauthAuthContext, /setStoredToken\(null\)/);
+assert.match(oauthAuthContext, /setAccessToken\(null\)/);
 
 const vkContactDetails = read("components/ContactDetails.tsx");
 assert.match(vkContactDetails, /Привязать VK ID/);

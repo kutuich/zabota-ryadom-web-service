@@ -17,8 +17,8 @@ test("OpenAPI covers every runtime API route and preserves representative contra
       .filter(({ path }) => path.startsWith("/api/"))
       .map(({ method, path }) => `${method} ${path.replace(/:([A-Za-z0-9_]+)/g, "{$1}")}`);
 
-    assert.equal(runtime.length, 221);
-    assert.equal(documented.length, 221);
+    assert.equal(runtime.length, 223);
+    assert.equal(documented.length, 223);
     assert.equal(new Set(runtime).size, runtime.length, "runtime routes must not contain duplicates");
     assert.equal(new Set(documentedKeys).size, documentedKeys.length, "OpenAPI operations must not contain duplicates");
     assert.deepEqual([...documentedKeys].sort(), [...runtime].sort(), "every runtime API route must have an OpenAPI operation");
@@ -54,6 +54,8 @@ test("OpenAPI covers every runtime API route and preserves representative contra
 
     assert.deepEqual(document.paths["/api/public/bootstrap"].get?.security, []);
     assert.deepEqual(document.paths["/api/admin/users"].get?.security, [{ bearerAuth: [] }]);
+    assert.deepEqual(document.paths["/api/auth/refresh"].post?.security, [{ refreshSession: [] }]);
+    assert.deepEqual(document.paths["/api/auth/logout"].post?.security, [{ refreshSession: [] }]);
     const webhookResponse = document.paths["/api/payments/tbank/webhook"].post?.responses?.["200"];
     assert.ok(webhookResponse && !("$ref" in webhookResponse));
     assert.equal(webhookResponse.content?.["text/plain"]?.schema && !("$ref" in webhookResponse.content["text/plain"].schema)
@@ -62,6 +64,9 @@ test("OpenAPI covers every runtime API route and preserves representative contra
     assert.equal(document.components?.securitySchemes?.bearerAuth && !("$ref" in document.components.securitySchemes.bearerAuth)
       ? document.components.securitySchemes.bearerAuth.scheme
       : undefined, "bearer");
+    assert.equal(document.components?.securitySchemes?.refreshSession && !("$ref" in document.components.securitySchemes.refreshSession)
+      ? document.components.securitySchemes.refreshSession.in
+      : undefined, "cookie");
   } finally {
     await app.close();
   }

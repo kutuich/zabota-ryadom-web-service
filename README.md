@@ -9,7 +9,7 @@ Web-сервис бытовой помощи семье, дому и близк�
 - React, TypeScript, Vite, plain CSS;
 - Node.js, NestJS, TypeScript; NestJS работает на стандартном Express HTTP adapter без legacy router bridge;
 - Prisma и PostgreSQL 16; SQLite поддерживается только как источник миграционной репетиции;
-- JWT; OAuth VK ID включается env-флагами;
+- Argon2id; короткий JWT access token в памяти клиента и rotating HttpOnly refresh-session; OAuth VK ID включается env-флагами;
 - Docker; production HTTPS через Caddy;
 - mock и T-Bank adapters для пополнения внутреннего баланса.
 
@@ -70,6 +70,7 @@ npm run check
 npm test
 npm run build
 npm run api:openapi
+npm run auth:credential-inventory
 npm run visual:audit
 npm run db:generate
 ```

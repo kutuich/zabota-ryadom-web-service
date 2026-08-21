@@ -1,10 +1,11 @@
 import { Controller, Delete, Get, HttpCode, Patch, Post, Put, Req, Res, UseGuards } from "@nestjs/common";
 import { NestAdminGuard, NestAdminManagerGuard, NestFeatureConsentGuard, NestJwtAuthGuard, NestRolesGuard, RequireRoles } from "../../common/auth.guards";
-import bcrypt from "bcryptjs";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../../../db/prisma";
 import { signUserToken } from "../../../services/authTokenService";
+import { createAuthSession, revokeUserSessions } from "../../../services/authSessionService";
+import { hashPassword, verifyPassword } from "../../../services/passwordService";
 import { assertPasswordPolicy, checkRateLimit, createSecurityNotice, normalizeDisplayName } from "../../../services/accountSecurityService";
 import { writeAudit } from "../../../services/auditService";
 import { HttpError } from "../../../utils/http";
@@ -55,19 +56,21 @@ export class AccountSecurityController {
   checkRateLimit(`password:${req.user!.id}`, "account");
   if (input.newPassword !== input.newPasswordConfirmation) throw new HttpError(400, "Пароли не совпадают", "password_confirmation_mismatch");
   const current = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.id } });
-  if (!current.passwordHash || !(await bcrypt.compare(input.currentPassword, current.passwordHash))) {
+  if (!(await verifyPassword(current.passwordHash, input.currentPassword))) {
     throw new HttpError(401, "Текущий пароль указан неверно", "current_password_invalid");
   }
   assertPasswordPolicy(input.newPassword, current);
-  if (await bcrypt.compare(input.newPassword, current.passwordHash)) throw new HttpError(400, "Новый пароль должен отличаться от текущего", "password_unchanged");
-  const passwordHash = await bcrypt.hash(input.newPassword, 10);
+  if (await verifyPassword(current.passwordHash, input.newPassword)) throw new HttpError(400, "Новый пароль должен отличаться от текущего", "password_unchanged");
+  const passwordHash = await hashPassword(input.newPassword);
   const user = await prisma.$transaction(async (tx) => {
     const updated = await tx.user.update({ where: { id: current.id }, data: { passwordHash, passwordChangedAt: new Date(), authTokenVersion: { increment: 1 } } });
+    await revokeUserSessions(tx, current.id, "password_changed");
     await createSecurityNotice(tx, current.id, null, "Пароль изменён", "Пароль вашей учётной записи изменён. Если это сделали не вы, обратитесь в сервис.");
     await writeAudit(current.id, "USER_PASSWORD_CHANGED", "user", current.id, { revokedSessions: "all", ipAddress: requestIp(req), userAgent: req.headers["user-agent"] ?? null }, tx);
     return updated;
   });
-  res.json({ token: signUserToken(user.id, user.role as any, user.authTokenVersion), passwordChangedAt: user.passwordChangedAt });
+  const auth = await createAuthSession(user, req, res);
+  res.json({ token: auth.token, passwordChangedAt: user.passwordChangedAt });
 }
 
   @Post("/sessions/revoke-others")
@@ -77,10 +80,11 @@ export class AccountSecurityController {
   checkRateLimit(`sessions:${req.user!.id}`, "account");
   const user = await prisma.$transaction(async (tx) => {
     const updated = await tx.user.update({ where: { id: req.user!.id }, data: { authTokenVersion: { increment: 1 } } });
+    await revokeUserSessions(tx, updated.id, "revoke_other_sessions", req.user!.sessionId);
     await writeAudit(updated.id, "USER_SESSIONS_REVOKED", "user", updated.id, { scope: "others", ipAddress: requestIp(req), userAgent: req.headers["user-agent"] ?? null }, tx);
     return updated;
   });
-  res.json({ token: signUserToken(user.id, user.role as any, user.authTokenVersion), revoked: true });
+  res.json({ token: signUserToken(user.id, user.role as any, user.authTokenVersion, req.user!.sessionId, req.user!.actingRole ?? undefined), revoked: true });
 }
 }
 
@@ -96,8 +100,8 @@ export class TemporaryPasswordController {
   if (!current.mustChangePassword) throw new HttpError(409, "Обязательная смена пароля не требуется", "temporary_password_not_required");
   if (!current.temporaryPasswordExpiresAt || current.temporaryPasswordExpiresAt <= new Date()) throw new HttpError(401, "Срок временного пароля истёк. Обратитесь к Суперадминистратору", "temporary_password_expired");
   assertPasswordPolicy(input.newPassword, current);
-  if (current.passwordHash && await bcrypt.compare(input.newPassword, current.passwordHash)) throw new HttpError(400, "Новый пароль должен отличаться от временного", "password_unchanged");
-  const passwordHash = await bcrypt.hash(input.newPassword, 10);
+  if (await verifyPassword(current.passwordHash, input.newPassword)) throw new HttpError(400, "Новый пароль должен отличаться от временного", "password_unchanged");
+  const passwordHash = await hashPassword(input.newPassword);
   const user = await prisma.$transaction(async (tx) => {
     const changedAt = new Date();
     const claimed = await tx.user.updateMany({
@@ -123,10 +127,12 @@ export class TemporaryPasswordController {
       throw new HttpError(409, "Обязательная смена пароля уже завершена", "temporary_password_not_required");
     }
     const updated = await tx.user.findUniqueOrThrow({ where: { id: current.id } });
+    await revokeUserSessions(tx, current.id, "temporary_password_changed");
     await createSecurityNotice(tx, current.id, null, "Временный пароль заменён", "Пароль вашей учётной записи изменён. Если это сделали не вы, обратитесь в сервис.");
     await writeAudit(current.id, "USER_TEMPORARY_PASSWORD_CHANGED", "user", current.id, { ipAddress: requestIp(req), userAgent: req.headers["user-agent"] ?? null }, tx);
     return updated;
   });
-  res.json({ token: signUserToken(user.id, user.role as any, user.authTokenVersion), mustChangePassword: false });
+  const auth = await createAuthSession(user, req, res);
+  res.json({ token: auth.token, mustChangePassword: false });
 }
 }

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { api, getStoredToken, setStoredToken } from "../api/client";
+import { api, setAccessToken } from "../api/client";
 import type { Bootstrap, User } from "../types";
 
 type RegisterInput = {
@@ -20,7 +20,6 @@ type RegisterInput = {
 
 type AuthContextValue = {
   user: User | null;
-  token: string | null;
   bootstrap: Bootstrap | null;
   isLoading: boolean;
   refreshMe: () => Promise<void>;
@@ -32,14 +31,13 @@ type AuthContextValue = {
   startActing: (role: "customer" | "helper") => Promise<{ nextPath: string }>;
   stopActing: () => Promise<{ nextPath: string }>;
   acceptReplacementToken: (token: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(() => getStoredToken());
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -49,16 +47,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const bootstrapPayload = await api.bootstrap();
         let mePayload: { user: User } | null = null;
-        if (token) {
-          try {
-            mePayload = await api.me();
-          } catch {
-            setStoredToken(null);
-            if (!ignore) {
-              setToken(null);
-              setUser(null);
-            }
-          }
+        const restoredToken = await api.refreshSession();
+        if (restoredToken) {
+          mePayload = await api.me().catch(() => null);
         }
         if (!ignore) {
           setBootstrap(bootstrapPayload);
@@ -72,12 +63,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       ignore = true;
     };
-  }, [token]);
+  }, []);
 
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
-      token,
       bootstrap,
       isLoading,
       async refreshMe() {
@@ -86,20 +76,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
       async login(phoneOrEmail, password) {
         const payload = await api.login({ phoneOrEmail, password });
-        setStoredToken(payload.token);
-        setToken(payload.token);
+        setAccessToken(payload.token);
         setUser(payload.user);
       },
       async register(input) {
         const payload = await api.register(input);
-        setStoredToken(payload.token);
-        setToken(payload.token);
+        setAccessToken(payload.token);
         setUser(payload.user);
       },
       async claimOAuthSession() {
         const payload = await api.claimOAuthSession();
-        setStoredToken(payload.token);
-        setToken(payload.token);
+        setAccessToken(payload.token);
         setUser(payload.user);
         return { profileComplete: payload.profileComplete, nextPath: payload.nextPath };
       },
@@ -107,8 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           await api.cancelOAuth();
         } finally {
-          setStoredToken(null);
-          setToken(null);
+          setAccessToken(null);
           setUser(null);
         }
       },
@@ -119,33 +105,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
       async startActing(role) {
         const payload = await api.startAdminActing(role);
-        setStoredToken(payload.token);
+        setAccessToken(payload.token);
         const mePayload = await api.me();
-        setToken(payload.token);
         setUser(mePayload.user);
         return { nextPath: payload.nextPath };
       },
       async stopActing() {
         const payload = await api.stopAdminActing();
-        setStoredToken(payload.token);
+        setAccessToken(payload.token);
         const mePayload = await api.me();
-        setToken(payload.token);
         setUser(mePayload.user);
         return { nextPath: payload.nextPath };
       },
       async acceptReplacementToken(nextToken) {
-        setStoredToken(nextToken);
-        setToken(nextToken);
+        setAccessToken(nextToken);
         const payload = await api.me();
         setUser(payload.user);
       },
-      logout() {
-        setStoredToken(null);
-        setToken(null);
-        setUser(null);
+      async logout() {
+        try {
+          await api.logout();
+        } finally {
+          setAccessToken(null);
+          setUser(null);
+        }
       }
     }),
-    [bootstrap, isLoading, token, user]
+    [bootstrap, isLoading, user]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

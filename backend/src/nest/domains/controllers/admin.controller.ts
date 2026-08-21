@@ -37,6 +37,7 @@ import {
   restoreArchivedOAuthPendingUser
 } from "../../../services/userLifecycleService";
 import { signUserToken, type ActingRole } from "../../../services/authTokenService";
+import { revokeUserSessions, setSessionActingRole } from "../../../services/authSessionService";
 import { assignManagerRole, blockUser, revokeManagerRole, unblockUser } from "../../../services/userAccessService";
 import { createRequestCategorySnapshotTx } from "../../../services/categoryStructureService";
 import { serializePerformerDocument } from "./performerDocuments.controller";
@@ -132,7 +133,8 @@ export class AdminController {
     const input = z.object({ role: z.enum(["customer", "helper"]) }).parse(req.body);
     const actingRole: ActingRole = input.role === "customer" ? "client" : "performer";
     const realRole = req.user!.realRole;
-    const token = signUserToken(req.user!.id, realRole, req.user!.authTokenVersion, actingRole);
+    await setSessionActingRole(req.user!.sessionId, req.user!.id, actingRole);
+    const token = signUserToken(req.user!.id, realRole, req.user!.authTokenVersion, req.user!.sessionId, actingRole);
     const metadata = {
       realUserId: req.user!.id,
       effectiveUserId: req.user!.id,
@@ -157,6 +159,7 @@ export class AdminController {
   @UseGuards(NestJwtAuthGuard, NestAdminGuard)
   async postactingStop1(@Req() req: Request, @Res() res: Response) {
     const realRole = req.user!.realRole;
+    await setSessionActingRole(req.user!.sessionId, req.user!.id, null);
     const metadata = {
       realUserId: req.user!.id,
       effectiveUserId: req.user!.id,
@@ -167,7 +170,7 @@ export class AdminController {
     };
     await writeAudit(req.user!.id, "admin.acting.stop", "user", req.user!.id, metadata);
     res.json({
-      token: signUserToken(req.user!.id, realRole, req.user!.authTokenVersion),
+      token: signUserToken(req.user!.id, realRole, req.user!.authTokenVersion, req.user!.sessionId),
       role: realRole,
       effectiveRole: realRole,
       actingRole: null,
@@ -335,6 +338,7 @@ export class AdminController {
     if (target.role === "superadmin") throw new HttpError(409, "Нельзя завершить сеансы Суперадминистратора через карточку", "superadmin_sessions_protected");
     const user = await prisma.$transaction(async (tx) => {
       const updated = await tx.user.update({ where: { id: target.id }, data: { authTokenVersion: { increment: 1 } } });
+      await revokeUserSessions(tx, target.id, "admin_revoked_sessions");
       await writeAudit(req.user!.id, "USER_SESSIONS_REVOKED", "user", target.id, {
         actorId: req.user!.id,
         actorRole: req.user!.realRole,

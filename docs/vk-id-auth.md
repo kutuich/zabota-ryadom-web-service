@@ -46,6 +46,6 @@ Production redirect URI должен использовать HTTPS. Значе�
 5. Повторите вход тем же VK ID: новая `UserIdentity` не должна создаваться.
 6. Проверьте обычный вход по телефону/email и отдельный вход администратора.
 
-В базе хранится только идентификатор VK и безопасная копия полей профиля. Access token, client secret и PKCE verifier не сохраняются.
+После получения одноразовой OAuth-cookie frontend обменивает её на обычную серверную `AuthSession`: короткий access JWT остаётся только в памяти страницы, а rotating refresh credential хранится в `HttpOnly; SameSite=Strict` cookie (`Secure` в production). Logout и session revocation работают одинаково для password и VK ID входа. В базе provider-части хранится только идентификатор VK и безопасная копия полей профиля; access token VK, client secret и PKCE verifier не сохраняются.
 
 См. [production current state](PRODUCTION_CURRENT_STATE.md) и [documentation index](DOCUMENTATION_INDEX.md).

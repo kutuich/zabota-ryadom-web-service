@@ -42,14 +42,21 @@ type ControllerRoute = {
   protected: boolean;
   controllerName: string;
   status: number;
+  authMode: "public" | "bearer-jwt" | "refresh-cookie";
 };
 
 export function buildOpenApiDocument(app: INestApplication): OpenAPIObject {
   const config = new DocumentBuilder()
     .setTitle("Забота Рядом HTTP API")
-    .setDescription("Actual NestJS REST/JSON contract. Current URLs are intentionally unversioned during Stage 3.")
-    .setVersion("stage3")
+    .setDescription("Actual NestJS REST/JSON contract. Current URLs remain intentionally unversioned.")
+    .setVersion("stage4")
     .addBearerAuth({ type: "http", scheme: "bearer", bearerFormat: "JWT" }, "bearerAuth")
+    .addCookieAuth("zabota_refresh", {
+      type: "apiKey",
+      in: "cookie",
+      name: "zabota_refresh",
+      description: "Rotating HttpOnly refresh-session cookie. Production uses the __Host-zabota_refresh name."
+    }, "refreshSession")
     .build();
   const document = SwaggerModule.createDocument(app, config, {
     operationIdFactory: (controllerKey, methodKey) => `${controllerKey}_${methodKey}`
@@ -120,13 +127,18 @@ function collectControllerRoutes(app: INestApplication): ControllerRoute[] {
         const isProtected = guards.some((guard: unknown) => guard === NestJwtAuthGuard || guardName(guard) === NestJwtAuthGuard.name);
         for (const controllerPath of controllerPaths) {
           for (const methodPath of methodPaths) {
+            const path = openApiPath(joinPaths(controllerPath, methodPath));
+            const authMode = ["/api/auth/refresh", "/api/auth/logout"].includes(path)
+              ? "refresh-cookie"
+              : isProtected ? "bearer-jwt" : "public";
             routes.push({
               method: RequestMethod[requestMethod],
-              path: openApiPath(joinPaths(controllerPath, methodPath)),
+              path,
               handler,
               protected: isProtected,
               controllerName: controller.name.replace(/Controller$/, ""),
-              status: successStatus(handler, requestMethod)
+              status: successStatus(handler, requestMethod),
+              authMode
             });
           }
         }
@@ -140,8 +152,10 @@ function enrichOperation(operation: OperationObject, route: ControllerRoute) {
   const extendedOperation = operation as OperationObject & Record<string, unknown>;
   operation.tags = operation.tags?.length ? operation.tags : [route.controllerName];
   operation.summary ??= `${route.method} ${route.path}`;
-  operation.security = route.protected ? [{ bearerAuth: [] }] : [];
-  extendedOperation["x-authentication"] = route.protected ? "bearer-jwt" : "public";
+  operation.security = route.authMode === "bearer-jwt"
+    ? [{ bearerAuth: [] }]
+    : route.authMode === "refresh-cookie" ? [{ refreshSession: [] }] : [];
+  extendedOperation["x-authentication"] = route.authMode;
 
   const source = route.handler.toString();
   const parameters = [...(operation.parameters ?? [])] as ParameterObject[];
@@ -180,8 +194,10 @@ function enrichOperation(operation: OperationObject, route: ControllerRoute) {
     existingResponses[String(route.status)] = successResponse(source, route.status);
   }
   if (source.includes("req.body") || source.includes("req.query")) existingResponses["400"] ??= errorResponse("Invalid request data");
-  if (route.protected) {
+  if (route.authMode !== "public") {
     existingResponses["401"] ??= errorResponse("Authentication required");
+  }
+  if (route.protected) {
     existingResponses["403"] ??= errorResponse("Insufficient permissions or missing required consent");
   }
   if (route.path.includes("{")) existingResponses["404"] ??= errorResponse("Resource not found");

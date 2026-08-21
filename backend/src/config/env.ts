@@ -40,6 +40,11 @@ export function resolveBooleanFlag(name: string, fallback: boolean, source: Node
   return value === "true" || value === "1";
 }
 
+function positiveNumber(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 const defaultServiceFeeAmount = resolveDefaultServiceFeeAmount();
 const visitReconciliation = resolveVisitReconciliationConfig();
 const nodeEnv = process.env.NODE_ENV ?? "development";
@@ -49,7 +54,12 @@ export const env = {
   port: Number(process.env.PORT ?? 4000),
   databaseUrl: process.env.DATABASE_URL ?? "postgresql://zabota_local:zabota_local_only@127.0.0.1:55432/zabota_rehearsal?schema=public",
   jwtSecret: process.env.JWT_SECRET ?? "local-development-secret-change-me",
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
+  accessTokenTtlMinutes: positiveNumber(process.env.ACCESS_TOKEN_TTL_MINUTES, 10),
+  refreshSessionDays: positiveNumber(process.env.REFRESH_SESSION_DAYS, 30),
+  refreshIdleDays: positiveNumber(process.env.REFRESH_IDLE_DAYS, 7),
+  adminAccessTokenTtlMinutes: positiveNumber(process.env.ADMIN_ACCESS_TOKEN_TTL_MINUTES, 5),
+  adminRefreshSessionHours: positiveNumber(process.env.ADMIN_REFRESH_SESSION_HOURS, 8),
+  adminRefreshIdleMinutes: positiveNumber(process.env.ADMIN_REFRESH_IDLE_MINUTES, 30),
   temporaryPasswordTtlHours: resolveTemporaryPasswordTtlHours(),
   corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
   uploadsDir: resolveUploadsDir(),

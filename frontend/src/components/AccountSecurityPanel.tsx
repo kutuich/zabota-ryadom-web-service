@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Eye, EyeOff, KeyRound, LogOut, Save } from "lucide-react";
 import { Navigate } from "react-router-dom";
-import { api, setStoredToken } from "../api/client";
+import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { TEMPORARY_PASSWORD_PATH } from "../routes/security";
 import { formatDateTimeRu } from "../utils/dateTime";
@@ -42,7 +42,6 @@ export function AccountSecurityPanel() {
     if (!window.confirm("Завершить все остальные сеансы?")) return;
     try {
       const result = await api.revokeMyOtherSessions();
-      setStoredToken(result.token);
       await acceptReplacementToken(result.token);
       setNotice("Остальные сеансы завершены.");
     } catch (error) {

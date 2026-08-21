@@ -2,6 +2,7 @@ import { prisma } from "../db/prisma";
 import { writeAudit } from "./auditService";
 import { HttpError } from "../utils/http";
 import type { UserRole } from "../types/domain";
+import { revokeUserSessions } from "./authSessionService";
 
 type Operator = { id: string; role: UserRole };
 
@@ -37,6 +38,7 @@ export async function assignManagerRole(actor: Operator, targetUserId: string, r
         authTokenVersion: { increment: 1 }
       }
     });
+    await revokeUserSessions(tx, user.id, "role_changed");
     await writeAudit(actor.id, "admin.manager.assign", "user", user.id, {
       actorUserId: actor.id,
       actorRole: actor.role,
@@ -86,6 +88,7 @@ export async function revokeManagerRole(
         authTokenVersion: { increment: 1 }
       }
     });
+    await revokeUserSessions(tx, user.id, "role_changed");
     await writeAudit(actor.id, "admin.manager.revoke", "user", user.id, {
       actorUserId: actor.id,
       actorRole: actor.role,
@@ -131,6 +134,7 @@ export async function blockUser(actor: Operator, targetUserId: string, reason: s
         authTokenVersion: { increment: 1 }
       }
     });
+    await revokeUserSessions(tx, user.id, "user_blocked");
     const managerAction = actor.role === "manager";
     await writeAudit(actor.id, managerAction ? "manager.user.block" : "user.block", "user", user.id, {
       actorUserId: actor.id,

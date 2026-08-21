@@ -1,5 +1,5 @@
 import { KeyboardEvent, useEffect, useId, useMemo, useState } from "react";
-import { api, getStoredToken } from "../api/client";
+import { api, getAccessToken } from "../api/client";
 import type { City, SettlementSearchResult } from "../types";
 
 type CityComboboxProps = {
@@ -52,7 +52,7 @@ export function CityCombobox({ cities = [], value, onChange, label = "Насел
   }
 
   async function suggest() {
-    if (!getStoredToken()) {
+    if (!getAccessToken()) {
       if (onSuggest) {
         onSuggest(query.trim());
         setIsOpen(false);

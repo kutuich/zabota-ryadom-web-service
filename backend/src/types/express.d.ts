@@ -14,6 +14,7 @@ declare global {
         cityId: string | null;
         authTokenVersion: number;
         mustChangePassword: boolean;
+        sessionId: string;
       };
     }
   }

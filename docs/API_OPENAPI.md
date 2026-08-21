@@ -30,13 +30,13 @@ npm run api:openapi
 
 1. Добавить route в штатный NestJS controller и сохранить runtime validation в Zod/Nest validation contract.
 2. Для body/response, у которых нужна структурная схема, экспортировать используемую Zod schema и применить `ApiZodBody(schema)` / `ApiZodResponse(status, schema)`. Декоратор конвертирует ту же schema, которая выполняет runtime parsing; копировать поля вручную нельзя.
-3. Применить `NestJwtAuthGuard` для защищённого endpoint. Генератор выставит `bearerAuth`; публичные операции получают явный пустой `security`.
+3. Применить `NestJwtAuthGuard` для защищённого endpoint. Генератор выставит `bearerAuth`; refresh/logout документируются схемой `refreshSession`, публичные операции получают явный пустой `security`.
 4. Для download сохранить реальный streaming response и `Content-Disposition`; генератор описывает его как binary. Фактический upload документов сейчас принимает JSON с base64, а не `multipart/form-data`, и так же отражён в точной схеме.
 5. Запустить `npm run api:openapi` и `openApiContract.test.ts`. Runtime endpoint без OpenAPI representation или duplicate `method + path` делает тест красным.
 
 ## Текущее покрытие
 
-На 2026-08-21 документ содержит 197 paths и 221 операций: 207 защищённых Bearer JWT и 14 публичных. У 83 операций есть request body. Для регистрации, login, создания заявки, payment init и upload документа body описан точной схемой, построенной из того же Zod contract. Health и payment init имеют точную структурную success schema. Остальные JSON success responses сохраняют status/content type и временно представлены общим `JsonValue`.
+На 2026-08-21 документ содержит 199 paths и 223 операции: 207 защищённых Bearer JWT, 2 refresh-cookie операции и 14 публичных. У 83 операций есть request body. Для регистрации, login, создания заявки, payment init и upload документа body описан точной схемой, построенной из того же Zod contract. Health и payment init имеют точную структурную success schema. Остальные JSON success responses сохраняют status/content type и временно представлены общим `JsonValue`.
 
 Download endpoints представлены binary response и сохраняют authentication metadata. VK OAuth описан без credentials. Payment init/status, webhook/refund/admin surfaces входят в общий inventory; секретные подписи и реальные платёжные примеры не публикуются.
 
