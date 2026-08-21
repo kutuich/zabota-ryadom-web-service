@@ -7,7 +7,7 @@ Web-сервис бытовой помощи семье, дому и близк�
 ## Стек
 
 - React, TypeScript, Vite, plain CSS;
-- Node.js, Express, TypeScript;
+- Node.js, NestJS, TypeScript; NestJS работает на стандартном Express HTTP adapter без legacy router bridge;
 - Prisma и PostgreSQL 16; SQLite поддерживается только как источник миграционной репетиции;
 - JWT; OAuth VK ID включается env-флагами;
 - Docker; production HTTPS через Caddy;
@@ -76,7 +76,7 @@ Schema применяется через `npm run db:migrate:deploy`. Репет
 ## Структура
 
 - `backend/prisma/schema.prisma` — модель данных;
-- `backend/src/routes` — HTTP API;
+- `backend/src/nest` — NestJS bootstrap, domain modules, controllers, guards, lifecycle и общая HTTP infrastructure;
 - `backend/src/services` — доменная логика;
 - `frontend/src` — приложение и ролевые кабинеты;
 - `landing-public` — публичные статические страницы;
@@ -100,5 +100,6 @@ Schema применяется через `npm run db:migrate:deploy`. Репет
 - соглашение о графике остаётся техническим черновиком до юридического утверждения;
 - частичный банковский возврат требует ручной проверки;
 - текущий production остаётся на SQLite до отдельного контролируемого cutover; код этого этапа нельзя деплоить до миграции production данных;
+- runtime ownership всех HTTP endpoints перенесён в NestJS; полный inventory зафиксирован в [`docs/NESTJS_MIGRATION.md`](docs/NESTJS_MIGRATION.md);
 - встроенное геокодирование Яндекс.Карт не подключено;
 - внешняя отправка сервисных сообщений по email/SMS не реализована.

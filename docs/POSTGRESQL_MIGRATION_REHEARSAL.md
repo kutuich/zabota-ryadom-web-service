@@ -92,7 +92,7 @@ PAYMENT_PROVIDER=mock TBANK_TERMINAL_MODE=test \
 npm run db:smoke:postgres -- --base-url=http://127.0.0.1:4400
 ```
 
-Smoke проверяет health, legal, регистрацию/login, баланс, заявку, отклик, чат и двойное подтверждение.
+Smoke проверяет health, public/legal bootstrap и read/status, регистрацию/login, JWT и admin-role guards, каталог, баланс, mock payment, protected-file denial, заявку, публикацию, отклик, чат, условия, двойное подтверждение и финальный `in_work`.
 
 ## Обнаруженные различия
 
@@ -104,4 +104,3 @@ Smoke проверяет health, legal, регистрацию/login, балан
 ## Rollback rehearsal
 
 Локальный rollback прост: остановить приложение, удалить только локальный compose volume и повторить репетицию из неизменяемой SQLite-копии. Production rollback не определён этим этапом. До отдельного cutover текущие `/opt/zabota/data/zabota.db`, uploads и env остаются неизменными.
-

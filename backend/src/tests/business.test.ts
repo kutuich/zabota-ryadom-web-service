@@ -6,7 +6,7 @@ import { Readable, Writable } from "node:stream";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { test } from "vitest";
-import { createApp } from "../app";
+import { createNestApplication } from "../nest/bootstrap";
 import { prisma } from "../db/prisma";
 import { calculatePrice, PRICING_ADDONS } from "../services/pricingService";
 import { moderateChatMessage } from "../services/moderationService";
@@ -99,8 +99,15 @@ import {
 import { prepareServiceAttachments, removeSavedServiceAttachments } from "../services/serviceMessageStorage";
 import { calculateServiceTreeQuote, getEffectiveServiceTree } from "../services/serviceTreeService";
 import { createDraftSupportCase, createRequestDraft, deleteRequestDraft, getRequestDraft, listDraftSupportCases, publishRequestDraft, replyToDraftSupportCase, safetyApplies, updateRequestDraft } from "../services/requestDraftService";
-import { assertPerformerDocumentDownloadAccess } from "../routes/performerDocuments";
-import { assertAgreementContractAccess } from "../routes/agreementContracts";
+import { assertPerformerDocumentDownloadAccess } from "../nest/domains/controllers/performerDocuments.controller";
+import { assertAgreementContractAccess } from "../nest/domains/controllers/agreementContracts.controller";
+
+let nestHttpHandler: any = null;
+
+function createApp() {
+  if (!nestHttpHandler) throw new Error("NestJS test application is not initialized");
+  return nestHttpHandler;
+}
 
 async function runBusinessRegressionSuite() {
   assert.deepEqual(parseSemanticVersion("v2.0.1"), { major: 2, minor: 0, patch: 1 });
@@ -520,23 +527,23 @@ async function runBusinessRegressionSuite() {
   const legalHash = calculateLegalDocumentHash(legalDoc);
   const changedHash = calculateLegalDocumentHash({ ...legalDoc, contentMarkdown: `${legalDoc.contentMarkdown}\nИзменение.` });
   assert.notEqual(legalHash, changedHash);
-  const legalRoutesSource = readFileSync(path.resolve(process.cwd(), "src/routes/legal.ts"), "utf8");
-  const adminRoutesSource = readFileSync(path.resolve(process.cwd(), "src/routes/admin.ts"), "utf8");
+  const legalControllerSource = readFileSync(path.resolve(process.cwd(), "src/nest/domains/controllers/legal.controller.ts"), "utf8");
+  const adminControllerSource = readFileSync(path.resolve(process.cwd(), "src/nest/domains/controllers/admin.controller.ts"), "utf8");
   const schemaSource = readFileSync(path.resolve(process.cwd(), "prisma/schema.prisma"), "utf8");
-  assert.match(legalRoutesSource, /"\/documents"/);
-  assert.match(legalRoutesSource, /"\/documents\/:slug"/);
-  assert.match(legalRoutesSource, /"\/my-consents"/);
-  assert.match(legalRoutesSource, /"\/consents\/accept"/);
-  assert.match(legalRoutesSource, /"\/consents\/revoke-optional"/);
-  assert.match(adminRoutesSource, /adminRouter\.use\(authenticate, requireAdmin\)/);
-  assert.match(adminRoutesSource, /"\/legal\/documents"/);
-  assert.match(adminRoutesSource, /"\/legal\/documents\/:id\/new-version"/);
-  assert.match(adminRoutesSource, /"\/legal\/documents\/:id\/publish"/);
-  assert.match(adminRoutesSource, /"\/legal\/consents"/);
-  assert.match(adminRoutesSource, /"\/legal\/exports\/all\.xlsx"/);
-  assert.match(adminRoutesSource, /"\/legal\/exports\/archive\.zip"/);
-  assert.match(adminRoutesSource, /"\/users\/:userId\/legal\/consents\.xlsx"/);
-  assert.match(adminRoutesSource, /"\/users\/:userId\/legal\/archive\.zip"/);
+  assert.match(legalControllerSource, /@Get\("\/documents"\)/);
+  assert.match(legalControllerSource, /@Get\("\/documents\/:slug"\)/);
+  assert.match(legalControllerSource, /@Get\("\/my-consents"\)/);
+  assert.match(legalControllerSource, /@Post\("\/consents\/accept"\)/);
+  assert.match(legalControllerSource, /@Post\("\/consents\/revoke-optional"\)/);
+  assert.match(adminControllerSource, /@UseGuards\(NestJwtAuthGuard, NestAdminGuard\)/);
+  assert.match(adminControllerSource, /@Get\("\/legal\/documents"\)/);
+  assert.match(adminControllerSource, /@Post\("\/legal\/documents\/:id\/new-version"\)/);
+  assert.match(adminControllerSource, /@Post\("\/legal\/documents\/:id\/publish"\)/);
+  assert.match(adminControllerSource, /@Get\("\/legal\/consents"\)/);
+  assert.match(adminControllerSource, /@Get\("\/legal\/exports\/all\.xlsx"\)/);
+  assert.match(adminControllerSource, /@Get\("\/legal\/exports\/archive\.zip"\)/);
+  assert.match(adminControllerSource, /@Get\("\/users\/:userId\/legal\/consents\.xlsx"\)/);
+  assert.match(adminControllerSource, /@Get\("\/users\/:userId\/legal\/archive\.zip"\)/);
   assert.match(schemaSource, /documentVersion\s+String/);
   assert.match(schemaSource, /documentContentHash\s+String/);
   assert.match(readFileSync(path.resolve(process.cwd(), "src/services/legalService.ts"), "utf8"), /"MISSING_REQUIRED_CONSENT"/);
@@ -2911,37 +2918,24 @@ async function runStaticRoutingTests() {
     const routePaths = expressRoutePaths(app);
     assert.ok(routePaths.includes("/api/health"));
     assert.ok(routePaths.includes("/"));
-    assert.ok(routePaths.includes("/prices.html"));
-    assert.ok(routePaths.includes("/payment.html"));
-    assert.ok(routePaths.includes("/refund.html"));
-    assert.ok(routePaths.includes("/security.html"));
-    assert.ok(routePaths.includes("/contacts.html"));
-    assert.ok(routePaths.includes("/faq.html"));
-    assert.ok(routePaths.includes("/how-it-works.html"));
-    assert.ok(routePaths.includes("/legal.html"));
     assert.ok(routePaths.includes("/app"));
-    assert.ok(routePaths.includes("/app/*"));
+    assert.ok(routePaths.includes("/app/*path"));
     assert.ok(routePaths.includes("/legal"));
-    assert.ok(routePaths.includes("/legal/*"));
-    assert.ok(routePaths.includes("*.php"));
-    assert.ok(routePaths.includes("/admin"));
-    assert.ok(routePaths.includes("/admin/*"));
-    assert.ok(routePaths.includes("/includes"));
-    assert.ok(routePaths.includes("/includes/*"));
-    assert.ok(routePaths.includes("/data"));
-    assert.ok(routePaths.includes("/data/*"));
-    assert.ok(routePaths.includes("*.html"));
+    assert.ok(routePaths.includes("/legal/*path"));
+    assert.ok(routePaths.includes("/uploads/*path"));
+    assert.ok(routePaths.includes("/*path"));
     assert.ok(routeIndex(app, "/api/health") < routeIndex(app, "/app"));
     assert.ok(routeIndex(app, "/api/health") < routeIndex(app, "/"));
 
-    const appSource = readFileSync(path.join(projectRoot, "backend/src/app.ts"), "utf8");
-    assert.doesNotMatch(appSource, /app\.use\("\/uploads", express\.static/);
-    assert.match(appSource, /app\.use\("\/uploads", \(_req, res\) => res\.status\(404\)/);
-    assert.match(appSource, /app\.use\("\/app\/assets", express\.static\(frontendAssetsPath/);
-    assert.match(appSource, /app\.use\("\/css", express\.static\(landingCssPath/);
-    assert.match(appSource, /app\.use\("\/js", express\.static\(landingJsPath/);
-    assert.match(appSource, /app\.use\("\/assets", express\.static\(landingAssetsPath/);
-    assert.match(appSource, /app\.get\(\["\/app", "\/app\/\*", "\/legal", "\/legal\/\*"\]/);
+    const staticControllerSource = readFileSync(path.join(projectRoot, "backend/src/nest/static/static-delivery.controller.ts"), "utf8");
+    assert.doesNotMatch(staticControllerSource, /express\.static/);
+    assert.match(staticControllerSource, /@Get\("uploads\/\*path"\)/);
+    assert.match(staticControllerSource, /@Get\(\["app", "app\/\*path", "legal", "legal\/\*path"\]\)/);
+    assert.match(staticControllerSource, /request\.path\.startsWith\("\/api"\)/);
+    assert.match(staticControllerSource, /request\.path\.startsWith\("\/admin"\)/);
+    assert.match(staticControllerSource, /request\.path\.startsWith\("\/includes"\)/);
+    assert.match(staticControllerSource, /request\.path\.startsWith\("\/data"\)/);
+    assert.match(staticControllerSource, /isPathInsideRoot/);
   } finally {
     env.nodeEnv = originalNodeEnv;
   }
@@ -5994,5 +5988,12 @@ async function rawAppRequest(
 }
 
 test("current backend business and API characterization baseline", async () => {
-  await runBusinessRegressionSuite();
+  const nestApplication = await createNestApplication({ startScheduler: false });
+  nestHttpHandler = nestApplication.getHttpAdapter().getInstance();
+  try {
+    await runBusinessRegressionSuite();
+  } finally {
+    await nestApplication.close();
+    nestHttpHandler = null;
+  }
 }, 180_000);

@@ -11,6 +11,8 @@
 - backend suite выполняется последовательно, так как characterization-сценарии используют общую тестовую базу;
 - frontend suite проверяет маршруты, роли, тексты и статические UI-контракты;
 - Playwright остаётся инструментом visual/E2E-проверок и не заменяется Vitest.
+- `backend/src/tests/nestBootstrap.test.ts` поднимает реальное NestJS HTTP-приложение на случайном локальном порту и проверяет health, legal, login, balance, admin/file guards, безопасный отключённый VK path, все 221 API registrations и отсутствие duplicate routes;
+- закрытие NestJS application проверяет единый shutdown path для Prisma и одноинстансового scheduler.
 
 Команды:
 
@@ -49,3 +51,7 @@ TEST_DATABASE_URL='postgresql://zabota_local:zabota_local_only@127.0.0.1:55432/z
 - идемпотентность фонового reconciliation.
 
 Это characterization baseline текущего поведения, а не заявление о завершённой миграции на целевой стек.
+
+## NestJS migration checks
+
+`createNestApplication({ startScheduler: false })` используется только интеграционным тестом, чтобы interval scheduler не влиял на детерминированность suite. Обычный `backend/src/index.ts` запускает scheduler через NestJS lifecycle с текущими env-настройками. Express characterization baseline сохранён как API parity baseline, хотя runtime bridge больше нет.

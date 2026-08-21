@@ -37,6 +37,7 @@ Notion отвечает на вопрос «как продукт должен �
 | [`VISUAL_AUDIT_BUTTON.md`](VISUAL_AUDIT_BUTTON.md) | operational | Локальный mock visual audit | При изменении visual script/routes/viewports | Не заменяет E2E docs |
 | [`TESTING.md`](TESTING.md) | active | Vitest baseline, characterization coverage и подготовка test DB | При изменении test runner или стратегии тестирования | Локальные заметки о запуске тестов |
 | [`POSTGRESQL_MIGRATION_REHEARSAL.md`](POSTGRESQL_MIGRATION_REHEARSAL.md) | operational | Локальный перенос SQLite-копии, проверка целостности и PostgreSQL smoke | При изменении schema, migration scripts или cutover-плана | Старые инструкции `db push` |
+| [`NESTJS_MIGRATION.md`](NESTJS_MIGRATION.md) | active | Фактическое состояние перехода Express -> NestJS, ownership доменов и критерии удаления bridge | При переносе backend routes или lifecycle | README по backend framework |
 | [`SECURITY_PRODUCTION_CHECKLIST.md`](../SECURITY_PRODUCTION_CHECKLIST.md) | operational | Security review production | При изменении auth/storage/payments/workflow | Не главнее domain security rules |
 | [`CHANGE_MANAGEMENT.md`](CHANGE_MANAGEMENT.md) | active | Процесс будущих изменений | При изменении engineering process | README по процессу |
 | [`DECISIONS_LOG.md`](DECISIONS_LOG.md) | historical | Краткая история утверждённых решений | При каждом новом/изменённом решении | Старые отчёты, но не current source |

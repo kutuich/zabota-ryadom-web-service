@@ -19,14 +19,33 @@ async function request(path: string, options: { method?: string; token?: string;
   return payload;
 }
 
+async function expectStatus(path: string, expectedStatus: number, options: { method?: string; token?: string; body?: unknown } = {}) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: options.method ?? "GET",
+    headers: {
+      ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+      ...(options.body === undefined ? {} : { "content-type": "application/json" })
+    },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body)
+  });
+  if (response.status !== expectedStatus) {
+    throw new Error(`${options.method ?? "GET"} ${path}: expected ${expectedStatus}, received ${response.status} ${await response.text()}`);
+  }
+}
+
 async function main() {
   const [city, category] = await Promise.all([
     prisma.city.findFirstOrThrow({ where: { slug: "yugorsk" } }),
     prisma.serviceCategory.findFirstOrThrow({ where: { isActive: true }, orderBy: { sortOrder: "asc" } })
   ]);
   const health = await request("/api/health");
+  const publicBootstrap = await request("/api/public/bootstrap");
   const legalDocuments = await request("/api/legal/documents");
   if (!Array.isArray(legalDocuments) || legalDocuments.length === 0) throw new Error("Published legal documents are missing");
+  await request(`/api/legal/documents/${legalDocuments[0].slug}`);
+  await expectStatus("/api/balance/me", 401);
+  await expectStatus("/api/admin/users", 401);
+  await expectStatus("/api/performer-documents/not-owned/download", 401);
 
   const suffix = `${Date.now()}`.slice(-9);
   const registration = await request("/api/auth/register", {
@@ -49,10 +68,25 @@ async function main() {
   await request("/api/legal/me/status", { token: login.token });
   await request("/api/balance/me", { token: login.token });
 
-  const [clientLogin, helperLogin] = await Promise.all([
+  const [clientLogin, helperLogin, adminLogin] = await Promise.all([
     request("/api/auth/login", { method: "POST", body: { phoneOrEmail: "client@zabota.local", password: "password123" } }),
-    request("/api/auth/login", { method: "POST", body: { phoneOrEmail: "performer@zabota.local", password: "password123" } })
+    request("/api/auth/login", { method: "POST", body: { phoneOrEmail: "performer@zabota.local", password: "password123" } }),
+    request("/api/auth/login", { method: "POST", body: { phoneOrEmail: "admin@zabota.local", password: "password123" } })
   ]);
+  await expectStatus("/api/admin/users", 403, { token: clientLogin.token });
+  await request("/api/admin/users", { token: adminLogin.token });
+  await request(`/api/category-structures/effective-tree?cityId=${encodeURIComponent(city.id)}`, { token: clientLogin.token });
+
+  const payment = await request("/api/payments/top-up/init", {
+    method: "POST",
+    token: clientLogin.token,
+    body: { amount: 500 }
+  });
+  const completedPayment = await request(`/api/payments/mock/${payment.id}/succeed`, {
+    method: "POST",
+    token: clientLogin.token
+  });
+  if (completedPayment.payment.status !== "succeeded") throw new Error(`Expected succeeded payment, received ${completedPayment.payment.status}`);
   const startDate = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
   const created = await request("/api/requests", {
     method: "POST",
@@ -97,7 +131,9 @@ async function main() {
     databaseProvider: "postgresql",
     paymentProvider: process.env.PAYMENT_PROVIDER,
     health,
+    publicBootstrapLoaded: Boolean(publicBootstrap),
     registeredUserId: registration.user.id,
+    paymentId: payment.id,
     requestId: created.id,
     chatId: accepted.chat.id,
     finalStatus: finalized.status
