@@ -8,6 +8,18 @@ type Sheet = {
 const textEncoder = new TextEncoder();
 
 export function downloadXlsx(filename: string, sheets: Sheet[]) {
+  const blob = createXlsxBlob(sheets);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+export function createXlsxBlob(sheets: Sheet[]) {
   const normalizedSheets = sheets.length ? sheets : [{ name: "Лист 1", rows: [] }];
   const files: Array<{ path: string; data: Uint8Array }> = [
     { path: "[Content_Types].xml", data: encodeXml(contentTypesXml(normalizedSheets.length)) },
@@ -20,17 +32,9 @@ export function downloadXlsx(filename: string, sheets: Sheet[]) {
     }))
   ];
 
-  const blob = new Blob([zipStore(files)], {
+  return new Blob([zipStore(files)], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
   });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
 }
 
 export function downloadZip(filename: string, files: Array<{ path: string; data: string }>) {
