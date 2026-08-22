@@ -5,6 +5,7 @@ cd "$(dirname "$0")"
 
 PROJECT_DIR="$(pwd -P)"
 IMAGE_NAME="zabota-web-service-local"
+MIGRATION_IMAGE_NAME="zabota-web-service-local-migration"
 CONTAINER_NAME="zabota-web-local"
 LEGACY_CONTAINER_NAME="zabota-ryadom-local"
 ENV_FILE=".env.local.docker"
@@ -63,24 +64,18 @@ docker rm -f "$LEGACY_CONTAINER_NAME" >/dev/null 2>&1 || true
 
 mkdir -p "$DATA_DIR"
 
-RESET_LOCAL_DB=""
-read -r -p "Очистить локальную базу перед запуском? y/N " RESET_LOCAL_DB || true
-if [[ "$RESET_LOCAL_DB" =~ ^[Yy]$ ]]; then
-  rm -f \
-    "$DATA_DIR/zabota.db" \
-    "$DATA_DIR/zabota.db-journal" \
-    "$DATA_DIR/zabota.db-wal" \
-    "$DATA_DIR/zabota.db-shm"
-  echo "Локальная база очищена."
-fi
-
 if lsof -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   fail "Порт $PORT уже занят другим процессом. Остановите его или измените PORT."
 fi
 
-echo "Собираю свежий Docker image $IMAGE_NAME из текущего кода..."
+echo "Собираю migration image и применяю migrations..."
+docker build --target migration -t "$MIGRATION_IMAGE_NAME" .
+docker run --rm --env-file "$ENV_FILE" "$MIGRATION_IMAGE_NAME"
+
+echo "Собираю свежий application image $IMAGE_NAME из текущего кода..."
 echo "Локальные visual audit routes: $VISUAL_AUDIT_ROUTES_VALUE"
 docker build \
+  --target runner \
   --build-arg VITE_ENABLE_VISUAL_AUDIT_ROUTES="$VISUAL_AUDIT_ROUTES_VALUE" \
   -t "$IMAGE_NAME" \
   .

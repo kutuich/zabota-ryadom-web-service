@@ -2947,6 +2947,8 @@ async function runStaticRoutingTests() {
 async function runProductionStartupTests() {
   const projectRoot = testProjectRoot();
   const startupScript = readFileSync(path.join(projectRoot, "scripts/start-preview.mjs"), "utf8");
+  const dockerfile = readFileSync(path.join(projectRoot, "Dockerfile"), "utf8");
+  const productionCompose = readFileSync(path.join(projectRoot, "compose.production.yml"), "utf8");
   const productionBootstrapScript = readFileSync(path.join(projectRoot, "scripts/bootstrap-production-admin.mjs"), "utf8");
   const productionEnvExample = readFileSync(path.join(projectRoot, ".env.production.example"), "utf8");
 
@@ -2954,12 +2956,18 @@ async function runProductionStartupTests() {
   assert.match(startupScript, /backend\/dist\/prisma\/seed\.js/);
   assert.match(startupScript, /scripts\/bootstrap-production-admin\.mjs/);
   assert.match(startupScript, /bootstrapCityDirectory\.js/);
-  assert.match(startupScript, /"migrate", "deploy"/);
+  assert.doesNotMatch(startupScript, /run\("npx", \["prisma"/);
   assert.doesNotMatch(startupScript, /"db", "push"/);
   assert.match(startupScript, /DATABASE_URL must point to PostgreSQL/);
   assert.match(startupScript, /PRODUCTION_ADMIN_EMAIL/);
   assert.match(startupScript, /PRODUCTION_ADMIN_PASSWORD/);
   assert.match(startupScript, /PRODUCTION_ADMIN_PHONE/);
+
+  assert.match(dockerfile, /FROM dependencies AS migration/);
+  assert.match(dockerfile, /CMD \["npm", "run", "db:migrate:deploy"\]/);
+  assert.match(dockerfile, /node_modules\/deepmerge-ts/);
+  assert.match(productionCompose, /migrate:/);
+  assert.match(productionCompose, /condition: service_completed_successfully/);
 
   assert.match(productionBootstrapScript, /normalizeRussianPhone/);
   assert.match(productionBootstrapScript, /role: "superadmin"/);

@@ -4,14 +4,13 @@ import { PrismaClient } from "@prisma/client";
 process.env.NODE_ENV ||= "production";
 process.env.PORT ||= "4000";
 if (!process.env.DATABASE_URL?.trim()) {
-  throw new Error("DATABASE_URL is required. PostgreSQL schema changes are applied with prisma migrate deploy.");
+  throw new Error("DATABASE_URL is required. Apply PostgreSQL migrations before application startup.");
 }
 process.env.DATABASE_URL = stripSurroundingQuotes(process.env.DATABASE_URL);
 if (!/^postgres(ql)?:\/\//.test(process.env.DATABASE_URL)) {
   throw new Error("DATABASE_URL must point to PostgreSQL. SQLite is supported only as an explicit migration source.");
 }
 
-run("npx", ["prisma", "migrate", "deploy", "--schema", "backend/prisma/schema.prisma"]);
 run("node", ["backend/dist/src/scripts/bootstrapCityDirectory.js"]);
 
 const prisma = new PrismaClient();

@@ -6,12 +6,16 @@
 
 - [ ] Перед deploy PostgreSQL-target версии выполнен отдельный утверждённый production cutover; пока production SQLite, deploy заблокирован организационно.
 - [ ] PostgreSQL schema применена только через `prisma migrate deploy`, статус migration history проверен.
+- [ ] Отдельный Compose migration job завершился с exit 0 до обновления application service; повторный запуск сообщает отсутствие pending migrations.
+- [ ] Application image не содержит Prisma CLI/`@prisma/config`/`deepmerge-ts`, но содержит рабочий `@prisma/client`.
+- [ ] Application startup не запускает migration CLI и не изменяет schema.
+- [ ] Failure migration job возвращает non-zero и блокирует запуск новой версии application.
 - [ ] SQLite source backup и PostgreSQL backup хранятся отдельно, restore обоих проверен.
 
 - [ ] DNS и HTTPS работают; HTTP перенаправляется на HTTPS.
-- [ ] Caddy слушает 80/443, `zabota-web` опубликован только на `127.0.0.1:4000`.
+- [ ] Caddy слушает 80/443, Compose service `backend` опубликован только на `127.0.0.1:4000`.
 - [ ] `/`, `/app`, `/api/health` и публичные `/legal/*` доступны.
-- [ ] `/opt/zabota/data:/data` подключён; база — `/data/zabota.db`, uploads — `/data/uploads`.
+- [ ] После PostgreSQL cutover DB использует persistent Compose volume, `/opt/zabota/data:/data` подключён для uploads.
 - [ ] Перед обновлением созданы backup DB и env без вывода секретов.
 - [ ] `SEED_DEMO_DATA=false`; demo users/data не создаются.
 - [ ] SQLite backup проверен восстановлением на отдельном пути.
@@ -74,6 +78,7 @@
 - [ ] Known limitations не выданы за готовые функции.
 - [ ] Выполнены `npm run check`, `npm test`, `npm run build`, Docker build и `git diff --check`.
 - [ ] Для rollback сохранены предыдущий image/tag, DB backup и env backup.
+- [ ] Подтверждено, совместим ли предыдущий application image с новой schema; при несовместимости rollback требует остановки application и восстановления DB backup.
 # User Management & Security
 
 - [ ] В backup-копии подтверждён ровно один active `superadmin`.

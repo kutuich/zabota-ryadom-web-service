@@ -7,11 +7,13 @@
 ## Архитектура
 
 ```text
-Internet -> Caddy :80/:443 -> 127.0.0.1:4000 -> Docker zabota-web:4000
+Internet -> Caddy :80/:443 -> 127.0.0.1:4000 -> Compose backend:4000
                                              -> /opt/zabota/data:/data
+                              Compose postgres -> persistent Docker volume
+                              Compose migrate  -> one-shot prisma migrate deploy
 ```
 
-Container отдаёт landing `/`, React `/app`, legal `/legal/*` и API `/api/*`. Caddyfile: `/etc/caddy/Caddyfile`. База и uploads не входят в image.
+Application container отдаёт landing `/`, React `/app`, legal `/legal/*` и API `/api/*`. Caddyfile: `/etc/caddy/Caddyfile`. PostgreSQL data и uploads не входят в image. Текущий live production всё ещё остаётся на описанной в `PRODUCTION_CURRENT_STATE.md` SQLite-схеме до отдельного cutover.
 
 ## Матрица сред
 
@@ -36,6 +38,12 @@ PORT=4000
 APP_BASE_URL=https://zabota-ugorsk.ru
 PUBLIC_SITE_URL=https://zabota-ugorsk.ru
 DATABASE_URL=postgresql://APP_USER:REPLACE_ME@POSTGRES_HOST:5432/zabota?schema=public
+POSTGRES_USER=APP_USER
+POSTGRES_PASSWORD=REPLACE_ME
+POSTGRES_DB=zabota
+APP_ENV_FILE=.env.production
+APP_HOST_PORT=4000
+ZABOTA_DATA_PATH=/opt/zabota/data
 CORS_ORIGIN=https://zabota-ugorsk.ru
 UPLOADS_DIR=/data/uploads
 DEFAULT_SERVICE_FEE_AMOUNT=50
@@ -57,21 +65,26 @@ T-Bank URLs используют HTTPS. Credentials и JWT существуют 
 4. Проверить свободное место и существование `/opt/zabota/data/uploads`.
 5. Не запускать prune с volumes и не удалять data directory.
 
-## Запуск container
+## Migration и application rollout
 
-Production run сохраняет имя, env и volume:
+`compose.production.yml` разделяет три ответственности:
+
+- `postgres` хранит данные в persistent named volume и имеет `pg_isready` healthcheck;
+- `migrate` собран из Docker target `migration`, содержит Prisma CLI и выполняет только `prisma migrate deploy`;
+- `backend` собран из target `runner`, содержит `@prisma/client`, но не содержит Prisma CLI и не изменяет schema при startup.
+
+Контролируемый порядок deployment:
 
 ```bash
-docker run -d \
-  --name zabota-web \
-  --restart unless-stopped \
-  --env-file /opt/zabota/repo/.env.production \
-  -p 127.0.0.1:4000:4000 \
-  -v /opt/zabota/data:/data \
-  zabota-web-service
+docker compose --env-file .env.production -f compose.production.yml build migrate backend
+docker compose --env-file .env.production -f compose.production.yml up -d --wait postgres
+docker compose --env-file .env.production -f compose.production.yml run --rm migrate
+docker compose --env-file .env.production -f compose.production.yml up -d --no-deps backend
 ```
 
-Приложение не занимает внешний 80. Startup выполняет `prisma migrate deploy`, затем bootstrap системных данных; production demo seed выключен. `db push` в production не используется.
+`deploy-zabota-production.command` использует этот порядок только после отдельного разрешения и PostgreSQL cutover. Он не останавливает предыдущий standalone application container до успешного завершения migration step. Любая ошибка `migrate deploy` возвращает non-zero и прерывает rollout до запуска новой версии backend. `depends_on.condition: service_healthy` обеспечивает DB readiness, а `service_completed_successfully` не позволяет Compose запустить backend после failed migration.
+
+Application startup по-прежнему выполняет только безопасный bootstrap системных данных и опциональный явно включённый seed/bootstrap администратора; Prisma CLI он не вызывает. `db push`, reset и изменение migration history в production запрещены.
 
 ## Health и smoke
 
@@ -121,10 +134,11 @@ journalctl -u caddy --no-pager -n 100
 
 ## Safe rollback
 
-1. Не изменять и не удалять `/opt/zabota/data`.
-2. Перезапустить предыдущий проверенный image с тем же env, localhost binding и volume.
-3. При несовместимости схемы восстановить DB только из созданного перед deploy backup после остановки container.
-4. Проверить local/public health и Caddy.
+1. При failure migration step новая версия application не запускается; исправить migration/config и повторить one-shot job.
+2. После успешной совместимой migration предыдущий application image можно вернуть только если он совместим с новой schema.
+3. Prisma migrations считаются forward-only deployment boundary: автоматического schema rollback нет.
+4. При несовместимой schema остановить application и восстановить проверенный PostgreSQL backup вместе с предыдущим image по отдельно утверждённому rollback-плану.
+5. Не изменять и не удалять `/opt/zabota/data` или PostgreSQL volume; проверить local/public health и Caddy.
 
 Временная публикация container на внешнем 80 допустима только как аварийная ручная мера после остановки Caddy; после восстановления вернуть `127.0.0.1:4000`.
 

@@ -10,9 +10,6 @@
     "backend",
     "frontend"
   ],
-  "dependencies": {
-    "prisma": "^6.1.0"
-  },
   "scripts": {
     "dev": "concurrently \"npm run dev -w backend\" \"npm run dev -w frontend\"",
     "start": "npm run start:prod",
@@ -39,6 +36,7 @@
   "devDependencies": {
     "concurrently": "^9.1.2",
     "playwright": "^1.61.1",
+    "prisma": "^6.1.0",
     "vitest": "^3.2.4"
   }
 }

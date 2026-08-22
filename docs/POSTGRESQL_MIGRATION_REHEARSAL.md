@@ -6,6 +6,7 @@
 
 - основной Prisma provider: `postgresql`;
 - изменения schema применяются через версионные файлы `backend/prisma/migrations` и `prisma migrate deploy`;
+- production-style rollout выполняет `prisma migrate deploy` отдельным one-shot migration container до application container; обычный application startup schema не изменяет;
 - SQLite-клиент в `backend/prisma/sqlite-source` используется только для чтения явно указанной исходной копии;
 - `db push` не является production-механизмом и удалён из основных scripts;
 - перенос сохраняет исходные IDs, timestamps, nullable values и скалярные snapshots.
@@ -32,6 +33,8 @@ DATABASE_URL='postgresql://zabota_local:zabota_local_only@127.0.0.1:55432/zabota
 ```
 
 Целевая база переноса обязана быть пустой. Инструмент завершится ошибкой, если найдёт хотя бы одну строку.
+
+Для проверки production-style ordering используется `compose.production.yml`: `postgres` должен стать healthy, `migrate` завершиться с exit 0, и только затем `backend` может стартовать. Повторный migration job идемпотентен. Failure job блокирует backend через `service_completed_successfully`; Prisma migration history для моделирования ошибки не изменяется.
 
 ## Копия и перенос
 

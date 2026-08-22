@@ -40,7 +40,9 @@ npm run dev
 
 ```bash
 cp .env.preview.example .env.preview
-docker build -t zabota-web-service .
+docker build --target migration -t zabota-migration .
+docker run --rm --env-file .env.preview zabota-migration
+docker build --target runner -t zabota-web-service .
 docker run --rm -p 4000:4000 --env-file .env.preview -v zabota-local-data:/data zabota-web-service
 ```
 
@@ -75,7 +77,7 @@ npm run visual:audit
 npm run db:generate
 ```
 
-Schema применяется через `npm run db:migrate:deploy`. Репетиция SQLite -> PostgreSQL описана в [`docs/POSTGRESQL_MIGRATION_REHEARSAL.md`](docs/POSTGRESQL_MIGRATION_REHEARSAL.md).
+Локально schema применяется через `npm run db:migrate:deploy`. Production-style процесс использует отдельный migration target/service перед application runner; application startup Prisma CLI не вызывает. Репетиция SQLite -> PostgreSQL описана в [`docs/POSTGRESQL_MIGRATION_REHEARSAL.md`](docs/POSTGRESQL_MIGRATION_REHEARSAL.md).
 Правила генерации и проверки фактического API contract описаны в [`docs/API_OPENAPI.md`](docs/API_OPENAPI.md); generated JSON не хранится в Git.
 
 ## Структура
