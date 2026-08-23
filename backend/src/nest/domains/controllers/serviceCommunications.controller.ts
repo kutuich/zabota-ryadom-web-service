@@ -1,6 +1,6 @@
 import { Controller, Delete, Get, HttpCode, Patch, Post, Put, Req, Res, UseGuards } from "@nestjs/common";
+import { ApiProduces, ApiResponse } from "@nestjs/swagger";
 import { NestAdminGuard, NestAdminManagerGuard, NestFeatureConsentGuard, NestJwtAuthGuard, NestRolesGuard, RequireRoles } from "../../common/auth.guards";
-import fs from "node:fs";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../../../db/prisma";
@@ -23,7 +23,8 @@ import {
   sendBroadcast,
   sendServiceMessage
 } from "../../../services/serviceCommunicationService";
-import { resolveServiceAttachmentPath } from "../../../services/serviceMessageStorage";
+import { ObjectStorageNotFoundError } from "../../../storage/objectStorage";
+import { objectStorage } from "../../../storage/storageProvider";
 import { writeAudit } from "../../../services/auditService";
 import { HttpError } from "../../../utils/http";
 
@@ -166,16 +167,23 @@ export class MeServiceMessagesController {
 @Controller("api/service-message-attachments")
 export class ServiceMessageAttachmentsController {
   @Get("/:id/download")
+  @ApiProduces("application/octet-stream")
+  @ApiResponse({ status: 200, description: "Protected service-message attachment", schema: { type: "string", format: "binary" } })
   @UseGuards(NestJwtAuthGuard)
   async getidDownload0(@Req() req: Request, @Res() res: Response) {
   const attachment = await prisma.serviceMessageAttachment.findUnique({ where: { id: req.params.id }, include: { user: { select: { role: true } } } });
   if (!attachment) throw new HttpError(404, "Вложение не найдено", "service_attachment_not_found");
   const ownsAttachment = attachment.userId === req.user!.id;
   assertServiceAttachmentDownloadAccess({ id: req.user!.id, realRole: req.user!.realRole }, { id: attachment.userId, role: attachment.user.role });
-  const filePath = resolveServiceAttachmentPath(attachment.storagePath);
-  if (!fs.existsSync(filePath)) throw new HttpError(404, "Файл вложения не найден", "service_attachment_file_missing");
+  let bytes: Buffer;
+  try { bytes = (await objectStorage.get(attachment.storagePath)).body; } catch (error) {
+    if (error instanceof ObjectStorageNotFoundError) throw new HttpError(404, "Файл вложения не найден", "service_attachment_file_missing");
+    throw error;
+  }
   await writeAudit(req.user!.id, ownsAttachment ? "user.service_message.attachment_download" : "admin.service_message.attachment_download", "service_message_attachment", attachment.id, { ownerUserId: attachment.userId });
-  res.download(filePath, attachment.originalFileName);
+  res.attachment(attachment.originalFileName);
+  res.type(attachment.mimeType);
+  res.send(bytes);
 }
 }
 

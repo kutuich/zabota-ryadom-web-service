@@ -15,6 +15,8 @@ Internet -> Caddy :80/:443 -> 127.0.0.1:4000 -> Compose backend:4000
 
 Application container отдаёт landing `/`, React `/app`, legal `/legal/*` и API `/api/*`. Caddyfile: `/etc/caddy/Caddyfile`. PostgreSQL data и uploads не входят в image. Текущий live production всё ещё остаётся на описанной в `PRODUCTION_CURRENT_STATE.md` SQLite-схеме до отдельного cutover.
 
+Код поддерживает S3-compatible provider, но этот документ не включает его в production автоматически. До отдельного object-storage cutover действуют текущие backup/checks для `/data/uploads`; процедура copy, verification, DB mapping и rollback boundary описана в [`OBJECT_STORAGE.md`](OBJECT_STORAGE.md).
+
 ## Матрица сред
 
 | Среда | PAYMENT_PROVIDER | TBANK_TERMINAL_MODE | SEED_DEMO_DATA | ALLOW_LEGACY_MOCK_TOP_UP |

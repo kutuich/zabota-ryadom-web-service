@@ -102,7 +102,7 @@ Smoke проверяет health, public/legal bootstrap и read/status, реги
 - Prisma schema не использовала native SQLite-only типы, autoincrement, `Decimal`, `BigInt`, enums или raw SQL, поэтому перенос скалярных данных прямой.
 - Строковые JSON snapshots сохраняются без преобразования.
 - Тесты содержали `findFirst` без стабильного критерия и времязависимые графики. Фикстуры сделаны детерминированными; прикладная бизнес-логика не менялась.
-- Файлы не копируются в БД: сверяется их metadata. Физический storage нужно переносить отдельной файловой процедурой с checksum.
+- Файлы не копируются в БД: сверяется их metadata. Отдельный repeatable перенос local uploads в S3-compatible storage и checksum verification описаны в [`OBJECT_STORAGE.md`](OBJECT_STORAGE.md); это не является production cutover.
 
 ## Rollback rehearsal
 

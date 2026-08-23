@@ -9,6 +9,7 @@ Web-сервис бытовой помощи семье, дому и близк�
 - React, TypeScript, Vite, plain CSS;
 - Node.js, NestJS, TypeScript; NestJS работает на стандартном Express HTTP adapter без legacy router bridge;
 - Prisma и PostgreSQL 16; SQLite поддерживается только как источник миграционной репетиции;
+- private S3-compatible object storage через заменяемый adapter; local filesystem остаётся dev/test и rollback provider до production cutover;
 - Argon2id; короткий JWT access token в памяти клиента и rotating HttpOnly refresh-session; OAuth VK ID включается env-флагами;
 - Docker; production HTTPS через Caddy;
 - mock и T-Bank adapters для пополнения внутреннего баланса.
@@ -46,7 +47,7 @@ docker build --target runner -t zabota-web-service .
 docker run --rm -p 4000:4000 --env-file .env.preview -v zabota-local-data:/data zabota-web-service
 ```
 
-Локальный PostgreSQL запускается через `compose.postgres-rehearsal.yml`. Uploads остаются файловыми и требуют persistent storage отдельно от БД.
+Локальный PostgreSQL запускается через `compose.postgres-rehearsal.yml`. По умолчанию files использует local adapter; MinIO-контур и перенос описаны в [`docs/OBJECT_STORAGE.md`](docs/OBJECT_STORAGE.md).
 
 На macOS `start-zabota-local.command` собирает и запускает локальный контейнер, а `stop-zabota-local.command` его останавливает. Флаг `SEED_DEMO_DATA=true` допустим только для локальной demo-среды.
 
@@ -73,6 +74,7 @@ npm test
 npm run build
 npm run api:openapi
 npm run auth:credential-inventory
+npm run storage:inventory -- --output=storage-migration-reports/inventory.json
 npm run visual:audit
 npm run db:generate
 ```

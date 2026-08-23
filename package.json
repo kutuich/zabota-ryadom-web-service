@@ -19,6 +19,8 @@
     "test": "npm run test -w backend && npm run test -w frontend",
     "api:openapi": "npm run api:openapi -w backend",
     "auth:credential-inventory": "npm run auth:credential-inventory -w backend",
+    "storage:inventory": "npm run storage:inventory -w backend",
+    "storage:migrate": "npm run storage:migrate -w backend",
     "visual:audit": "node scripts/visual-audit.mjs",
     "db:generate": "npm run db:generate:postgres && npm run db:generate:sqlite-source",
     "db:generate:postgres": "prisma generate --schema backend/prisma/schema.prisma",

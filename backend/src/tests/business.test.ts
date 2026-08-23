@@ -1042,6 +1042,8 @@ async function runServiceCommunicationTests() {
     assert.equal(sent.message.attachments[0].originalFileName, "receipt.pdf");
     assert.doesNotMatch(sent.message.attachments[0].fileName, /\.\./);
     assert.equal(sent.message.attachments[0].userId, customer.id);
+    assert.match(sent.message.attachments[0].storagePath, /^service-message-attachments\/[0-9a-f-]{36}$/);
+    assert.doesNotMatch(sent.message.attachments[0].storagePath, new RegExp(customer.id));
     storagePaths.push(sent.message.attachments[0].storagePath);
     const payment = await prisma.paymentTransaction.create({ data: { userId: customer.id, provider: "mock", orderId: `message-payment-${suffix}`, amount: 150, status: "succeeded" } });
     const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]).toString("base64");
@@ -2735,13 +2737,14 @@ async function runUploadStorageTests() {
       fileName: "../../private document.pdf",
       fileData: `data:application/pdf;base64,${Buffer.from("%PDF-1.4\ntest-pdf").toString("base64")}`
     }, root);
-    assert.match(saved.storagePath, /^performer-documents[\\/]performer-test[\\/]/);
+    assert.match(saved.storagePath, /^performer-documents[\\/][0-9a-f-]{36}$/);
+    assert.doesNotMatch(saved.storagePath.split(/[\\/]/).at(-1) ?? "", /performer-test|private|document/i);
     assert.equal(path.isAbsolute(saved.storagePath), false);
     assert.equal(saved.originalFileName, "private document.pdf");
     assert.match(saved.checksum, /^[a-f0-9]{64}$/);
-    const storedDirectory = path.join(root, "performer-documents", "performer-test");
+    const storedDirectory = path.join(root, "performer-documents");
     assert.equal(existsSync(storedDirectory), true);
-    assert.equal(readdirSync(storedDirectory).length, 1);
+    assert.equal(readdirSync(storedDirectory).length, 2, "object and local metadata sidecar must be stored");
     assert.throws(() => resolveStoragePath(root, "..", "outside.pdf"), /Недопустимый путь файла/);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -3782,6 +3785,7 @@ async function runBonusServiceFeeTests() {
     assert.match(response.payload.agreementVersion.contract.checksum, /^[a-f0-9]{64}$/);
     const storedContract = await prisma.agreementContract.findUniqueOrThrow({ where: { agreementVersionId: response.payload.agreementVersion.id } });
     assert.equal(storedContract.checksum, response.payload.agreementVersion.contract.checksum);
+    assert.match(storedContract.storagePath, /^agreement-contracts\/[0-9a-f-]{36}$/);
     assert.match(storedContract.contentText, /Пять дней по три визита/);
     assert.match(storedContract.contentText, new RegExp(response.payload.agreementVersion.termsHash));
     const agreementVersionId = response.payload.agreementVersion.id;
@@ -6025,12 +6029,16 @@ const businessTestScope = process.env.BUSINESS_TEST_SCOPE?.trim();
 
 test(businessTestScope === "manager-role"
   ? "manager role authentication and authorization characterization"
-  : "current backend business and API characterization baseline", async () => {
+  : businessTestScope === "storage"
+    ? "file storage characterization"
+    : "current backend business and API characterization baseline", async () => {
   const nestApplication = await createNestApplication({ startScheduler: false });
   nestHttpHandler = nestApplication.getHttpAdapter().getInstance();
   try {
     if (businessTestScope === "manager-role") {
       await runManagerRoleTests();
+    } else if (businessTestScope === "storage") {
+      await runUploadStorageTests();
     } else {
       await runBusinessRegressionSuite();
     }

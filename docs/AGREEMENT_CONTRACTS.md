@@ -12,9 +12,7 @@
 - `termsHash` исходной версии условий;
 - SHA-256 checksum сохранённого файла.
 
-Файл хранится в persistent storage:
-
-`/data/uploads/agreement-contracts/<requestId>/<agreementVersionId>/<contractId>.txt`
+Файл хранится через общий private object storage с opaque key `agreement-contracts/<random UUID>`. Локальный adapter сохраняется для dev/test и rollback, целевой production provider — S3-compatible. Детали описаны в [`OBJECT_STORAGE.md`](OBJECT_STORAGE.md).
 
 Каталог `/uploads` не публикуется. Просмотр метаданных выполняется через `GET /api/agreement-contracts/:id`, скачивание — через `GET /api/agreement-contracts/:id/download`. Доступ имеют только Заказчик и Помощник соответствующего чата, а также Суперадминистратор. Каждое скачивание записывается в `AuditLog`.
 

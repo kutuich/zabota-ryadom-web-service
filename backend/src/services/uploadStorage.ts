@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { env, resolveUploadsDir } from "../config/env";
+import { LocalObjectStorage } from "../storage/localObjectStorage";
+import { objectStorage } from "../storage/storageProvider";
 import { HttpError } from "../utils/http";
 
 export const uploadsRoot = resolveUploadsDir({ ...process.env, UPLOADS_DIR: env.uploadsDir });
@@ -22,7 +24,7 @@ export async function savePerformerDocumentFile(input: {
   type: "self_employed" | "criminal_record";
   fileName: string;
   fileData: string;
-}, storageRoot = uploadsRoot) {
+}, storageRoot?: string) {
   const match = input.fileData.match(/^data:([^;]+);base64,(.+)$/);
   if (!match) {
     throw new HttpError(400, "Файл нужно передать в формате data URL", "document_file_invalid");
@@ -41,33 +43,39 @@ export async function savePerformerDocumentFile(input: {
     throw new HttpError(400, "Размер файла не должен превышать 5 МБ", "document_file_too_large");
   }
 
-  const storedFileName = `${input.type}-${Date.now()}-${sanitizeFileName(input.fileName)}`;
-  const relativeDir = path.join("performer-documents", input.performerId);
-  const absoluteDir = resolveStoragePath(storageRoot, relativeDir);
-  await fs.mkdir(absoluteDir, { recursive: true });
-  const storagePath = path.join(relativeDir, storedFileName);
-  await fs.writeFile(resolveStoragePath(storageRoot, storagePath), buffer, { flag: "wx" });
+  const storagePath = `performer-documents/${randomUUID()}`;
+  const checksum = createHash("sha256").update(buffer).digest("hex");
+  const storage = storageRoot ? new LocalObjectStorage(storageRoot) : objectStorage;
+  await storage.put({ key: storagePath, body: buffer, contentType: mimeType, checksum });
 
   return {
     storagePath,
     originalFileName: path.basename(input.fileName),
     mimeType,
     size: buffer.length,
-    checksum: createHash("sha256").update(buffer).digest("hex")
+    checksum
   };
 }
 
 export function resolvePerformerDocumentPath(document: { storagePath?: string | null; fileUrl: string }, storageRoot = uploadsRoot) {
-  if (document.storagePath) return resolveStoragePath(storageRoot, document.storagePath);
+  return resolveStoragePath(storageRoot, resolvePerformerDocumentKey(document));
+}
+
+export function resolvePerformerDocumentKey(document: { storagePath?: string | null; fileUrl: string }) {
+  if (document.storagePath) return document.storagePath.replaceAll("\\", "/");
   const prefix = "/uploads/";
   if (!document.fileUrl.startsWith(prefix)) {
     throw new HttpError(404, "Файл документа не найден", "performer_document_file_missing");
   }
-  return resolveStoragePath(storageRoot, document.fileUrl.slice(prefix.length));
+  return document.fileUrl.slice(prefix.length);
 }
 
 export async function ensureUploadsRoot(storageRoot = uploadsRoot) {
-  await fs.mkdir(path.resolve(storageRoot), { recursive: true });
+  if (storageRoot !== uploadsRoot) {
+    await fs.mkdir(path.resolve(storageRoot), { recursive: true });
+    return;
+  }
+  await objectStorage.initialize();
 }
 
 export function resolveStoragePath(storageRoot: string, ...segments: string[]) {
@@ -78,11 +86,6 @@ export function resolveStoragePath(storageRoot: string, ...segments: string[]) {
     throw new HttpError(400, "Недопустимый путь файла", "document_storage_path_invalid");
   }
   return target;
-}
-
-function sanitizeFileName(fileName: string) {
-  const base = path.basename(fileName).replace(/[^\w.\-]+/g, "_").replace(/^_+|_+$/g, "");
-  return base.slice(0, 120) || "document.pdf";
 }
 
 function matchesDocumentSignature(mimeType: string, buffer: Buffer) {

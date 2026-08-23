@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import path from "node:path";
 import type { Prisma } from "@prisma/client";
-import { uploadsRoot, resolveStoragePath } from "./uploadStorage";
+import { objectStorage } from "../storage/storageProvider";
 
 type Tx = Prisma.TransactionClient;
 
@@ -25,10 +23,8 @@ export async function createAgreementContractTx(tx: Tx, input: {
   const bytes = Buffer.from(contentText, "utf8");
   const checksum = createHash("sha256").update(bytes).digest("hex");
   const fileName = `agreement-project-${input.chat.request.publicNumber ?? input.chat.requestId}-v${input.agreementVersion.version}.txt`;
-  const storagePath = path.join("agreement-contracts", input.chat.requestId, input.agreementVersion.id, `${id}.txt`);
-  const absolutePath = resolveStoragePath(uploadsRoot, storagePath);
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  await fs.writeFile(absolutePath, bytes, { flag: "wx" });
+  const storagePath = `agreement-contracts/${randomUUID()}`;
+  await objectStorage.put({ key: storagePath, body: bytes, contentType: "text/plain; charset=utf-8", checksum });
 
   return tx.agreementContract.create({
     data: {
@@ -47,10 +43,6 @@ export async function createAgreementContractTx(tx: Tx, input: {
       createdByUserId: input.createdByUserId
     }
   });
-}
-
-export function resolveAgreementContractPath(storagePath: string) {
-  return resolveStoragePath(uploadsRoot, storagePath);
 }
 
 function buildAgreementContractText(chat: any, version: any, customerName: string, helperName: string) {

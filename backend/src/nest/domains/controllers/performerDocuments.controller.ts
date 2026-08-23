@@ -1,13 +1,15 @@
 import { Controller, Delete, Get, HttpCode, Patch, Post, Put, Req, Res, UseGuards } from "@nestjs/common";
+import { ApiProduces, ApiResponse } from "@nestjs/swagger";
 import { NestAdminGuard, NestAdminManagerGuard, NestFeatureConsentGuard, NestJwtAuthGuard, NestRolesGuard, RequireRoles } from "../../common/auth.guards";
 import type { Request, Response } from "express";
-import fs from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "../../../db/prisma";
 import { writeAudit } from "../../../services/auditService";
 import { requireFeatureConsent } from "../../../services/legalService";
-import { resolvePerformerDocumentPath, savePerformerDocumentFile } from "../../../services/uploadStorage";
+import { resolvePerformerDocumentKey, savePerformerDocumentFile } from "../../../services/uploadStorage";
+import { ObjectStorageNotFoundError } from "../../../storage/objectStorage";
+import { objectStorage } from "../../../storage/storageProvider";
 import { HttpError } from "../../../utils/http";
 import { ApiZodBody } from "../../openapi/zod-openapi";
 
@@ -105,22 +107,28 @@ export class PerformerDocumentsController {
   }
 
   @Get("/:id/download")
+  @ApiProduces("application/octet-stream")
+  @ApiResponse({ status: 200, description: "Protected performer document", schema: { type: "string", format: "binary" } })
   @UseGuards(NestJwtAuthGuard)
   async getidDownload2(@Req() req: Request, @Res() res: Response) {
     const document = await prisma.performerDocument.findUnique({ where: { id: req.params.id } });
     if (!document) throw new HttpError(404, "Документ не найден", "performer_document_not_found");
     const isOwner = document.performerId === req.user!.id;
     assertPerformerDocumentDownloadAccess(req.user!, document);
-    const filePath = resolvePerformerDocumentPath(document);
+    const objectKey = resolvePerformerDocumentKey(document);
     let bytes: Buffer;
-    try { bytes = await fs.readFile(filePath); } catch { throw new HttpError(404, "Файл документа не найден", "performer_document_file_missing"); }
+    try { bytes = (await objectStorage.get(objectKey)).body; } catch (error) {
+      if (error instanceof ObjectStorageNotFoundError) throw new HttpError(404, "Файл документа не найден", "performer_document_file_missing");
+      throw error;
+    }
     if (document.checksum && createHash("sha256").update(bytes).digest("hex") !== document.checksum) {
       throw new HttpError(409, "Контрольная сумма документа не совпадает", "performer_document_checksum_mismatch");
     }
     await writeAudit(req.user!.id, isOwner ? "performer_document.download" : "admin.performer_document.download", "performer_document", document.id, {
       performerId: document.performerId
     });
+    res.attachment(document.originalFileName ?? document.fileName);
     res.type(document.mimeType ?? "application/octet-stream");
-    res.download(filePath, document.originalFileName ?? document.fileName);
+    res.send(bytes);
   }
 }
