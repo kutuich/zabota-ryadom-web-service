@@ -93,6 +93,8 @@ Application startup по-прежнему выполняет только без
 ```bash
 curl -i http://127.0.0.1:4000/api/health
 curl -i https://zabota-ugorsk.ru/api/health
+curl -i http://127.0.0.1:4000/api/ready
+curl -i https://zabota-ugorsk.ru/api/ready
 curl -I http://zabota-ugorsk.ru
 ```
 

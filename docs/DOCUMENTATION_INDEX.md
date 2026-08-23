@@ -41,6 +41,7 @@ Notion отвечает на вопрос «как продукт должен �
 | [`API_OPENAPI.md`](API_OPENAPI.md) | active | Генерация OpenAPI, Swagger exposure, contract inventory и известная точность схем | При изменении HTTP routes, DTO или OpenAPI infrastructure | README по API contract |
 | [`OBJECT_STORAGE.md`](OBJECT_STORAGE.md) | active | Storage interface, S3/local adapters, access, migration, verification и rollback boundary | При изменении file storage/provider/cutover | Общие uploads assumptions в operational docs |
 | [`CI_CD.md`](CI_CD.md) | active | GitHub Actions CI gates, test-safe environment, audit baseline и локальное воспроизведение | При изменении workflow, CI policy или обязательных checks | README по автоматизированным проверкам |
+| [`OBSERVABILITY.md`](OBSERVABILITY.md) | active | JSON logging, correlation, redaction, readiness и error tracking | При изменении runtime logging, health/readiness или Sentry configuration | Разрозненные logging assumptions в operational docs |
 | [`SECURITY_PRODUCTION_CHECKLIST.md`](../SECURITY_PRODUCTION_CHECKLIST.md) | operational | Security review production | При изменении auth/storage/payments/workflow | Не главнее domain security rules |
 | [`CHANGE_MANAGEMENT.md`](CHANGE_MANAGEMENT.md) | active | Процесс будущих изменений | При изменении engineering process | README по процессу |
 | [`DECISIONS_LOG.md`](DECISIONS_LOG.md) | historical | Краткая история утверждённых решений | При каждом новом/изменённом решении | Старые отчёты, но не current source |

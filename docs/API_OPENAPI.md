@@ -36,7 +36,7 @@ npm run api:openapi
 
 ## Текущее покрытие
 
-На 2026-08-21 документ содержит 199 paths и 223 операции: 207 защищённых Bearer JWT, 2 refresh-cookie операции и 14 публичных. У 83 операций есть request body. Для регистрации, login, создания заявки, payment init и upload документа body описан точной схемой, построенной из того же Zod contract. Health и payment init имеют точную структурную success schema. Остальные JSON success responses сохраняют status/content type и временно представлены общим `JsonValue`.
+На 2026-08-23 документ содержит 200 paths и 224 операции: 207 защищённых Bearer JWT, 2 refresh-cookie операции и 15 публичных. У 83 операций есть request body. Для регистрации, login, создания заявки, payment init и upload документа body описан точной схемой, построенной из того же Zod contract. Health, readiness и payment init имеют точную структурную success schema. Остальные JSON success responses сохраняют status/content type и временно представлены общим `JsonValue`.
 
 Download endpoints представлены binary response и сохраняют authentication metadata. VK OAuth описан без credentials. Payment init/status, webhook/refund/admin surfaces входят в общий inventory; секретные подписи и реальные платёжные примеры не публикуются.
 

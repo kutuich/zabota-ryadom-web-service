@@ -14,7 +14,7 @@
 
 - [ ] DNS и HTTPS работают; HTTP перенаправляется на HTTPS.
 - [ ] Caddy слушает 80/443, Compose service `backend` опубликован только на `127.0.0.1:4000`.
-- [ ] `/`, `/app`, `/api/health` и публичные `/legal/*` доступны.
+- [ ] `/`, `/app`, `/api/health`, `/api/ready` и публичные `/legal/*` доступны; readiness подтверждает PostgreSQL и выбранное S3-хранилище.
 - [ ] После PostgreSQL cutover DB использует persistent Compose volume, `/opt/zabota/data:/data` подключён для uploads.
 - [ ] Перед обновлением созданы backup DB и env без вывода секретов.
 - [ ] `SEED_DEMO_DATA=false`; demo users/data не создаются.

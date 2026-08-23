@@ -3,6 +3,10 @@ import { PrismaClient } from "@prisma/client";
 
 process.env.NODE_ENV ||= "production";
 process.env.PORT ||= "4000";
+
+const loggerModule = await import("../backend/dist/src/observability/logger.js");
+const appLogger = loggerModule.appLogger ?? loggerModule.default?.appLogger;
+if (!appLogger) throw new Error("Structured runtime logger is unavailable. Build the backend before startup.");
 if (!process.env.DATABASE_URL?.trim()) {
   throw new Error("DATABASE_URL is required. Apply PostgreSQL migrations before application startup.");
 }
@@ -19,16 +23,16 @@ await prisma.$disconnect();
 
 if (usersCount === 0) {
   if (process.env.SEED_DEMO_DATA === "true") {
-    console.log("Database is empty and SEED_DEMO_DATA=true. Running demo seed once.");
+    appLogger.info("application.seed_demo.started");
     run("node", ["backend/dist/prisma/seed.js"]);
   } else if (hasProductionAdminEnv()) {
-    console.log("Database is empty. Creating production administrator from environment.");
+    appLogger.info("application.production_admin_bootstrap.started");
     run("node", ["scripts/bootstrap-production-admin.mjs"]);
   } else {
-    console.log("Database is empty. Demo seed is disabled and production administrator env is incomplete. Skipping seed.");
+    appLogger.warn("application.empty_database.bootstrap_skipped");
   }
 } else {
-  console.log(`Database already has ${usersCount} users. Skipping seed.`);
+  appLogger.info("application.database_seed_skipped", { usersCount });
 }
 
 const server = spawn("node", ["backend/dist/src/index.js"], {

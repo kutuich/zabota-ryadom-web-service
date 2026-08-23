@@ -1,5 +1,11 @@
 import { PrismaClient } from "@prisma/client";
 
+process.env.NODE_ENV ||= "production";
+
+const loggerModule = await import("../backend/dist/src/observability/logger.js");
+const appLogger = loggerModule.appLogger ?? loggerModule.default?.appLogger;
+if (!appLogger) throw new Error("Structured runtime logger is unavailable. Build the backend before bootstrap.");
+
 const phoneService = await import("../backend/dist/src/services/phoneService.js");
 const passwordService = await import("../backend/dist/src/services/passwordService.js");
 const normalizeRussianPhone = phoneService.normalizeRussianPhone ?? phoneService.default?.normalizeRussianPhone;
@@ -19,7 +25,7 @@ const prisma = new PrismaClient();
 try {
   const usersCount = await prisma.user.count();
   if (usersCount !== 0) {
-    console.log(`Database already has ${usersCount} users. Production admin bootstrap skipped.`);
+    appLogger.info("application.production_admin_bootstrap.skipped", { usersCount });
     process.exit(0);
   }
 
@@ -43,7 +49,7 @@ try {
     }
   });
 
-  console.log(`Production administrator created: ${email}`);
+  appLogger.info("application.production_admin_bootstrap.completed");
 } finally {
   await prisma.$disconnect();
 }

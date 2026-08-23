@@ -29,7 +29,8 @@ npm run dev
 ```
 
 - frontend: `http://localhost:5173`;
-- backend health: `http://localhost:4000/api/health`.
+- backend liveness: `http://localhost:4000/api/health`;
+- backend dependency readiness: `http://localhost:4000/api/ready`.
 - Swagger UI: `http://localhost:4000/api/docs` (вне production по умолчанию);
 - OpenAPI JSON: `http://localhost:4000/api/openapi.json` (вне production по умолчанию).
 

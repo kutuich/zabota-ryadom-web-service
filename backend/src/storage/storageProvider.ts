@@ -4,7 +4,7 @@ import { LocalObjectStorage } from "./localObjectStorage";
 import { S3ObjectStorage } from "./s3ObjectStorage";
 
 export function createObjectStorage(source: NodeJS.ProcessEnv = process.env): ObjectStorage {
-  const provider = (source.STORAGE_PROVIDER?.trim() || "local").toLowerCase();
+  const provider = resolveStorageProviderName(source);
   if (provider === "local") return new LocalObjectStorage(resolveUploadsDir(source));
   if (provider !== "s3") throw new Error(`Unsupported STORAGE_PROVIDER: ${provider}`);
 
@@ -21,6 +21,13 @@ export function createObjectStorage(source: NodeJS.ProcessEnv = process.env): Ob
   });
 }
 
+export function resolveStorageProviderName(source: NodeJS.ProcessEnv = process.env) {
+  const provider = (source.STORAGE_PROVIDER?.trim() || "local").toLowerCase();
+  if (provider !== "local" && provider !== "s3") throw new Error(`Unsupported STORAGE_PROVIDER: ${provider}`);
+  return provider as "local" | "s3";
+}
+
+export const storageProviderName = resolveStorageProviderName();
 export const objectStorage = createObjectStorage();
 
 function required(source: NodeJS.ProcessEnv, name: string) {

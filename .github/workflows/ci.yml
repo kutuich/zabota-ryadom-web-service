@@ -30,6 +30,8 @@ jobs:
       VK_ID_ENABLED: "false"
       STORAGE_PROVIDER: local
       UPLOADS_DIR: /tmp/zabota-ci-uploads
+      LOG_LEVEL: warn
+      SENTRY_ENABLED: "false"
 
     services:
       postgres:

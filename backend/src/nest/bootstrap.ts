@@ -1,9 +1,10 @@
-import { randomUUID } from "node:crypto";
 import express from "express";
 import { NestFactory } from "@nestjs/core";
 import { ExpressAdapter, type NestExpressApplication } from "@nestjs/platform-express";
-import type { Request, Response, NextFunction } from "express";
 import { env } from "../config/env";
+import { initializeErrorTracking, type ErrorTracker } from "../observability/error-tracker";
+import { createHttpObservabilityMiddleware } from "../observability/http-observability.middleware";
+import { appLogger, NestStructuredLogger, type StructuredLogger } from "../observability/logger";
 import { AppModule } from "./app.module";
 import { NestHttpExceptionFilter } from "./common/nest-http-exception.filter";
 import { ZodValidationPipe } from "./common/zod-validation.pipe";
@@ -13,27 +14,26 @@ import { buildOpenApiDocument, exposeOpenApi } from "./openapi/openapi";
 export type NestApplicationOptions = {
   startScheduler?: boolean;
   exposeOpenApi?: boolean;
+  logger?: StructuredLogger;
+  errorTracker?: ErrorTracker;
 };
 
 export async function createNestApplication(options: NestApplicationOptions = {}) {
   const server = express();
+  const logger = options.logger ?? appLogger;
+  const errorTracker = options.errorTracker ?? initializeErrorTracking();
   const app = await NestFactory.create<NestExpressApplication>(
     AppModule,
     new ExpressAdapter(server),
-    { bodyParser: false }
+    { bodyParser: false, logger: new NestStructuredLogger(logger) }
   );
   app.enableCors({ origin: env.corsOrigin, credentials: true });
-  app.useGlobalFilters(new NestHttpExceptionFilter());
+  app.useGlobalFilters(new NestHttpExceptionFilter(logger, errorTracker));
   app.useGlobalPipes(new ZodValidationPipe());
   app.enableShutdownHooks();
-  app.get(ApplicationLifecycleService).configure({ startScheduler: options.startScheduler ?? true });
+  app.get(ApplicationLifecycleService).configure({ startScheduler: options.startScheduler ?? true, errorTracker });
 
-  server.use((req: Request, res: Response, next: NextFunction) => {
-    const requestId = typeof req.headers["x-request-id"] === "string" ? req.headers["x-request-id"] : randomUUID();
-    req.headers["x-request-id"] = requestId;
-    res.setHeader("X-Request-Id", requestId);
-    next();
-  });
+  server.use(createHttpObservabilityMiddleware(logger));
   server.use("/api/admin/service-conversations", express.json({ limit: "70mb" }));
   server.use(express.json({ limit: "8mb" }));
   if (options.exposeOpenApi ?? true) {
@@ -50,6 +50,6 @@ export async function createNestApplication(options: NestApplicationOptions = {}
 export async function bootstrapNestApplication() {
   const app = await createNestApplication();
   await app.listen(env.port, "0.0.0.0");
-  console.log(`Zabota Ryadom NestJS API listening on http://0.0.0.0:${env.port}`);
+  appLogger.info("application.started", { port: env.port });
   return app;
 }

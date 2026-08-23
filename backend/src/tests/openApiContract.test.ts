@@ -17,8 +17,8 @@ test("OpenAPI covers every runtime API route and preserves representative contra
       .filter(({ path }) => path.startsWith("/api/"))
       .map(({ method, path }) => `${method} ${path.replace(/:([A-Za-z0-9_]+)/g, "{$1}")}`);
 
-    assert.equal(runtime.length, 223);
-    assert.equal(documented.length, 223);
+    assert.equal(runtime.length, 224);
+    assert.equal(documented.length, 224);
     assert.equal(new Set(runtime).size, runtime.length, "runtime routes must not contain duplicates");
     assert.equal(new Set(documentedKeys).size, documentedKeys.length, "OpenAPI operations must not contain duplicates");
     assert.deepEqual([...documentedKeys].sort(), [...runtime].sort(), "every runtime API route must have an OpenAPI operation");
@@ -43,6 +43,11 @@ test("OpenAPI covers every runtime API route and preserves representative contra
     const healthSchema = healthResponse.content?.["application/json"]?.schema;
     assert.ok(healthSchema && !("$ref" in healthSchema));
     assert.deepEqual(healthSchema.required, ["status", "service"]);
+
+    const readinessOperation = document.paths["/api/ready"].get;
+    assert.deepEqual(readinessOperation?.security, []);
+    assert.ok(readinessOperation?.responses?.["200"]);
+    assert.ok(readinessOperation?.responses?.["503"]);
 
     const fileOperation = document.paths["/api/performer-documents/{id}/download"].get;
     assert.deepEqual(fileOperation?.security, [{ bearerAuth: [] }]);

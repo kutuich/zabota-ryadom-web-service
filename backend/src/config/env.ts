@@ -92,7 +92,8 @@ export const env = {
   vkIdSuccessRedirectPath: process.env.VK_ID_SUCCESS_REDIRECT_PATH ?? "/app/oauth/complete",
   vkIdFailRedirectPath: process.env.VK_ID_FAIL_REDIRECT_PATH ?? "/app/login?oauthError=vk",
   openApiJsonEnabled: resolveBooleanFlag("OPENAPI_JSON_ENABLED", nodeEnv !== "production"),
-  swaggerUiEnabled: resolveBooleanFlag("SWAGGER_UI_ENABLED", nodeEnv !== "production")
+  swaggerUiEnabled: resolveBooleanFlag("SWAGGER_UI_ENABLED", nodeEnv !== "production"),
+  readinessTimeoutMs: positiveNumber(process.env.READINESS_TIMEOUT_MS, 3000)
 };
 
 if (env.nodeEnv === "production" && env.jwtSecret.includes("change-me")) {
