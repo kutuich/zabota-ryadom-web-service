@@ -1,7 +1,7 @@
 # Индекс документации
 
 > Статус: ACTIVE INDEX  
-> Актуализировано: 2026-08-22
+> Актуализировано: 2026-08-23
 
 ## Разрешение конфликтов
 
@@ -40,6 +40,7 @@ Notion отвечает на вопрос «как продукт должен �
 | [`NESTJS_MIGRATION.md`](NESTJS_MIGRATION.md) | active | Фактическое состояние перехода Express -> NestJS, ownership доменов и критерии удаления bridge | При переносе backend routes или lifecycle | README по backend framework |
 | [`API_OPENAPI.md`](API_OPENAPI.md) | active | Генерация OpenAPI, Swagger exposure, contract inventory и известная точность схем | При изменении HTTP routes, DTO или OpenAPI infrastructure | README по API contract |
 | [`OBJECT_STORAGE.md`](OBJECT_STORAGE.md) | active | Storage interface, S3/local adapters, access, migration, verification и rollback boundary | При изменении file storage/provider/cutover | Общие uploads assumptions в operational docs |
+| [`CI_CD.md`](CI_CD.md) | active | GitHub Actions CI gates, test-safe environment, audit baseline и локальное воспроизведение | При изменении workflow, CI policy или обязательных checks | README по автоматизированным проверкам |
 | [`SECURITY_PRODUCTION_CHECKLIST.md`](../SECURITY_PRODUCTION_CHECKLIST.md) | operational | Security review production | При изменении auth/storage/payments/workflow | Не главнее domain security rules |
 | [`CHANGE_MANAGEMENT.md`](CHANGE_MANAGEMENT.md) | active | Процесс будущих изменений | При изменении engineering process | README по процессу |
 | [`DECISIONS_LOG.md`](DECISIONS_LOG.md) | historical | Краткая история утверждённых решений | При каждом новом/изменённом решении | Старые отчёты, но не current source |
