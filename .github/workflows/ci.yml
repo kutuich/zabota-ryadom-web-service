@@ -126,3 +126,58 @@ jobs:
           -e "for (const name of ['prisma', '@prisma/config', 'deepmerge-ts']) {
           try { require.resolve(name); process.exit(1); } catch (error) {
           if (error.code !== 'MODULE_NOT_FOUND') throw error; } }"
+
+  critical-e2e:
+    name: Playwright critical E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      E2E_DATABASE_URL: postgresql://zabota_e2e:zabota_e2e_only@127.0.0.1:5432/zabota_e2e?schema=public
+      E2E_JWT_SECRET: ci-e2e-only-session-secret-not-for-production
+      E2E_UPLOADS_DIR: /tmp/zabota-e2e-uploads
+
+    services:
+      postgres:
+        image: postgres:16.15-bookworm
+        env:
+          POSTGRES_DB: zabota_e2e
+          POSTGRES_USER: zabota_e2e
+          POSTGRES_PASSWORD: zabota_e2e_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U zabota_e2e -d zabota_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Install Chromium runtime
+        run: npx playwright install --with-deps chromium
+
+      - name: Run critical browser scenarios
+        run: npm run test:e2e
+
+      - name: Upload Playwright diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/playwright/
+          retention-days: 7

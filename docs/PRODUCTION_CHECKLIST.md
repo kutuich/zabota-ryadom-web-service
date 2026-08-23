@@ -79,6 +79,9 @@
 - [ ] Выполнены `npm run check`, `npm test`, `npm run build`, Docker build и `git diff --check`.
 - [ ] Для rollback сохранены предыдущий image/tag, DB backup и env backup.
 - [ ] Подтверждено, совместим ли предыдущий application image с новой schema; при несовместимости rollback требует остановки application и восстановления DB backup.
+- [ ] Выполнен порядок и зафиксированы forward-only boundaries из [`RELEASE_READINESS.md`](RELEASE_READINESS.md); write freeze снят только после readiness и UAT.
+- [ ] Critical Playwright E2E, OpenAPI generation и security policy зелёные на release commit в GitHub Actions.
+- [ ] Проверены nested `/app/*`, `/app/assets/*`, `/legal/*` и landing `.html` через production Express 5 adapter.
 # User Management & Security
 
 - [ ] В backup-копии подтверждён ровно один active `superadmin`.

@@ -1,7 +1,7 @@
 # Миграция backend HTTP ownership на NestJS
 
 > Статус: ACTIVE TECHNICAL DOCUMENT  
-> Актуализировано: 2026-08-21
+> Актуализировано: 2026-08-23
 
 Документ фиксирует фактическое состояние framework migration. Продуктовые правила и целевая архитектура остаются в Notion.
 
@@ -13,8 +13,8 @@ Runtime HTTP ownership полностью перенесён в NestJS:
 - 220 ранее Express-owned API endpoints зарегистрированы 34 Nest controller surfaces в 11 domain modules;
 - `/api/health`, static frontend/landing delivery и protected `/uploads` fallback также принадлежат NestJS;
 - `legacy-express.bridge.ts`, 23 legacy router files, `app.ts` и Express auth middleware удалены;
-- duplicate method + URL registrations нет; integration test проверяет 221 API route registrations с учётом health;
-- NestJS продолжает использоват Express HTTP adapter. Это не legacy router architecture.
+- duplicate method + URL registrations нет; integration test проверяет 224 API registrations: 222 application routes плюс health и readiness;
+- NestJS использует штатный Express 5.2 HTTP adapter, совместимый с NestJS 11. Это не legacy router architecture. Critical E2E отдельно проверяет production static wildcards для nested `/app/*`, assets, legal и landing pages.
 
 Authentication в HTTP pipeline выполняют Nest guards. JWT, acting-role, VK OAuth, audit, idempotency, payment providers и domain services не перепроектировывались. Router-level Zod schemas сохранены в controllers с прежними границами валидации; общий `ZodValidationPipe` остаётся для DTO-oriented controllers.
 

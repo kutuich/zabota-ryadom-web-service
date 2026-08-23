@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { BalanceSummary, PaymentTransaction } from "../types";
 import { formatDateTimeRu } from "../utils/dateTime";
+import { mockPaymentUiEnabled } from "../utils/runtimeFlags";
 
 const quickAmounts = [150, 300, 500, 1000];
 
@@ -43,7 +44,7 @@ export function BalancePanel() {
         await load();
         return;
       }
-      if (payment.provider === "mock" && !import.meta.env.DEV) {
+      if (payment.provider === "mock" && !mockPaymentUiEnabled) {
         setMessage("Пополнение через банк пока не включено.");
         await load();
         return;

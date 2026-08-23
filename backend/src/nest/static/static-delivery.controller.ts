@@ -52,7 +52,7 @@ export class StaticDeliveryController {
 
   @Get("*path")
   fallback(@Req() request: Request, @Res() response: Response) {
-    if (env.nodeEnv !== "production") return response.status(404).send("Not found");
+    if (!staticDeliveryEnabled()) return response.status(404).send("Not found");
     const relativePath = request.path.replace(/^\/+/, "");
     if (landingHtmlFiles.has(relativePath)) return this.sendFile(this.landingPublicPath, relativePath, response);
     if (
@@ -64,12 +64,12 @@ export class StaticDeliveryController {
   }
 
   private sendProductionFile(root: string, relativePath: string, response: Response) {
-    if (env.nodeEnv !== "production") return response.status(404).send("Not found");
+    if (!staticDeliveryEnabled()) return response.status(404).send("Not found");
     return this.sendFile(root, relativePath, response);
   }
 
   private sendStaticFile(root: string, relativePath: string, response: Response) {
-    if (env.nodeEnv !== "production") return response.status(404).send("Not found");
+    if (!staticDeliveryEnabled()) return response.status(404).send("Not found");
     return this.sendFile(root, relativePath, response);
   }
 
@@ -109,4 +109,9 @@ function resolveProjectRoot() {
 
 function hasStaticRoots(candidateRoot: string) {
   return fs.existsSync(path.join(candidateRoot, "frontend")) || fs.existsSync(path.join(candidateRoot, "landing-public"));
+}
+
+function staticDeliveryEnabled() {
+  return env.nodeEnv === "production"
+    || (env.nodeEnv === "test" && process.env.E2E_STATIC_DELIVERY_ENABLED === "true");
 }

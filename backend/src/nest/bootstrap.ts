@@ -34,8 +34,14 @@ export async function createNestApplication(options: NestApplicationOptions = {}
   app.get(ApplicationLifecycleService).configure({ startScheduler: options.startScheduler ?? true, errorTracker });
 
   server.use(createHttpObservabilityMiddleware(logger));
-  server.use("/api/admin/service-conversations", express.json({ limit: "70mb" }));
-  server.use(express.json({ limit: "8mb" }));
+  const serviceConversationJson = express.json({ limit: "70mb" });
+  const defaultJson = express.json({ limit: "8mb" });
+  server.use((req, res, next) => {
+    const parser = req.path.startsWith("/api/admin/service-conversations")
+      ? serviceConversationJson
+      : defaultJson;
+    parser(req, res, next);
+  });
   if (options.exposeOpenApi ?? true) {
     const document = buildOpenApiDocument(app);
     exposeOpenApi(app, document, {

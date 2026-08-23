@@ -10,8 +10,8 @@
 - backend regression-suite сохранён целиком в `backend/src/tests/business.test.ts`;
 - backend suite выполняется последовательно, так как characterization-сценарии используют общую тестовую базу;
 - frontend suite проверяет маршруты, роли, тексты и статические UI-контракты;
-- Playwright остаётся инструментом visual/E2E-проверок и не заменяется Vitest.
-- `backend/src/tests/nestBootstrap.test.ts` поднимает реальное NestJS HTTP-приложение на случайном локальном порту и проверяет health, legal, login, balance, admin/file guards, безопасный отключённый VK path, все 221 API registrations и отсутствие duplicate routes;
+- Playwright выполняет отдельный critical E2E suite и не заменяет Vitest.
+- `backend/src/tests/nestBootstrap.test.ts` поднимает реальное NestJS HTTP-приложение на случайном локальном порту и проверяет health, readiness, legal, login, balance, admin/file guards, безопасный отключённый VK path, все 224 API registrations и отсутствие duplicate routes;
 - закрытие NestJS application проверяет единый shutdown path для Prisma и одноинстансового scheduler.
 
 Команды:
@@ -20,6 +20,7 @@
 npm test
 npm run test -w backend
 npm run test -w frontend
+npm run test:e2e
 ```
 
 Перед полным backend regression-suite база должна иметь актуальную schema и системные/demo-данные, а `frontend/dist` должен быть собран для static routing tests.
@@ -37,6 +38,20 @@ TEST_DATABASE_URL='postgresql://zabota_local:zabota_local_only@127.0.0.1:55432/z
 ```
 
 Перед повторным полным прогоном test schema нужно очистить, повторно применить migration history и seed. Не направлять suite на rehearsal, development или production database.
+
+## Critical Playwright E2E
+
+`playwright.config.ts` запускает production frontend build и реальный NestJS backend на `127.0.0.1:4400`, но использует test-only cookie mode, mock payments, local object storage, disabled VK/Sentry/scheduler и отдельную PostgreSQL database. `scripts/prepare-e2e.mjs` откажется reset-ить удалённую базу или базу, имя которой не заканчивается `_e2e`.
+
+```bash
+nvm use 22
+docker compose -f compose.postgres-rehearsal.yml up -d --wait
+# Один раз создать отдельную локальную zabota_e2e, если её ещё нет.
+npx playwright install chromium
+npm run test:e2e
+```
+
+Suite проверяет public/app/static delivery, регистрацию/legal consent, login/reload/refresh/logout, отсутствие auth secrets в Web Storage, role/admin denial, request→response→chat→terms→double confirmation→`in_work`, отсутствие раннего fee, mock top-up success UI и protected file ownership. Complex request fixture создаётся через публичный API; пользовательские переходы/состояния проверяются браузером. Live T-Bank/VK и production secrets не используются.
 
 ## Characterization coverage
 

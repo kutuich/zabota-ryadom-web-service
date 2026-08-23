@@ -42,6 +42,7 @@ Notion отвечает на вопрос «как продукт должен �
 | [`OBJECT_STORAGE.md`](OBJECT_STORAGE.md) | active | Storage interface, S3/local adapters, access, migration, verification и rollback boundary | При изменении file storage/provider/cutover | Общие uploads assumptions в operational docs |
 | [`CI_CD.md`](CI_CD.md) | active | GitHub Actions CI gates, test-safe environment, audit baseline и локальное воспроизведение | При изменении workflow, CI policy или обязательных checks | README по автоматизированным проверкам |
 | [`OBSERVABILITY.md`](OBSERVABILITY.md) | active | JSON logging, correlation, redaction, readiness и error tracking | При изменении runtime logging, health/readiness или Sentry configuration | Разрозненные logging assumptions в operational docs |
+| [`RELEASE_READINESS.md`](RELEASE_READINESS.md) | operational | Architecture/security matrix и production cutover/rollback runbook | При изменении release gates, migrations, backups или cutover boundary | Общие release assumptions в checklists |
 | [`SECURITY_PRODUCTION_CHECKLIST.md`](../SECURITY_PRODUCTION_CHECKLIST.md) | operational | Security review production | При изменении auth/storage/payments/workflow | Не главнее domain security rules |
 | [`CHANGE_MANAGEMENT.md`](CHANGE_MANAGEMENT.md) | active | Процесс будущих изменений | При изменении engineering process | README по процессу |
 | [`DECISIONS_LOG.md`](DECISIONS_LOG.md) | historical | Краткая история утверждённых решений | При каждом новом/изменённом решении | Старые отчёты, но не current source |

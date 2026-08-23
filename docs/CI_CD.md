@@ -26,6 +26,8 @@ OpenAPI JSON создаётся в `backend/generated/openapi.json`. Это пр
 
 Отдельный job собирает Docker targets `migration` и `runner`. Runner загружается только локально в GitHub runner и дополнительно проверяется на отсутствие Prisma CLI, `@prisma/config` и `deepmerge-ts`. Образы не публикуются.
 
+Job `Playwright critical E2E` использует отдельный PostgreSQL service, Chromium и clean `_e2e` database с mock payments/local storage. Browser dependencies отделены от quality job. При failure diagnostics хранятся 7 дней; production access/secrets не используются.
+
 ## Test-safe configuration
 
 CI использует только локальные для job значения:
@@ -65,6 +67,7 @@ npm run build
 npm test
 npm run api:openapi
 npm run security:audit-ci
+npm run test:e2e
 git diff --check
 ```
 

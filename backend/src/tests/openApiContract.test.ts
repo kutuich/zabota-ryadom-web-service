@@ -80,8 +80,9 @@ test("OpenAPI covers every runtime API route and preserves representative contra
 function expressRouteInventory(app: Awaited<ReturnType<typeof createNestApplication>>) {
   const server = app.getHttpAdapter().getInstance() as {
     _router?: { stack?: Array<{ route?: { path: string | string[]; methods: Record<string, boolean> } }> };
+    router?: { stack?: Array<{ route?: { path: string | string[]; methods: Record<string, boolean> } }> };
   };
-  return (server._router?.stack ?? []).flatMap((layer) => {
+  return (server.router?.stack ?? server._router?.stack ?? []).flatMap((layer) => {
     if (!layer.route) return [];
     const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
     const methods = Object.entries(layer.route.methods)

@@ -5909,14 +5909,14 @@ function directoryExists(directoryPath: string) {
 }
 
 function expressRoutePaths(app: ReturnType<typeof createApp>) {
-  return ((app as any)._router?.stack ?? []).flatMap((layer: any) => {
+  return ((app as any).router?.stack ?? (app as any)._router?.stack ?? []).flatMap((layer: any) => {
     if (!layer.route) return [];
     return Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
   });
 }
 
 function routeIndex(app: ReturnType<typeof createApp>, expectedPath: string) {
-  return ((app as any)._router?.stack ?? []).findIndex((layer: any) => {
+  return ((app as any).router?.stack ?? (app as any)._router?.stack ?? []).findIndex((layer: any) => {
     if (!layer.route) return false;
     const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
     return paths.includes(expectedPath);

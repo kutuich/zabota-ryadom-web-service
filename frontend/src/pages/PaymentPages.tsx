@@ -7,10 +7,11 @@ import { paymentProviderLabel, paymentStatusLabel } from "../components/BalanceP
 import { useAuth } from "../context/AuthContext";
 import type { PaymentTransaction } from "../types";
 import { effectiveRoleForUser } from "../utils/authRole";
+import { mockPaymentUiEnabled } from "../utils/runtimeFlags";
 
 export function MockPaymentPage() {
   const { user } = useAuth();
-  if (!import.meta.env.DEV) {
+  if (!mockPaymentUiEnabled) {
     return (
       <PaymentShell title="Пополнение временно недоступно" icon={<AlertCircle size={28} />}>
         <p>Пополнение через банк пока не включено.</p>

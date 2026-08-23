@@ -17,6 +17,8 @@
     "build": "npm run build -w backend && npm run build -w frontend",
     "check": "npm run check -w backend && npm run check -w frontend",
     "test": "npm run test:ci-policy && npm run test -w backend && npm run test -w frontend",
+    "test:e2e": "node scripts/prepare-e2e.mjs && playwright test",
+    "test:e2e:run": "playwright test",
     "test:ci-policy": "node --test scripts/tests/production-audit-policy.test.mjs",
     "security:audit-ci": "node scripts/check-production-audit.mjs",
     "api:openapi": "npm run api:openapi -w backend",
@@ -39,7 +41,7 @@
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
-    "playwright": "^1.61.1",
+    "@playwright/test": "1.61.1",
     "prisma": "^6.1.0",
     "vitest": "^3.2.4"
   }
