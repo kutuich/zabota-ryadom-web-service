@@ -1,11 +1,18 @@
-import bcrypt from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
 
-const phoneService = await import("../backend/dist/src/services/phoneService.js");
-const normalizeRussianPhone = phoneService.normalizeRussianPhone ?? phoneService.default?.normalizeRussianPhone;
+process.env.NODE_ENV ||= "production";
 
-if (typeof normalizeRussianPhone !== "function") {
-  throw new Error("Phone normalization service is not available.");
+const loggerModule = await import("../backend/dist/src/observability/logger.js");
+const appLogger = loggerModule.appLogger ?? loggerModule.default?.appLogger;
+if (!appLogger) throw new Error("Structured runtime logger is unavailable. Build the backend before bootstrap.");
+
+const phoneService = await import("../backend/dist/src/services/phoneService.js");
+const passwordService = await import("../backend/dist/src/services/passwordService.js");
+const normalizeRussianPhone = phoneService.normalizeRussianPhone ?? phoneService.default?.normalizeRussianPhone;
+const hashPassword = passwordService.hashPassword ?? passwordService.default?.hashPassword;
+
+if (typeof normalizeRussianPhone !== "function" || typeof hashPassword !== "function") {
+  throw new Error("Required authentication services are not available. Build the backend before bootstrap.");
 }
 
 const email = requiredEnv("PRODUCTION_ADMIN_EMAIL").trim().toLowerCase();
@@ -18,11 +25,11 @@ const prisma = new PrismaClient();
 try {
   const usersCount = await prisma.user.count();
   if (usersCount !== 0) {
-    console.log(`Database already has ${usersCount} users. Production admin bootstrap skipped.`);
+    appLogger.info("application.production_admin_bootstrap.skipped", { usersCount });
     process.exit(0);
   }
 
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await hashPassword(password);
   const now = new Date();
 
   await prisma.user.create({
@@ -42,7 +49,7 @@ try {
     }
   });
 
-  console.log(`Production administrator created: ${email}`);
+  appLogger.info("application.production_admin_bootstrap.completed");
 } finally {
   await prisma.$disconnect();
 }

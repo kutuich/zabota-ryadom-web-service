@@ -45,7 +45,8 @@ import type {
 } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
-const TOKEN_KEY = "zabota_ryadom_token";
+let accessToken: string | null = null;
+let refreshRequest: Promise<string | null> | null = null;
 
 type ApiOptions = RequestInit & {
   token?: string | null;
@@ -64,16 +65,12 @@ export class ApiError extends Error {
   }
 }
 
-export function getStoredToken() {
-  return localStorage.getItem(TOKEN_KEY);
+export function getAccessToken() {
+  return accessToken;
 }
 
-export function setStoredToken(token: string | null) {
-  if (token) {
-    localStorage.setItem(TOKEN_KEY, token);
-  } else {
-    localStorage.removeItem(TOKEN_KEY);
-  }
+export function setAccessToken(token: string | null) {
+  accessToken = token;
 }
 
 function queryString(params: Record<string, string | number | boolean | null | undefined>) {
@@ -88,24 +85,92 @@ function queryString(params: Record<string, string | number | boolean | null | u
 }
 
 export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
-  const token = options.token ?? getStoredToken();
+  const token = options.token ?? getAccessToken();
+  const response = await sendApiRequest(path, options, token);
+  if (token && path !== "/auth/refresh" && path !== "/auth/logout" && await isRefreshableAuthFailure(response)) {
+    const refreshedToken = await refreshAccessToken();
+    if (refreshedToken) return parseApiResponse<T>(await sendApiRequest(path, options, refreshedToken));
+  }
+  return parseApiResponse<T>(response);
+}
+
+async function isRefreshableAuthFailure(response: Response) {
+  if (response.status !== 401) return false;
+  const payload = await response.clone().json().catch(() => null) as { code?: string } | null;
+  return ["auth_invalid", "session_revoked", "acting_session_invalid"].includes(payload?.code ?? "");
+}
+
+async function sendApiRequest(path: string, options: ApiOptions, token: string | null) {
   const headers = new Headers(options.headers);
   headers.set("Content-Type", "application/json");
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
+  return fetch(`${API_BASE}${path}`, {
     ...options,
-    headers
+    headers,
+    credentials: "include"
   });
+}
 
+async function parseApiResponse<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
     throw new ApiError(response.status, payload?.error ?? "Ошибка запроса", payload?.code, payload?.details);
   }
 
   return payload as T;
+}
+
+export async function refreshAccessToken() {
+  if (!refreshRequest) {
+    refreshRequest = fetch(`${API_BASE}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include"
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          setAccessToken(null);
+          return null;
+        }
+        const payload = await response.json() as { token: string };
+        setAccessToken(payload.token);
+        return payload.token;
+      })
+      .finally(() => {
+        refreshRequest = null;
+      });
+  }
+  return refreshRequest;
+}
+
+async function downloadProtectedFile(path: string, fileName: string, errorMessage: string) {
+  const response = await protectedFileFetch(path);
+  if (!response.ok) throw new ApiError(response.status, errorMessage);
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function protectedFileFetch(path: string) {
+  const request = (token: string | null) => fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${token ?? ""}` }
+  });
+  const token = getAccessToken();
+  let response = await request(token);
+  if (response.status === 401 && token) {
+    const refreshedToken = await refreshAccessToken();
+    if (refreshedToken) response = await request(refreshedToken);
+  }
+  return response;
 }
 
 export const api = {
@@ -133,6 +198,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body)
     }),
+  refreshSession: () => refreshAccessToken(),
+  logout: () => apiFetch<{ loggedOut: true }>("/auth/logout", { method: "POST" }),
   register: (body: {
     role: "client" | "performer";
     phone: string;
@@ -251,6 +318,8 @@ export const api = {
     apiFetch("/complaints", { method: "POST", body: JSON.stringify(body) }),
   knowledge: (audience: string) => apiFetch<KnowledgeArticle[]>(`/knowledge?audience=${audience}`),
   performerDocuments: () => apiFetch<PerformerDocument[]>("/performer-documents"),
+  downloadPerformerDocument: (id: string, fileName: string) => downloadProtectedFile(`/performer-documents/${id}/download`, fileName, "Не удалось скачать документ"),
+  downloadAgreementContract: (id: string, fileName: string) => downloadProtectedFile(`/agreement-contracts/${id}/download`, fileName, "Не удалось скачать проект договора"),
   updatePerformerProfile: (body: Record<string, unknown>) =>
     apiFetch("/performer-profile/me", { method: "PATCH", body: JSON.stringify(body) }),
   categoriesForRequest: (cityId: string) => apiFetch<CategoriesForCity>(`/categories/for-request?cityId=${encodeURIComponent(cityId)}`),
@@ -295,7 +364,7 @@ export const api = {
   cancelBroadcast: (id: string) => apiFetch<import("../types").BroadcastCampaign>(`/admin/broadcasts/${id}/cancel`, { method: "POST" }),
   messagePaymentUser: (paymentId: string, body: Record<string, unknown>) => apiFetch(`/admin/payments/${paymentId}/message-user`, { method: "POST", body: JSON.stringify(body) }),
   downloadServiceAttachment: async (id: string, originalFileName: string) => {
-    const response = await fetch(`${API_BASE}/service-message-attachments/${id}/download`, { headers: { Authorization: `Bearer ${getStoredToken() ?? ""}` } });
+    const response = await protectedFileFetch(`/service-message-attachments/${id}/download`);
     if (!response.ok) throw new ApiError(response.status, "Не удалось скачать вложение");
     const url = URL.createObjectURL(await response.blob());
     const link = document.createElement("a");

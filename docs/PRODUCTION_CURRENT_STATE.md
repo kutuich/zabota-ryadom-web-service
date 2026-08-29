@@ -58,10 +58,14 @@ systemctl status caddy --no-pager
 - изменение финализированного графика с финансовой дельтой не реализовано;
 - agreement schedule остаётся technical draft до юридического утверждения.
 
-Deploy procedure: [DEPLOY_TIMEWEB.md](DEPLOY_TIMEWEB.md). Checklist: [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md).
-# User Management & Security v1.0
+## PostgreSQL transition
 
-Целевая модель ролей: Суперадминистратор, Менеджер, Заказчик, Помощник. `admin` оставлен deprecated только на уровне совместимости. Реализованы версионный отзыв JWT, административный временный пароль с TTL, обязательная смена, самостоятельная смена пароля и никнейма. Таблица отдельных устройств/refresh-сессий не реализована.
+Репозиторий подготовлен к локальной PostgreSQL-репетиции, но этот факт не меняет production автоматически. Production по-прежнему использует `/opt/zabota/data/zabota.db`. Версию с PostgreSQL Prisma provider нельзя разворачивать обычным deploy до отдельного backup, rehearsal на production-копии, provision PostgreSQL, controlled cutover и проверенного rollback.
+
+Deploy procedure: [DEPLOY_TIMEWEB.md](DEPLOY_TIMEWEB.md). Checklist: [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md).
+# User Management & Security
+
+Целевая модель ролей: Суперадминистратор, Менеджер, Заказчик, Помощник. `admin` оставлен deprecated только на уровне совместимости. В текущем коде пароли создаются только Argon2id; access JWT короткий, а rotating refresh-session хранится в `AuthSession` и HttpOnly cookie. Смена/reset пароля, роли и блокировка отзывают сессии. Это изменение не разворачивалось в production; перед release обязательны backup, credential inventory и контролируемый reset неподдерживаемых legacy hashes.
 # Не активировано автоматически
 
 Schema v3 и черновики реализованы в коде. Отдельный v3 seed создаёт draft-версии и не переключает production effective structure. Production env, БД и deploy этим этапом не изменяются.

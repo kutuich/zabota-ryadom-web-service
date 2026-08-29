@@ -271,7 +271,7 @@ echo
 # 1. Project structure and env presence (contents of real env files are never read).
 echo "[1/14] Структура проекта и env-файлы"
 detail_heading "Структура проекта"
-for required_path in backend frontend landing-public Dockerfile package.json package-lock.json scripts docs ZABOTA_RYADOM_CURRENT_SOURCE_OF_TRUTH.md docs/DOCUMENTATION_INDEX.md docs/REQUEST_WORKFLOW_V2.md docs/REQUEST_CALCULATOR.md; do
+for required_path in backend frontend landing-public Dockerfile package.json package-lock.json scripts docs AGENTS.md docs/DOCUMENTATION_INDEX.md docs/REQUEST_WORKFLOW_V2.md docs/REQUEST_CALCULATOR.md docs/TESTING.md; do
   if [ -e "$required_path" ]; then
     detail_text "- $required_path: найдено."
   else

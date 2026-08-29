@@ -2,30 +2,37 @@
 
 Web-сервис бытовой помощи семье, дому и близким. Заказчик создаёт заявку, Помощник откликается, стороны согласуют конечный график в чате и подтверждают одну версию условий.
 
-Нормативные требования: [`ZABOTA_RYADOM_CURRENT_SOURCE_OF_TRUTH.md`](ZABOTA_RYADOM_CURRENT_SOURCE_OF_TRUTH.md). Карта документации: [`docs/DOCUMENTATION_INDEX.md`](docs/DOCUMENTATION_INDEX.md).
+Продуктовая архитектура и требования утверждаются в Notion. Репозиторий фиксирует фактическую реализацию, технические контракты и эксплуатационные инструкции; карта документов находится в [`docs/DOCUMENTATION_INDEX.md`](docs/DOCUMENTATION_INDEX.md).
 
 ## Стек
 
 - React, TypeScript, Vite, plain CSS;
-- Node.js, Express, TypeScript;
-- Prisma и SQLite;
-- JWT; OAuth VK ID включается env-флагами;
+- Node.js, NestJS, TypeScript; NestJS работает на стандартном Express HTTP adapter без legacy router bridge;
+- Prisma и PostgreSQL 16; SQLite поддерживается только как источник миграционной репетиции;
+- private S3-compatible object storage через заменяемый adapter; local filesystem остаётся dev/test и rollback provider до production cutover;
+- Argon2id; короткий JWT access token в памяти клиента и rotating HttpOnly refresh-session; OAuth VK ID включается env-флагами;
 - Docker; production HTTPS через Caddy;
 - mock и T-Bank adapters для пополнения внутреннего баланса.
 
 ## Локальный запуск
 
+Проект закреплён на Node.js 22 LTS (`.nvmrc`, `package.json#engines`), как и Docker runtime.
+
 ```bash
 cp .env.example .env
 npm install
 npm run db:generate
-npm run db:push
+docker compose -f compose.postgres-rehearsal.yml up -d
+npm run db:migrate:deploy
 npm run db:seed
 npm run dev
 ```
 
 - frontend: `http://localhost:5173`;
-- backend health: `http://localhost:4000/api/health`.
+- backend liveness: `http://localhost:4000/api/health`;
+- backend dependency readiness: `http://localhost:4000/api/ready`.
+- Swagger UI: `http://localhost:4000/api/docs` (вне production по умолчанию);
+- OpenAPI JSON: `http://localhost:4000/api/openapi.json` (вне production по умолчанию).
 
 Локальные безопасные значения: `PAYMENT_PROVIDER=mock`, `TBANK_TERMINAL_MODE=test`, `PAYMENT_RECEIPT_ENABLED=false`, `ALLOW_LEGACY_MOCK_TOP_UP=false`. Секреты из examples необходимо заменить; реальные значения не коммитятся.
 
@@ -35,11 +42,13 @@ npm run dev
 
 ```bash
 cp .env.preview.example .env.preview
-docker build -t zabota-web-service .
+docker build --target migration -t zabota-migration .
+docker run --rm --env-file .env.preview zabota-migration
+docker build --target runner -t zabota-web-service .
 docker run --rm -p 4000:4000 --env-file .env.preview -v zabota-local-data:/data zabota-web-service
 ```
 
-SQLite внутри контейнера всегда требует persistent volume для `/data`. Без него база и uploads не переживут пересоздание контейнера.
+Локальный PostgreSQL запускается через `compose.postgres-rehearsal.yml`. По умолчанию files использует local adapter; MinIO-контур и перенос описаны в [`docs/OBJECT_STORAGE.md`](docs/OBJECT_STORAGE.md).
 
 На macOS `start-zabota-local.command` собирает и запускает локальный контейнер, а `stop-zabota-local.command` его останавливает. Флаг `SEED_DEMO_DATA=true` допустим только для локальной demo-среды.
 
@@ -64,16 +73,20 @@ SQLite внутри контейнера всегда требует persistent 
 npm run check
 npm test
 npm run build
+npm run api:openapi
+npm run auth:credential-inventory
+npm run storage:inventory -- --output=storage-migration-reports/inventory.json
 npm run visual:audit
 npm run db:generate
 ```
 
-`npm run db:push` выполняется только для явно выбранной локальной или временной базы. Destructive push и `--accept-data-loss` не используются.
+Локально schema применяется через `npm run db:migrate:deploy`. Production-style процесс использует отдельный migration target/service перед application runner; application startup Prisma CLI не вызывает. Репетиция SQLite -> PostgreSQL описана в [`docs/POSTGRESQL_MIGRATION_REHEARSAL.md`](docs/POSTGRESQL_MIGRATION_REHEARSAL.md).
+Правила генерации и проверки фактического API contract описаны в [`docs/API_OPENAPI.md`](docs/API_OPENAPI.md); generated JSON не хранится в Git.
 
 ## Структура
 
 - `backend/prisma/schema.prisma` — модель данных;
-- `backend/src/routes` — HTTP API;
+- `backend/src/nest` — NestJS bootstrap, domain modules, controllers, guards, lifecycle и общая HTTP infrastructure;
 - `backend/src/services` — доменная логика;
 - `frontend/src` — приложение и ролевые кабинеты;
 - `landing-public` — публичные статические страницы;
@@ -96,6 +109,7 @@ npm run db:generate
 - изменение уже финализированного графика с финансовой дельтой не реализовано;
 - соглашение о графике остаётся техническим черновиком до юридического утверждения;
 - частичный банковский возврат требует ручной проверки;
-- SQLite допустим для одного production-инстанса с persistent storage и backup; PostgreSQL нужен перед горизонтальным масштабированием;
+- текущий production остаётся на SQLite до отдельного контролируемого cutover; код этого этапа нельзя деплоить до миграции production данных;
+- runtime ownership всех HTTP endpoints перенесён в NestJS; полный inventory зафиксирован в [`docs/NESTJS_MIGRATION.md`](docs/NESTJS_MIGRATION.md);
 - встроенное геокодирование Яндекс.Карт не подключено;
 - внешняя отправка сервисных сообщений по email/SMS не реализована.

@@ -1,19 +1,20 @@
 import { spawn, spawnSync } from "node:child_process";
-import { dirname, isAbsolute, resolve } from "node:path";
-import { mkdirSync } from "node:fs";
 import { PrismaClient } from "@prisma/client";
 
 process.env.NODE_ENV ||= "production";
 process.env.PORT ||= "4000";
-process.env.DATABASE_URL ||= "file:/data/zabota.db";
-process.env.DATABASE_URL = stripSurroundingQuotes(process.env.DATABASE_URL);
 
-const databasePath = sqlitePathFromDatabaseUrl(process.env.DATABASE_URL);
-if (databasePath) {
-  mkdirSync(dirname(databasePath), { recursive: true });
+const loggerModule = await import("../backend/dist/src/observability/logger.js");
+const appLogger = loggerModule.appLogger ?? loggerModule.default?.appLogger;
+if (!appLogger) throw new Error("Structured runtime logger is unavailable. Build the backend before startup.");
+if (!process.env.DATABASE_URL?.trim()) {
+  throw new Error("DATABASE_URL is required. Apply PostgreSQL migrations before application startup.");
+}
+process.env.DATABASE_URL = stripSurroundingQuotes(process.env.DATABASE_URL);
+if (!/^postgres(ql)?:\/\//.test(process.env.DATABASE_URL)) {
+  throw new Error("DATABASE_URL must point to PostgreSQL. SQLite is supported only as an explicit migration source.");
 }
 
-run("npx", ["prisma", "db", "push", "--schema", "backend/prisma/schema.prisma", "--skip-generate"]);
 run("node", ["backend/dist/src/scripts/bootstrapCityDirectory.js"]);
 
 const prisma = new PrismaClient();
@@ -22,16 +23,16 @@ await prisma.$disconnect();
 
 if (usersCount === 0) {
   if (process.env.SEED_DEMO_DATA === "true") {
-    console.log("Database is empty and SEED_DEMO_DATA=true. Running demo seed once.");
+    appLogger.info("application.seed_demo.started");
     run("node", ["backend/dist/prisma/seed.js"]);
   } else if (hasProductionAdminEnv()) {
-    console.log("Database is empty. Creating production administrator from environment.");
+    appLogger.info("application.production_admin_bootstrap.started");
     run("node", ["scripts/bootstrap-production-admin.mjs"]);
   } else {
-    console.log("Database is empty. Demo seed is disabled and production administrator env is incomplete. Skipping seed.");
+    appLogger.warn("application.empty_database.bootstrap_skipped");
   }
 } else {
-  console.log(`Database already has ${usersCount} users. Skipping seed.`);
+  appLogger.info("application.database_seed_skipped", { usersCount });
 }
 
 const server = spawn("node", ["backend/dist/src/index.js"], {
@@ -64,12 +65,6 @@ function run(command, args) {
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }
-}
-
-function sqlitePathFromDatabaseUrl(databaseUrl) {
-  if (!databaseUrl.startsWith("file:")) return null;
-  const rawPath = databaseUrl.slice("file:".length).split("?")[0];
-  return isAbsolute(rawPath) ? rawPath : resolve(process.cwd(), rawPath);
 }
 
 function stripSurroundingQuotes(value) {

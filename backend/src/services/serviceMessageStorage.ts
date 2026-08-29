@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { uploadsRoot, resolveStoragePath } from "./uploadStorage";
+import { objectStorage } from "../storage/storageProvider";
 import { HttpError } from "../utils/http";
 
 export const SERVICE_ATTACHMENT_MAX_FILES = 5;
@@ -46,21 +45,16 @@ export async function savePreparedServiceAttachments(input: {
   messageId: string;
   files: PreparedServiceAttachment[];
 }) {
-  const now = new Date();
-  const relativeDirectory = path.join(
-    "service-messages",
-    safeSegment(input.userId),
-    String(now.getUTCFullYear()),
-    String(now.getUTCMonth() + 1).padStart(2, "0"),
-    safeSegment(input.messageId)
-  );
-  const directory = resolveStoragePath(uploadsRoot, relativeDirectory);
-  await fs.mkdir(directory, { recursive: true });
   const saved: Array<PreparedServiceAttachment & { storagePath: string }> = [];
   try {
     for (const file of input.files) {
-      const storagePath = path.join(relativeDirectory, file.fileName);
-      await fs.writeFile(resolveStoragePath(uploadsRoot, storagePath), file.buffer, { flag: "wx" });
+      const storagePath = `service-message-attachments/${crypto.randomUUID()}`;
+      await objectStorage.put({
+        key: storagePath,
+        body: file.buffer,
+        contentType: file.mimeType,
+        checksum: file.checksum
+      });
       saved.push({ ...file, storagePath });
     }
     return saved;
@@ -72,12 +66,8 @@ export async function savePreparedServiceAttachments(input: {
 
 export async function removeSavedServiceAttachments(storagePaths: string[]) {
   await Promise.all(storagePaths.map(async (storagePath) => {
-    try { await fs.unlink(resolveStoragePath(uploadsRoot, storagePath)); } catch { /* best-effort rollback */ }
+    try { await objectStorage.delete(storagePath); } catch { /* best-effort rollback */ }
   }));
-}
-
-export function resolveServiceAttachmentPath(storagePath: string) {
-  return resolveStoragePath(uploadsRoot, storagePath);
 }
 
 function prepareServiceAttachment(file: ServiceAttachmentUpload): PreparedServiceAttachment {
@@ -119,8 +109,4 @@ function matchesSignature(extension: string, buffer: Buffer) {
 
 function safeBaseName(value: string) {
   return value.normalize("NFKC").replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "attachment";
-}
-
-function safeSegment(value: string) {
-  return value.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
 }

@@ -156,26 +156,26 @@ for required_directory in backend frontend landing-public scripts; do
   [ -d "$required_directory" ] || server_error "после загрузки не найдена папка $required_directory"
 done
 
-for required_file in Dockerfile package.json package-lock.json .env.production; do
+for required_file in Dockerfile compose.production.yml package.json package-lock.json .env.production; do
   [ -f "$required_file" ] || server_error "после загрузки не найден файл $required_file"
 done
 
-docker build -t zabota-web-service . || server_error "не удалось собрать Docker image zabota-web-service"
+COMPOSE="docker compose --env-file .env.production -f compose.production.yml"
+
+$COMPOSE build migrate backend || server_error "не удалось собрать migration/application images"
+$COMPOSE up -d --wait postgres || server_error "PostgreSQL не достиг состояния ready"
+$COMPOSE run --rm migrate || server_error "prisma migrate deploy завершился с ошибкой; новая версия приложения не запущена"
+
+# Stop the pre-Compose legacy container only after migrations succeeded.
 docker stop zabota-web || true
 docker rm zabota-web || true
-docker run -d \
-  --name zabota-web \
-  --restart unless-stopped \
-  --env-file /opt/zabota/repo/.env.production \
-  -p 127.0.0.1:4000:4000 \
-  -v /opt/zabota/data:/data \
-  zabota-web-service || server_error "не удалось запустить Docker-контейнер zabota-web"
+$COMPOSE up -d --no-deps backend || server_error "не удалось запустить application service"
 
 echo "Этап 3 из 3. Ожидание запуска и проверка приложения"
 sleep 10
 
-docker ps --filter 'name=^/zabota-web$' --filter 'status=running' --format '{{.Names}}' | grep -qx 'zabota-web' || \
-  check_error "Docker-контейнер zabota-web не работает"
+$COMPOSE ps --status running --services | grep -qx 'backend' || \
+  check_error "Compose application service backend не работает"
 curl -fsS http://127.0.0.1:4000/api/health >/dev/null || check_error "не отвечает локальный /api/health на порту 4000"
 curl -fsSI http://127.0.0.1:4000/ >/dev/null || check_error "не отвечает локальная главная страница"
 curl -fsSI http://127.0.0.1:4000/app >/dev/null || check_error "не отвечает локальный /app"

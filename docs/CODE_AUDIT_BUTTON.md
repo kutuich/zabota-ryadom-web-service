@@ -43,7 +43,7 @@ chmod +x audit-zabota-code.command
 - mock/T-Bank оплату, отсутствие полей банковской карты во frontend, баланс и trial-настройки;
 - обязательные страницы и актуальный текст лендинга;
 - ключи CORS/payment в `.env.production.example` и нежелательные кавычки;
-- наличие `DOCUMENTATION_INDEX.md`, source of truth и workflow v2 документов;
+- наличие `DOCUMENTATION_INDEX.md`, правил обращения к архитектуре Notion и workflow v2 документов;
 - per-visit pricing, immutable agreement snapshot и параметры visit reconciliation scheduler;
 - legacy single-extra-task wording;
 - противоречащие production payment flags в активной документации;

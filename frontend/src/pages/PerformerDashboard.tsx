@@ -580,7 +580,7 @@ export function PerformerDashboard() {
                 <input type="file" hidden onChange={(event) => uploadDocument("criminal_record", event.target.files?.[0])} />
               </label>
               {latestCriminalRecordDocument && (
-                <a className="secondary-button" href={latestCriminalRecordDocument.fileUrl}>Скачать документ</a>
+                <button className="secondary-button" type="button" onClick={() => void api.downloadPerformerDocument(latestCriminalRecordDocument.id, latestCriminalRecordDocument.fileName)}>Скачать документ</button>
               )}
             </div>
           </section>
@@ -815,7 +815,7 @@ function DocumentCard({
           {document ? "Заменить документ" : "Загрузить документ"}
           <input type="file" hidden onChange={(event) => onUpload(event.target.files?.[0])} />
         </label>
-        {document && <a className="secondary-button" href={document.fileUrl}>Скачать документ</a>}
+        {document && <button className="secondary-button" type="button" onClick={() => void api.downloadPerformerDocument(document.id, document.fileName)}>Скачать документ</button>}
       </div>
     </article>
   );

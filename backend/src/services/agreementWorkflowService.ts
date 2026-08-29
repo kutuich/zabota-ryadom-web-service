@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { chargeAvailableBalanceTx, getServiceFeeSettings, hasAvailableBalance } from "./balanceService";
 import { calculateMultiTaskRequest, expandRequestSchedule, requestTermsHash, zonedLocalToUtc, type RequestScheduleInput, type SelectedRequestTask } from "./requestScheduleService";
 import { HttpError } from "../utils/http";
+import { createAgreementContractTx } from "./agreementContractService";
 
 type Tx = Prisma.TransactionClient;
 
@@ -77,7 +78,7 @@ export async function createAgreementVersionTx(tx: Tx, chat: any, actorUserId: s
   if (latest && latest.status !== "finalized") {
     await tx.agreementVersion.update({ where: { id: latest.id }, data: { status: "superseded", supersededAt: new Date() } });
   }
-  return tx.agreementVersion.create({
+  const agreementVersion = await tx.agreementVersion.create({
     data: {
       requestId: chat.requestId,
       chatId: chat.id,
@@ -98,6 +99,8 @@ export async function createAgreementVersionTx(tx: Tx, chat: any, actorUserId: s
       createdByUserId: actorUserId
     }
   });
+  await createAgreementContractTx(tx, { chat, agreementVersion, createdByUserId: actorUserId });
+  return agreementVersion;
 }
 
 export async function confirmAgreementVersionTx(tx: Tx, chatId: string, side: "customer" | "helper", confirmedAt: Date) {

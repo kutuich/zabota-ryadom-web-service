@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { test } from "vitest";
 import {
   buildPublicAddressFromRequest,
   buildYandexExactAddressFromRequest,
@@ -31,6 +32,7 @@ import {
   paymentRefreshResultMessage
 } from "../utils/paymentDisplay";
 
+test("current frontend navigation and terminology characterization baseline", () => {
 const sourceRoot = fileURLToPath(new URL("..", import.meta.url));
 const backendSourceRoot = fileURLToPath(new URL("../../../backend/src/", import.meta.url));
 
@@ -261,12 +263,16 @@ assert.match(visitReservePanel, /Последнее успешное выпол�
 const authContext = read("context/AuthContext.tsx");
 assert.match(authContext, /api\.startAdminActing\(role\)/);
 assert.match(authContext, /api\.stopAdminActing\(\)/);
-assert.match(authContext, /setStoredToken\(null\)/);
+assert.match(authContext, /setAccessToken\(null\)/);
 assert.match(authContext, /setUser\(null\)/);
 
 const actingApiClient = read("api/client.ts");
 assert.match(actingApiClient, /"\/admin\/acting\/start"/);
 assert.match(actingApiClient, /"\/admin\/acting\/stop"/);
+assert.match(actingApiClient, /credentials: "include"/);
+assert.match(actingApiClient, /"\/auth\/refresh"/);
+assert.match(actingApiClient, /"\/auth\/logout"/);
+assert.doesNotMatch(actingApiClient, /localStorage|sessionStorage|zabota_ryadom_token/);
 
 const appRouter = read("App.tsx");
 assert.match(appRouter, /effectiveRoleForUser\(user\)/);
@@ -511,7 +517,7 @@ assert.match(oauthComplete, /className="consent-optional-label">\(необяза
 
 const oauthAuthContext = read("context/AuthContext.tsx");
 assert.match(oauthAuthContext, /await api\.cancelOAuth\(\)/);
-assert.match(oauthAuthContext, /setStoredToken\(null\)/);
+assert.match(oauthAuthContext, /setAccessToken\(null\)/);
 
 const vkContactDetails = read("components/ContactDetails.tsx");
 assert.match(vkContactDetails, /Привязать VK ID/);
@@ -544,7 +550,9 @@ assert.equal((balancePanel.match(/balance-panel__history/g) ?? []).length, 2);
 assert.match(balancePanel, /plain-section span-full balance-panel__history/);
 assert.match(balancePanel, /Пробный баланс/);
 assert.match(balancePanel, /Пополнение баланса выполняется через защищённую платёжную форму банка/);
-assert.match(balancePanel, /payment\.provider === "mock" && !import\.meta\.env\.DEV/);
+assert.match(balancePanel, /payment\.provider === "mock" && !mockPaymentUiEnabled/);
+const runtimeFlags = read("utils/runtimeFlags.ts");
+assert.match(runtimeFlags, /import\.meta\.env\.DEV \|\| import\.meta\.env\.VITE_ENABLE_MOCK_PAYMENT_UI === "true"/);
 assert.match(balancePanel, /Пополнение через банк пока не включено/);
 assert.match(balancePanel, /Сервис не хранит данные банковских карт/);
 assert.match(balancePanel, /createTopUpPayment/);
@@ -620,7 +628,7 @@ assert.match(paymentPages, /api\.refreshPaymentStatus/);
 assert.match(paymentPages, /PaymentStatusRefresh/);
 assert.match(paymentPages, /mockPaymentSucceed/);
 assert.match(paymentPages, /mockPaymentFail/);
-assert.match(paymentPages, /if \(!import\.meta\.env\.DEV\)/);
+assert.match(paymentPages, /if \(!mockPaymentUiEnabled\)/);
 assert.match(paymentPages, /Пополнение временно недоступно/);
 assert.match(paymentPages, /Пополнение через банк пока не включено/);
 const paymentResultPages = paymentPages.slice(paymentPages.indexOf("export function PaymentSuccessPage"));
@@ -1032,3 +1040,4 @@ for (const label of forbiddenUserLabels) {
 }
 
 console.log("Navigation and terminology tests passed");
+});

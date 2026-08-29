@@ -4,10 +4,18 @@
 
 ## Инфраструктура и данные
 
+- [ ] Перед deploy PostgreSQL-target версии выполнен отдельный утверждённый production cutover; пока production SQLite, deploy заблокирован организационно.
+- [ ] PostgreSQL schema применена только через `prisma migrate deploy`, статус migration history проверен.
+- [ ] Отдельный Compose migration job завершился с exit 0 до обновления application service; повторный запуск сообщает отсутствие pending migrations.
+- [ ] Application image не содержит Prisma CLI/`@prisma/config`/`deepmerge-ts`, но содержит рабочий `@prisma/client`.
+- [ ] Application startup не запускает migration CLI и не изменяет schema.
+- [ ] Failure migration job возвращает non-zero и блокирует запуск новой версии application.
+- [ ] SQLite source backup и PostgreSQL backup хранятся отдельно, restore обоих проверен.
+
 - [ ] DNS и HTTPS работают; HTTP перенаправляется на HTTPS.
-- [ ] Caddy слушает 80/443, `zabota-web` опубликован только на `127.0.0.1:4000`.
-- [ ] `/`, `/app`, `/api/health` и публичные `/legal/*` доступны.
-- [ ] `/opt/zabota/data:/data` подключён; база — `/data/zabota.db`, uploads — `/data/uploads`.
+- [ ] Caddy слушает 80/443, Compose service `backend` опубликован только на `127.0.0.1:4000`.
+- [ ] `/`, `/app`, `/api/health`, `/api/ready` и публичные `/legal/*` доступны; readiness подтверждает PostgreSQL и выбранное S3-хранилище.
+- [ ] После PostgreSQL cutover DB использует persistent Compose volume, `/opt/zabota/data:/data` подключён для uploads.
 - [ ] Перед обновлением созданы backup DB и env без вывода секретов.
 - [ ] `SEED_DEMO_DATA=false`; demo users/data не создаются.
 - [ ] SQLite backup проверен восстановлением на отдельном пути.
@@ -61,6 +69,8 @@
 - [ ] Маркетинговая рассылка исключает пользователей без согласия.
 - [ ] Service-message attachments хранятся в `/data/uploads/service-messages` и скачиваются через protected endpoint.
 - [ ] Прямой `/uploads/service-messages/...` закрыт.
+- [ ] Весь `/uploads` закрыт для публичного доступа; документы Помощников скачиваются только через `/api/performer-documents/:id/download`.
+- [ ] Проекты договоров хранятся в `/data/uploads/agreement-contracts` и скачиваются только через `/api/agreement-contracts/:id/download`.
 
 ## Документация и rollback
 
@@ -68,12 +78,19 @@
 - [ ] Known limitations не выданы за готовые функции.
 - [ ] Выполнены `npm run check`, `npm test`, `npm run build`, Docker build и `git diff --check`.
 - [ ] Для rollback сохранены предыдущий image/tag, DB backup и env backup.
+- [ ] Подтверждено, совместим ли предыдущий application image с новой schema; при несовместимости rollback требует остановки application и восстановления DB backup.
+- [ ] Выполнен порядок и зафиксированы forward-only boundaries из [`RELEASE_READINESS.md`](RELEASE_READINESS.md); write freeze снят только после readiness и UAT.
+- [ ] Critical Playwright E2E, OpenAPI generation и security policy зелёные на release commit в GitHub Actions.
+- [ ] Проверены nested `/app/*`, `/app/assets/*`, `/legal/*` и landing `.html` через production Express 5 adapter.
 # User Management & Security
 
 - [ ] В backup-копии подтверждён ровно один active `superadmin`.
 - [ ] Legacy-пользователи `admin`, если есть, проверены вручную; автоматического повышения до `superadmin` нет.
-- [ ] Существующий пользователь входит со старым bcrypt-паролем.
-- [ ] Сброс пароля отзывает старый JWT и требует обязательной смены.
+- [ ] После backup на авторизованной копии выполнен `npm run auth:credential-inventory`; для каждого `unsupported` credential согласован reset до release.
+- [ ] Bcrypt fallback не включён: legacy credential получает `password_reset_required` и не проверяется.
+- [ ] Сброс пароля отзывает старые access и refresh sessions и требует обязательной смены.
+- [ ] Login/refresh rotation/logout/replay проверены; production cookie имеет `__Host-`, `HttpOnly`, `Secure`, `SameSite=Strict`.
+- [ ] Отдельно проверены сокращённые TTL manager/superadmin.
 - [ ] Временный пароль отсутствует в AuditLog, логах и сервисных сообщениях.
 - [ ] `TEMPORARY_PASSWORD_TTL_HOURS` не обязателен; безопасный default равен 24 часам.
 # Service Structure Tree v3

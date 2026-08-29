@@ -1,10 +1,11 @@
-import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import { env } from "../config/env";
 import { writeAudit } from "./auditService";
 import { HttpError } from "../utils/http";
+import { hashPassword, verifyPassword } from "./passwordService";
+import { revokeUserSessions } from "./authSessionService";
 
 const resetAttempts = new Map<string, number>();
 const accountAttempts = new Map<string, number>();
@@ -85,7 +86,7 @@ export async function resetPasswordBySuperadmin(input: {
   }
 
   const temporaryPassword = await generateTemporaryPassword(target);
-  const passwordHash = await bcrypt.hash(temporaryPassword, 10);
+  const passwordHash = await hashPassword(temporaryPassword);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + env.temporaryPasswordTtlHours * 60 * 60 * 1000);
   const result = await prisma.$transaction(async (tx) => {
@@ -100,6 +101,7 @@ export async function resetPasswordBySuperadmin(input: {
         authTokenVersion: { increment: 1 }
       }
     });
+    await revokeUserSessions(tx, target.id, "password_reset_by_superadmin");
     await createSecurityNotice(tx, target.id, input.actorId,
       "Пароль учётной записи сброшен",
       "Пароль вашей учётной записи был сброшен Суперадминистратором. Для входа используйте временный пароль, переданный вам безопасным способом. После входа необходимо создать новый пароль. Если вы не обращались за сбросом, свяжитесь с сервисом."
@@ -150,7 +152,7 @@ async function generateTemporaryPassword(user: { phone: string | null; email: st
       .join("");
     try {
       assertPasswordPolicy(generated, user);
-      if (!user.passwordHash || !(await bcrypt.compare(generated, user.passwordHash))) return generated;
+      if (!(await verifyPassword(user.passwordHash, generated))) return generated;
     } catch {
       // Generate a new value when profile data accidentally appears in the password.
     }

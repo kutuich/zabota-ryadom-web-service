@@ -4,6 +4,8 @@
     "outDir": "dist",
     "rootDir": ".",
     "module": "CommonJS",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
     "types": ["node", "express"]
   },
   "include": ["src", "prisma/seed.ts"]

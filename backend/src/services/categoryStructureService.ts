@@ -66,20 +66,20 @@ const forbiddenImportTerms = ["клиент", "исполнитель", "ком�
 const repairCategoryTerms = ["электрик", "электрика", "сантехник", "сантехника", "газ", "ремонт", "бытовая техника", "строительные работы"];
 
 const federalCategories = [
-  ["home-help", "Помощь по дому", 700, 1100, ["Лёгкая уборка", "Мытьё посуды", "Вынос мусора", "Полив растений", "Помочь разобрать и убрать вещи", "Приготовить простую еду"]],
-  ["supervision", "Уход на дому", 700, 1200, ["Побыть рядом", "Присмотр во время отсутствия родственников", "Прогулка и присмотр", "Бытовая поддержка рядом"]],
-  ["shopping-delivery", "Покупки и поручения", 400, 700, ["Купить продукты", "Купить товары для дома", "Купить в аптеке по готовому списку", "Получить заказ"]],
-  ["accompaniment", "Сопровождение", 800, 1500, ["Сопроводить Подопечного"]]
+  ["home-help", "Помощь по дому", 700, 1100, 120, ["Лёгкая уборка", "Мытьё посуды", "Вынос мусора", "Полив растений", "Помочь разобрать и убрать вещи", "Приготовить простую еду"]],
+  ["supervision", "Уход на дому", 700, 1200, 120, ["Побыть рядом", "Присмотр во время отсутствия родственников", "Прогулка и присмотр", "Бытовая поддержка рядом"]],
+  ["shopping-delivery", "Покупки и поручения", 400, 700, 60, ["Купить продукты", "Купить товары для дома", "Купить в аптеке по готовому списку", "Получить заказ"]],
+  ["accompaniment", "Сопровождение", 800, 1500, 120, ["Сопроводить Подопечного"]]
 ] as const;
 
 const commonSafetyRules = [
-  ["Без медицинских процедур", "Сервис не выполняет медицинские процедуры и не заменяет врача, медсестру или социальную службу.", "forbidden", true],
-  ["Запрещённые действия по здоровью", "Не принимаются задачи с инъекциями, перевязками, выдачей лекарств, медицинскими рекомендациями и медицинским уходом.", "forbidden", true],
+  ["Без медицинских процедур", "Сервис не выполняет медицинские процедуры и не заменяет медицинскую или социальную организацию.", "warning", false],
+  ["Запрещённые действия по здоровью", "Не принимаются задачи с инъекциями, перевязками, выдачей лекарств, медицинскими рекомендациями и другими медицинскими процедурами.", "warning", false],
   ["Экстренная ситуация", "При угрозе жизни или здоровью нужно обращаться в экстренные службы.", "warning", false],
-  ["Опасные работы", "Ремонтные, технические и опасные работы не принимаются.", "forbidden", true],
-  ["Оборудование и коммуникации", "Не принимаются задачи, связанные с ремонтом, подключением или обслуживанием электричества, газа, сантехники, отопления, бытовой техники и другого оборудования.", "forbidden", true],
-  ["Финансовая безопасность", "Не принимаются задачи с передачей паролей, доступом к банковским приложениям, оформлением кредитов или займов.", "forbidden", true],
-  ["Ограниченные товары", "Не принимаются задачи с покупкой алкоголя, табака, запрещённых товаров и товаров, требующих специального права на приобретение.", "forbidden", true]
+  ["Опасные работы", "Ремонтные, технические и опасные работы не принимаются.", "warning", false],
+  ["Оборудование и коммуникации", "Не принимаются задачи, связанные с ремонтом, подключением или обслуживанием электричества, газа, сантехники, отопления, бытовой техники и другого оборудования.", "warning", false],
+  ["Финансовая безопасность", "Не принимаются задачи с передачей паролей, доступом к банковским приложениям, оформлением кредитов или займов.", "warning", false],
+  ["Ограниченные товары", "Не принимаются задачи с покупкой алкоголя, табака, запрещённых товаров и товаров, требующих специального права на приобретение.", "warning", false]
 ] as const;
 
 export type CategoryImportPayload = {
@@ -212,7 +212,7 @@ export async function ensureFederalCategoryStructure(client: DbClient = prisma) 
     }
   });
 
-  for (const [rootSlug, title, minPrice, maxPrice, children] of federalCategories) {
+  for (const [rootSlug, title, minPrice, maxPrice, defaultDurationMinutes, children] of federalCategories) {
     const root = await client.category.upsert({
       where: { structureId_slug: { structureId: structure.id, slug: rootSlug } },
       update: { title, status: "active", isVisibleForCustomer: true, isVisibleForHelper: true },
@@ -245,7 +245,9 @@ export async function ensureFederalCategoryStructure(client: DbClient = prisma) 
     for (let index = 0; index < commonSafetyRules.length; index += 1) {
       const [ruleTitle, description, severity, isBlocking] = commonSafetyRules[index];
       const existing = await client.categorySafetyRule.findFirst({ where: { categoryId: root.id, title: ruleTitle } });
-      if (!existing) {
+      if (existing) {
+        await client.categorySafetyRule.update({ where: { id: existing.id }, data: { description, severity, isBlocking, applicabilityJson: "{}" } });
+      } else {
         await client.categorySafetyRule.create({ data: { categoryId: root.id, ruleKey: slugify(ruleTitle), title: ruleTitle, description, severity, isBlocking, applicabilityJson: "{}", sortOrder: (index + 1) * 10 } });
       }
     }
@@ -255,10 +257,16 @@ export async function ensureFederalCategoryStructure(client: DbClient = prisma) 
       : "Федеральный ориентир. Точная сумма согласуется в чате.";
     const existingPricing = await client.categoryPricingRule.findFirst({ where: { categoryId: root.id, isActive: true } });
     if (existingPricing) {
-      await client.categoryPricingRule.update({ where: { id: existingPricing.id }, data: { recommendedMinPrice: minPrice, recommendedMaxPrice: maxPrice, priceComment } });
+      await client.categoryPricingRule.update({ where: { id: existingPricing.id }, data: { recommendedMinPrice: minPrice, recommendedMaxPrice: maxPrice, defaultDurationMinutes, priceComment } });
     } else {
-      await client.categoryPricingRule.create({ data: { categoryId: root.id, recommendedMinPrice: minPrice, recommendedMaxPrice: maxPrice, priceComment } });
+      await client.categoryPricingRule.create({ data: { categoryId: root.id, recommendedMinPrice: minPrice, recommendedMaxPrice: maxPrice, defaultDurationMinutes, priceComment } });
     }
+  }
+  for (const [title, description, severity, isBlocking] of commonSafetyRules) {
+    await client.categorySafetyRule.updateMany({
+      where: { title, ruleKey: "" },
+      data: { description, severity, isBlocking, applicabilityJson: "{}" }
+    });
   }
   return structure;
 }
@@ -536,13 +544,6 @@ export function validateCategoryImport(payload: CategoryImportPayload) {
     if (row.severity && !["info", "warning", "forbidden"].includes(row.severity)) errors.push(`Некорректная важность ограничения для ${row.categorySlug}.`);
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedRuleKey)) errors.push(`Некорректный ruleKey ограничения для ${row.categorySlug}.`);
     const applicability = row.applicability ?? {};
-    const hasMachineCondition = Boolean(
-      applicability.conditions?.length
-      || applicability.forbiddenValues?.length
-      || applicability.numericLimits?.length
-      || applicability.requiredConfirmation?.length
-    );
-    if (row.isBlocking && !hasMachineCondition) errors.push(`Для блокирующего правила ${row.ruleKey || row.title} необходимо указать машиночитаемое условие применимости.`);
     for (const slug of applicability.appliesToTaskSlugs ?? []) if (!taskSlugs.has(slug)) errors.push(`Задача ${slug} для ограничения ${row.ruleKey} не найдена.`);
     for (const slug of applicability.appliesToCategorySlugs ?? []) if (!slugs.has(slug)) errors.push(`Категория ${slug} для ограничения ${row.ruleKey} не найдена.`);
     for (const condition of applicability.conditions ?? []) {
@@ -564,8 +565,8 @@ export function validateCategoryImport(payload: CategoryImportPayload) {
   for (const term of forbiddenImportTerms) {
     if (searchableText.includes(term)) {
       errors.push(term === "медицинские услуги"
-        ? "Фразу «медицинские услуги» замените на «медицинские процедуры»."
-        : `Запрещённый термин в пользовательском тексте: «${term}».`);
+        ? "Обнаружена запрещённая формулировка о медицинском формате. Используйте термин «медицинские процедуры»."
+        : "Обнаружен запрещённый термин в пользовательском тексте. Используйте утверждённую терминологию сервиса.");
     }
   }
   for (const category of payload.categories ?? []) {
@@ -643,8 +644,6 @@ function validateNodeTree(payload: CategoryImportPayload, errors: string[]) {
   for (const rule of payload.nodePricingRules ?? []) if (!bySlug.has(rule.nodeSlug)) errors.push(`Узел ${rule.nodeSlug} для цены не найден.`);
   for (const rule of payload.nodeSafetyRules ?? []) {
     if (rule.nodeSlug && !bySlug.has(rule.nodeSlug)) errors.push(`Узел ${rule.nodeSlug} для ограничения не найден.`);
-    const applicability = rule.applicability ?? {};
-    if (rule.isBlocking && Object.keys(applicability).length === 0) errors.push(`Для блокирующего правила ${rule.ruleKey} необходимо указать машиночитаемое условие применимости.`);
   }
   return { rootNodes: nodes.filter((node) => !node.parentSlug).length, maxDepth };
 }

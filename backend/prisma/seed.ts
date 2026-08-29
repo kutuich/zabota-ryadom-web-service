@@ -1,4 +1,4 @@
-import bcrypt from "bcryptjs";
+import { hashPassword } from "../src/services/passwordService";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { PrismaClient } from "@prisma/client";
@@ -27,7 +27,7 @@ const prisma = new PrismaClient();
 const password = "password123";
 
 async function main() {
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await hashPassword(password);
 
   const yugorsk = await prisma.city.upsert({
     where: { slug: "yugorsk" },

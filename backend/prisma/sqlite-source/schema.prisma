@@ -1,0 +1,1543 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../../node_modules/@prisma/sqlite-source-client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Region {
+  id                 String              @id @default(cuid())
+  name               String              @unique
+  slug               String              @unique
+  status             String              @default("active")
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  cities             City[]
+  categoryStructures CategoryStructure[]
+  broadcastCampaigns  BroadcastCampaign[]
+}
+
+model City {
+  id                      String          @id @default(cuid())
+  name                    String
+  normalizedName          String          @default("")
+  slug                    String          @unique
+  type                    String          @default("city")
+  region                  String
+  regionId                String?
+  district                String?
+  municipalDistrict       String?
+  fiasId                  String?         @unique
+  garId                   String?         @unique
+  source                  String          @default("seed")
+  directoryStatus         String          @default("directory")
+  serviceStatus           String          @default("inactive")
+  activatedAt             DateTime?
+  activatedByUserId       String?
+  status                  String          @default("active")
+  isActive                Boolean         @default(true)
+  defaultCommissionAmount Int             @default(50)
+  minTopUpAmount          Int             @default(150)
+  mapCenterLat            Float
+  mapCenterLng            Float
+  mapDefaultRadiusMeters  Int             @default(600)
+  districtsJson           String          @default("[]")
+  localSettingsJson       String          @default("{}")
+  timezone                String          @default("Asia/Yekaterinburg")
+  pricingZone             String          @default("base_yugorsk")
+  sortOrder               Int             @default(100)
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+  users                   User[]
+  userCities              UserCity[]
+  activatedByUser         User?           @relation("CityActivatedBy", fields: [activatedByUserId], references: [id], onDelete: SetNull)
+  requests                ClientRequest[]
+  regionRecord            Region?         @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  categoryStructures      CategoryStructure[]
+  helperCategoryPreferences HelperCategoryPreference[]
+  broadcastCampaigns       BroadcastCampaign[]
+  requestDrafts            RequestDraft[]
+
+  @@index([isActive])
+  @@index([normalizedName])
+  @@index([region])
+  @@index([regionId])
+  @@index([directoryStatus, serviceStatus])
+  @@index([activatedByUserId])
+}
+
+model User {
+  id                       String               @id @default(cuid())
+  role                     String
+  rolesJson                String               @default("[]")
+  phone                    String?              @unique
+  normalizedPhone          String?              @unique
+  email                    String?              @unique
+  passwordHash             String?
+  authTokenVersion         Int                  @default(0)
+  mustChangePassword       Boolean              @default(false)
+  temporaryPasswordExpiresAt DateTime?
+  passwordChangedAt        DateTime?
+  passwordResetAt          DateTime?
+  passwordResetByUserId    String?
+  lastLoginAt              DateTime?
+  displayNameChangedAt     DateTime?
+  displayName              String
+  avatarUrl                String?
+  cityId                   String?
+  status                   String               @default("active")
+  balance                  Int                  @default(0)
+  bonusBalance             Int                  @default(0)
+  isPhoneVerified          Boolean              @default(false)
+  isEmailVerified          Boolean              @default(false)
+  phoneVerifiedAt          DateTime?
+  emailVerifiedAt          DateTime?
+  createdAt                DateTime             @default(now())
+  updatedAt                DateTime             @updatedAt
+  blockedAt                DateTime?
+  blockedByAdminId         String?
+  blockedByRole            String?
+  blockReason              String?
+  roleBeforeManager        String?
+  managerAssignedAt        DateTime?
+  managerAssignedByAdminId String?
+  managerRevokedAt         DateTime?
+  managerRevokedByAdminId  String?
+  archiveRequestedAt       DateTime?
+  archiveRequestedByAdminId String?
+  archiveReason            String?
+  lastSeenAt               DateTime?
+  archivedAt               DateTime?
+  archivedByAdminId        String?
+  archiveBlockedReason     String?
+  city                     City?                @relation(fields: [cityId], references: [id])
+  clientProfile            ClientProfile?
+  performerProfile         PerformerProfile?
+  clientRequests           ClientRequest[]      @relation("ClientRequests")
+  managerCreatedRequests   ClientRequest[]      @relation("ManagerCreatedRequests")
+  selectedRequests         ClientRequest[]      @relation("SelectedPerformerRequests")
+  responses                RequestResponse[]
+  chatsAsClient            Chat[]               @relation("ClientChats")
+  chatsAsPerformer         Chat[]               @relation("PerformerChats")
+  chatMessages             ChatMessage[]
+  balanceTransactions      BalanceTransaction[] @relation("UserBalanceTransactions")
+  paymentTransactions      PaymentTransaction[] @relation("UserPaymentTransactions")
+  adminCreatedRefunds      RefundTransaction[]  @relation("AdminCreatedRefunds")
+  receivedRefunds          RefundTransaction[]  @relation("UserRefundTransactions")
+  adminCreatedTransactions BalanceTransaction[] @relation("AdminCreatedTransactions")
+  complaintsFrom           Complaint[]          @relation("ComplaintsFrom")
+  complaintsAgainst        Complaint[]          @relation("ComplaintsAgainst")
+  riskFlags                UserRiskFlag[]
+  reviewsFrom              Review[]             @relation("ReviewsFrom")
+  reviewsTo                Review[]             @relation("ReviewsTo")
+  auditLogs                AuditLog[]           @relation("ActorAuditLogs")
+  consents                 Consent[]
+  legalConsents            UserConsent[]        @relation("UserLegalConsents")
+  createdLegalDocuments    LegalDocument[]      @relation("AdminCreatedLegalDocuments")
+  consentAuditLogs         UserConsentAuditLog[] @relation("UserConsentAuditLogs")
+  adminConsentAuditLogs    UserConsentAuditLog[] @relation("AdminConsentAuditLogs")
+  adminConsentExports      ConsentExportLog[]   @relation("AdminConsentExports")
+  userConsentExports       ConsentExportLog[]   @relation("UserConsentExports")
+  performerDocuments       PerformerDocument[]
+  identities               UserIdentity[]
+  userCities               UserCity[]
+  activatedCities          City[]               @relation("CityActivatedBy")
+  npdTaxEntries            NpdTaxRegisterEntry[] @relation("UserNpdTaxEntries")
+  npdRecordedEntries       NpdTaxRegisterEntry[] @relation("AdminRecordedNpdTaxEntries")
+  createdCategoryStructures CategoryStructure[] @relation("CategoryStructureCreatedBy")
+  publishedCategoryStructures CategoryStructure[] @relation("CategoryStructurePublishedBy")
+  helperCategoryPreferences HelperCategoryPreference[] @relation("HelperCategoryPreferences")
+  serviceConversation       ServiceConversation?
+  receivedServiceMessages   ServiceMessage[] @relation("ServiceMessageRecipient")
+  sentServiceMessages       ServiceMessage[] @relation("ServiceMessageSender")
+  createdBroadcastCampaigns BroadcastCampaign[] @relation("BroadcastCreatedBy")
+  broadcastRecipients       BroadcastRecipient[]
+  serviceMessageAttachments ServiceMessageAttachment[] @relation("ServiceAttachmentOwner")
+  uploadedServiceAttachments ServiceMessageAttachment[] @relation("ServiceAttachmentUploader")
+  requestDrafts              RequestDraft[]              @relation("RequestDraftOwner")
+  requestDraftSupportCases   RequestDraftSupportCase[]   @relation("RequestDraftSupportClient")
+  assignedDraftSupportCases  RequestDraftSupportCase[]   @relation("RequestDraftSupportManager")
+
+  @@index([role])
+  @@index([cityId])
+  @@index([status])
+  @@index([blockedByAdminId])
+  @@index([managerAssignedByAdminId])
+  @@index([archiveRequestedAt])
+  @@index([archivedAt])
+}
+
+model UserCity {
+  id        String   @id @default(cuid())
+  userId    String
+  cityId    String
+  roleScope String   @default("both")
+  isPrimary Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  city      City     @relation(fields: [cityId], references: [id])
+
+  @@unique([userId, cityId])
+  @@index([userId, isPrimary, isActive])
+  @@index([cityId, roleScope, isActive])
+}
+
+model UserIdentity {
+  id               String   @id @default(cuid())
+  userId           String
+  provider         String
+  providerUserId   String
+  email            String?
+  displayName      String?
+  avatarUrl        String?
+  rawProfileJson   String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+  @@index([provider])
+}
+
+model ClientProfile {
+  userId                 String  @id
+  fullName               String?
+  preferredContactMethod String  @default("chat")
+  rating                 Float   @default(0)
+  completedRequestsCount Int     @default(0)
+  complaintsCount        Int     @default(0)
+  notes                  String?
+  user                   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PerformerProfile {
+  userId                          String  @id
+  age                             Int?
+  about                           String?
+  experience                      String?
+  services                        String  @default("[]")
+  skills                          String  @default("[]")
+  limitations                     String?
+  schedule                        String?
+  districts                       String  @default("[]")
+  canTravelIndependently          Boolean @default(false)
+  canTravelOutsideCity            Boolean @default(false)
+  readyForHygieneHelp             Boolean @default(false)
+  readyForPhysicalHelp            Boolean @default(false)
+  readyForLimitedMobility         Boolean @default(false)
+  readyForChildren                Boolean @default(false)
+  readyForUrgentRequests          Boolean @default(false)
+  readyToProvideDocuments         Boolean @default(false)
+  selfEmployedStatus              String  @default("self_employed_not_provided")
+  criminalRecordCertificateStatus String  @default("criminal_record_not_provided")
+  verificationStatuses            String  @default("[\"documents_optional\"]")
+  childcareApprovalStatus         String  @default("not_requested")
+  trustLevel                      String  @default("new_profile")
+  rating                          Float   @default(0)
+  completedJobsCount              Int     @default(0)
+  complaintsCount                 Int     @default(0)
+  isAvailable                     Boolean @default(true)
+  profileComment                  String?
+  notes                           String?
+  user                            User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ServiceCategory {
+  id                     String          @id @default(cuid())
+  name                   String
+  slug                   String          @unique
+  description            String?
+  includedJson           String          @default("[]")
+  excludedJson           String          @default("[]")
+  complexityJson         String          @default("{}")
+  transferRules          String?
+  medicalProhibitions    String?
+  clientInstructions     String?
+  performerInstructions  String?
+  pricingRulesJson       String          @default("{}")
+  basePrice              Int             @default(0)
+  calculationUnit        String          @default("hour")
+  minDurationHours       Float           @default(1)
+  sortOrder              Int             @default(100)
+  isActive               Boolean         @default(true)
+  isChildcare            Boolean         @default(false)
+  requiresCriminalRecord Boolean         @default(false)
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  requests               ClientRequest[]
+
+  @@index([isActive])
+}
+
+model CategoryStructure {
+  id                   String              @id @default(cuid())
+  scopeType            String
+  scopeRegionId        String?
+  scopeCityId          String?
+  scopeKey             String
+  parentStructureId    String?
+  versionNumber        String
+  title                String
+  description          String?
+  status               String              @default("draft")
+  qualityStatus        String              @default("draft")
+  source               String              @default("manual")
+  createdByAdminId     String?
+  publishedByAdminId   String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  publishedAt          DateTime?
+  activatedAt          DateTime?
+  archivedAt           DateTime?
+  emergencyDisabledAt  DateTime?
+  emergencyDisabledByAdminId String?
+  emergencyDisableReason String?
+  comment              String?
+  importFileName       String?
+  importHash           String?
+  metadataJson         String?
+  schemaVersion        String              @default("2")
+  scopeRegion          Region?             @relation(fields: [scopeRegionId], references: [id], onDelete: SetNull)
+  scopeCity            City?               @relation(fields: [scopeCityId], references: [id], onDelete: SetNull)
+  parentStructure      CategoryStructure?  @relation("CategoryStructureVersions", fields: [parentStructureId], references: [id], onDelete: SetNull)
+  derivedStructures    CategoryStructure[] @relation("CategoryStructureVersions")
+  createdByAdmin       User?               @relation("CategoryStructureCreatedBy", fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  publishedByAdmin     User?               @relation("CategoryStructurePublishedBy", fields: [publishedByAdminId], references: [id], onDelete: SetNull)
+  categories           Category[]
+  requestSnapshots     RequestCategorySnapshot[]
+  requestUpdateRevisions RequestStructureUpdateRevision[]
+  serviceNodes         ServiceNode[]
+  serviceNodeRelations ServiceNodeRelation[]
+  serviceNodePricingRules ServiceNodePricingRule[]
+  serviceNodeSafetyRules ServiceNodeSafetyRule[]
+  requestDrafts        RequestDraft[]
+
+  @@unique([scopeKey, versionNumber])
+  @@index([scopeType, status])
+  @@index([scopeRegionId, status])
+  @@index([scopeCityId, status])
+  @@index([parentStructureId])
+}
+
+model ServiceNode {
+  id                     String   @id @default(cuid())
+  structureId            String
+  parentId               String?
+  slug                   String
+  stableKey              String
+  nodeType               String   @default("task")
+  title                  String
+  descriptionForCustomer String?
+  descriptionForHelper   String?
+  sortOrder              Int      @default(100)
+  isActive               Boolean  @default(true)
+  isSelectable           Boolean  @default(false)
+  isVisible              Boolean  @default(true)
+  selectionMode          String   @default("multiple")
+  aliasesJson            String   @default("[]")
+  formFieldsJson         String   @default("[]")
+  constraintsJson        String   @default("{}")
+  durationEffectJson     String   @default("{}")
+  metadataJson           String   @default("{}")
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  structure              CategoryStructure @relation(fields: [structureId], references: [id], onDelete: Cascade)
+  parent                 ServiceNode? @relation("ServiceNodeTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children               ServiceNode[] @relation("ServiceNodeTree")
+  outgoingRelations      ServiceNodeRelation[] @relation("ServiceNodeRelationSource")
+  incomingRelations      ServiceNodeRelation[] @relation("ServiceNodeRelationTarget")
+  pricingRules           ServiceNodePricingRule[]
+  safetyRules            ServiceNodeSafetyRule[]
+
+  @@unique([structureId, slug])
+  @@unique([structureId, stableKey])
+  @@index([structureId, parentId, sortOrder])
+  @@index([structureId, nodeType, isActive])
+}
+
+model ServiceNodeRelation {
+  id              String   @id @default(cuid())
+  structureId     String
+  sourceNodeId    String?
+  targetNodeId    String?
+  sourceSlug      String
+  targetSlug      String
+  relationType    String
+  isActive        Boolean  @default(true)
+  sortOrder       Int      @default(100)
+  conditionsJson  String   @default("{}")
+  pricingBehavior String?
+  uiBehavior      String?
+  metadataJson    String   @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  structure       CategoryStructure @relation(fields: [structureId], references: [id], onDelete: Cascade)
+  sourceNode      ServiceNode? @relation("ServiceNodeRelationSource", fields: [sourceNodeId], references: [id], onDelete: Cascade)
+  targetNode      ServiceNode? @relation("ServiceNodeRelationTarget", fields: [targetNodeId], references: [id], onDelete: Cascade)
+
+  @@unique([structureId, sourceSlug, targetSlug, relationType])
+  @@index([structureId, relationType, isActive])
+  @@index([sourceNodeId, isActive])
+  @@index([targetNodeId, isActive])
+}
+
+model ServiceNodePricingRule {
+  id                     String   @id @default(cuid())
+  structureId            String
+  nodeId                 String?
+  nodeSlug               String
+  packageCode            String?
+  coveredNodeSlugsJson   String   @default("[]")
+  recommendedMinPrice    Int?
+  recommendedMaxPrice    Int?
+  defaultDurationMinutes Int?
+  priceComment           String?
+  conditionsJson         String   @default("{}")
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  structure              CategoryStructure @relation(fields: [structureId], references: [id], onDelete: Cascade)
+  node                   ServiceNode? @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@index([structureId, isActive])
+  @@index([nodeId, isActive])
+}
+
+model ServiceNodeSafetyRule {
+  id                String   @id @default(cuid())
+  structureId       String
+  nodeId            String?
+  nodeSlug          String?
+  ruleKey           String
+  title             String
+  description       String
+  severity          String   @default("warning")
+  isBlocking        Boolean  @default(false)
+  applicabilityJson String   @default("{}")
+  isActive          Boolean  @default(true)
+  sortOrder         Int      @default(100)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  structure         CategoryStructure @relation(fields: [structureId], references: [id], onDelete: Cascade)
+  node              ServiceNode? @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@unique([structureId, ruleKey])
+  @@index([structureId, isActive, sortOrder])
+  @@index([nodeId, isActive])
+}
+
+model Category {
+  id                     String                 @id @default(cuid())
+  structureId            String
+  parentId               String?
+  slug                   String
+  title                  String
+  shortTitle             String?
+  descriptionForCustomer String?
+  descriptionForHelper   String?
+  descriptionForManager  String?
+  descriptionForAdmin    String?
+  icon                   String?
+  level                  Int                    @default(0)
+  sortOrder              Int                    @default(100)
+  status                 String                 @default("active")
+  isVisibleForCustomer   Boolean                @default(true)
+  isVisibleForHelper     Boolean                @default(true)
+  isVisibleForManager    Boolean                @default(true)
+  isVisibleForAdmin      Boolean                @default(true)
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+  structure              CategoryStructure      @relation(fields: [structureId], references: [id], onDelete: Cascade)
+  parent                 Category?              @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children               Category[]             @relation("CategoryTree")
+  taskTemplates          CategoryTaskTemplate[]
+  safetyRules            CategorySafetyRule[]
+  pricingRules           CategoryPricingRule[]
+  helperPreferences      HelperCategoryPreference[]
+  snapshotsAsCategory    RequestCategorySnapshot[] @relation("SnapshotCategory")
+  snapshotsAsSubcategory RequestCategorySnapshot[] @relation("SnapshotSubcategory")
+
+  @@unique([structureId, slug])
+  @@index([structureId, parentId, sortOrder])
+  @@index([status])
+}
+
+model CategoryTaskTemplate {
+  id             String                    @id @default(cuid())
+  categoryId     String
+  slug           String
+  title          String
+  description    String?
+  customerHint   String?
+  helperHint     String?
+  managerHint    String?
+  safetyNote     String?
+  taskKind       String                    @default("standard")
+  aliasesJson    String                    @default("[]")
+  durationEffectJson String                @default("{}")
+  priceEffectJson String                   @default("{}")
+  requiresComment Boolean                 @default(false)
+  allowedRegionsJson String               @default("[]")
+  formFieldsJson String                   @default("[]")
+  recommendationsJson String              @default("[]")
+  constraintsJson String                  @default("{}")
+  sortOrder      Int                       @default(100)
+  isActive       Boolean                   @default(true)
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+  category       Category                  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  pricingRules   CategoryPricingRule[]
+  requestSnapshots RequestCategorySnapshot[]
+
+  @@unique([categoryId, slug])
+  @@index([categoryId, isActive, sortOrder])
+}
+
+model CategorySafetyRule {
+  id              String   @id @default(cuid())
+  categoryId      String
+  ruleKey         String   @default("")
+  title           String
+  description     String
+  severity        String   @default("warning")
+  isBlocking      Boolean  @default(false)
+  applicabilityJson String @default("{}")
+  isActive        Boolean  @default(true)
+  showToCustomer  Boolean  @default(true)
+  showToHelper    Boolean  @default(true)
+  showToManager   Boolean  @default(true)
+  sortOrder       Int      @default(100)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  category        Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([categoryId, sortOrder])
+  @@index([categoryId, ruleKey, isActive])
+}
+
+model CategoryPricingRule {
+  id                     String   @id @default(cuid())
+  categoryId             String
+  taskTemplateId         String?
+  recommendedPackageCode String?
+  recommendedMinPrice    Int?
+  recommendedMaxPrice    Int?
+  defaultDurationMinutes Int?
+  priceComment           String?
+  coveredTaskSlugsJson   String   @default("[]")
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  category               Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  taskTemplate           CategoryTaskTemplate? @relation(fields: [taskTemplateId], references: [id], onDelete: Cascade)
+
+  @@index([categoryId, isActive])
+  @@index([taskTemplateId, isActive])
+}
+
+model HelperCategoryPreference {
+  id           String   @id @default(cuid())
+  helperUserId String
+  cityId       String?
+  categoryId   String
+  categorySlug String
+  isEnabled    Boolean  @default(true)
+  comment      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  helper       User     @relation("HelperCategoryPreferences", fields: [helperUserId], references: [id], onDelete: Cascade)
+  city         City?    @relation(fields: [cityId], references: [id], onDelete: Cascade)
+  category     Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([helperUserId, cityId, categoryId])
+  @@index([helperUserId, cityId, isEnabled])
+  @@index([categorySlug])
+}
+
+model RequestCategorySnapshot {
+  id             String                @id @default(cuid())
+  requestId      String
+  structureId    String
+  categoryId     String?
+  subcategoryId  String?
+  taskTemplateId String?
+  snapshotJson   String
+  createdAt      DateTime              @default(now())
+  request        ClientRequest         @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  structure      CategoryStructure     @relation(fields: [structureId], references: [id])
+  category       Category?             @relation("SnapshotCategory", fields: [categoryId], references: [id], onDelete: SetNull)
+  subcategory    Category?             @relation("SnapshotSubcategory", fields: [subcategoryId], references: [id], onDelete: SetNull)
+  taskTemplate   CategoryTaskTemplate? @relation(fields: [taskTemplateId], references: [id], onDelete: SetNull)
+
+  @@index([requestId, createdAt])
+  @@index([structureId])
+}
+
+model ClientRequest {
+  id                     String               @id @default(cuid())
+  publicNumber           String?
+  seedKey                String?              @unique
+  clientId               String
+  createdByRole          String?
+  createdByManagerId     String?
+  cityId                 String
+  categoryId             String
+  contactName            String?
+  contactPhone           String?
+  helpFor                String?
+  additionalActionsJson  String               @default("[]")
+  dependentStateJson     String               @default("[]")
+  dependentAge           Int?
+  scheduleType           String               @default("once")
+  regularPeriod          String?
+  repeatedVisitsAllowed  Boolean              @default(false)
+  title                  String
+  description            String
+  addressText            String
+  approximateAddressText String
+  addressCity            String?
+  addressStreet          String?
+  addressHouse           String?
+  addressApartment       String?
+  addressEntrance        String?
+  addressFloor           String?
+  addressIntercom        String?
+  addressComment         String?
+  fullAddress            String?
+  publicAddress          String?
+  yandexPublicMapAddress String?
+  yandexExactMapAddress  String?
+  lat                    Float?
+  lng                    Float?
+  approximateLat         Float?
+  approximateLng         Float?
+  mapPrivacyRadiusMeters Int                  @default(600)
+  district               String?
+  date                   DateTime?
+  timeFrom               String?
+  timeTo                 String?
+  expectedDurationHours  Float?
+  urgency                String               @default("normal")
+  hasElderlyPerson       Boolean              @default(false)
+  hasChild               Boolean              @default(false)
+  hasLimitedMobility     Boolean              @default(false)
+  physicalHelpLevel      String?
+  needsCooking           Boolean              @default(false)
+  needsCleaning          Boolean              @default(false)
+  needsWalk              Boolean              @default(false)
+  needsHygieneHelp       Boolean              @default(false)
+  hasPets                Boolean              @default(false)
+  budgetAmount           Int?
+  priceEstimateAmount    Int?
+  pricingBreakdownJson   String?
+  comment                String?
+  status                 String               @default("draft")
+  visibilityStatus       String               @default("private")
+  selectedPerformerId    String?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  completedAt            DateTime?
+  cancelledAt            DateTime?
+  archivedAt             DateTime?
+  isHiddenFromPerformers Boolean              @default(false)
+  hiddenReason           String?
+  structureUpdatePendingAt DateTime?
+  client                 User                 @relation("ClientRequests", fields: [clientId], references: [id])
+  createdByManager       User?                @relation("ManagerCreatedRequests", fields: [createdByManagerId], references: [id], onDelete: SetNull)
+  city                   City                 @relation(fields: [cityId], references: [id])
+  category               ServiceCategory      @relation(fields: [categoryId], references: [id])
+  selectedPerformer      User?                @relation("SelectedPerformerRequests", fields: [selectedPerformerId], references: [id])
+  responses              RequestResponse[]
+  chats                  Chat[]
+  complaints             Complaint[]
+  reviews                Review[]
+  balanceTransactions    BalanceTransaction[]
+  categorySnapshots      RequestCategorySnapshot[]
+  agreementVersions      AgreementVersion[]
+  agreementContracts     AgreementContract[]
+  visits                 RequestVisit[]
+  serviceFeeBatches      ServiceFeeAgreementBatch[]
+  visitDisputes          RequestVisitDispute[]
+  serviceMessages        ServiceMessage[]
+  serviceAttachments     ServiceMessageAttachment[]
+  structureUpdateRevisions RequestStructureUpdateRevision[]
+  sourceDraft             RequestDraft?
+
+  @@index([cityId, status])
+  @@index([publicNumber])
+  @@index([clientId])
+  @@index([createdByManagerId])
+  @@index([selectedPerformerId])
+}
+
+model RequestDraft {
+  id                       String   @id @default(cuid())
+  userId                   String
+  cityId                   String?
+  structureId              String?
+  convertedRequestId       String?  @unique
+  status                   String   @default("active")
+  title                    String?
+  formDataJson             String   @default("{}")
+  selectedNodeSlugsJson    String   @default("[]")
+  expandedNodeSlugsJson    String   @default("[]")
+  dynamicFieldValuesJson   String   @default("{}")
+  scheduleDraftJson        String   @default("{}")
+  addressDraftJson         String   @default("{}")
+  beneficiaryDraftJson     String   @default("{}")
+  structureVersionsJson    String   @default("[]")
+  latestQuoteJson          String?
+  validationStateJson      String   @default("{}")
+  revision                 Int      @default(1)
+  lastAutosavedAt          DateTime?
+  deletedAt                DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  user                     User     @relation("RequestDraftOwner", fields: [userId], references: [id], onDelete: Cascade)
+  city                     City?    @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  structure                CategoryStructure? @relation(fields: [structureId], references: [id], onDelete: SetNull)
+  convertedRequest         ClientRequest? @relation(fields: [convertedRequestId], references: [id], onDelete: SetNull)
+  revisions                RequestDraftRevision[]
+  supportCases             RequestDraftSupportCase[]
+
+  @@index([userId, status, updatedAt])
+  @@index([cityId, status])
+  @@index([structureId])
+}
+
+model RequestDraftRevision {
+  id             String   @id @default(cuid())
+  draftId        String
+  revision       Int
+  snapshotJson   String
+  changeSource   String   @default("autosave")
+  createdAt      DateTime @default(now())
+  draft          RequestDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@unique([draftId, revision])
+  @@index([draftId, createdAt])
+}
+
+model RequestDraftSupportCase {
+  id                         String   @id @default(cuid())
+  publicNumber               String   @unique
+  draftId                    String
+  clientId                   String
+  assignedManagerId          String?
+  relatedServiceConversationId String?
+  status                     String   @default("new")
+  subject                    String
+  initialMessage             String
+  priority                   String   @default("normal")
+  source                     String   @default("request_draft")
+  snapshotAtCreationJson     String
+  draftRevisionAtCreation    Int
+  lastMessageAt              DateTime @default(now())
+  resolvedAt                 DateTime?
+  closedAt                   DateTime?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  draft                      RequestDraft @relation(fields: [draftId], references: [id], onDelete: Restrict)
+  client                     User @relation("RequestDraftSupportClient", fields: [clientId], references: [id], onDelete: Restrict)
+  assignedManager            User? @relation("RequestDraftSupportManager", fields: [assignedManagerId], references: [id], onDelete: SetNull)
+  serviceMessages            ServiceMessage[]
+
+  @@index([clientId, status, updatedAt])
+  @@index([assignedManagerId, status])
+  @@index([draftId, createdAt])
+}
+
+model RequestStructureUpdateRevision {
+  id                    String            @id @default(cuid())
+  requestId             String
+  targetStructureId     String
+  previousSnapshotId    String?
+  status                String            @default("pending_customer_confirmation")
+  previousSnapshotJson  String
+  proposedSnapshotJson  String
+  comparisonJson        String            @default("{}")
+  initiatedByAdminId    String
+  initiatedAt           DateTime          @default(now())
+  customerConfirmedAt   DateTime?
+  cancelledAt           DateTime?
+  cancelledByAdminId    String?
+  cancellationReason    String?
+  appliedSnapshotId     String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  request               ClientRequest     @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  targetStructure       CategoryStructure @relation(fields: [targetStructureId], references: [id])
+
+  @@index([requestId, status])
+  @@index([targetStructureId, status])
+}
+
+model RequestResponse {
+  id          String        @id @default(cuid())
+  requestId   String
+  performerId String
+  message     String?
+  status      String        @default("pending")
+  createdAt   DateTime      @default(now())
+  acceptedAt  DateTime?
+  rejectedAt  DateTime?
+  notAgreedAt DateTime?
+  finalRejectedAt DateTime?
+  newTermsOfferedAt DateTime?
+  request     ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  performer   User          @relation(fields: [performerId], references: [id])
+  chat        Chat?
+
+  @@unique([requestId, performerId])
+  @@index([performerId, status])
+}
+
+model Chat {
+  id          String        @id @default(cuid())
+  requestId   String
+  responseId  String?       @unique
+  clientId    String
+  performerId String
+  status      String        @default("open")
+  clientConfirmedAt DateTime?
+  performerConfirmedAt DateTime?
+  agreedHelperAmount Int?
+  customerServiceFeeAmount Int?
+  helperServiceFeeAmount Int?
+  customerTotalAmount Int?
+  helperNetAmount Int?
+  agreedPackageId String?
+  agreedPackageTitle String?
+  agreedAddonsJson String?
+  agreedDurationMinutes Int?
+  agreedScheduledAt DateTime?
+  agreedTermsComment String?
+  agreedByCustomerAt DateTime?
+  agreedByHelperAt DateTime?
+  termsUpdatedAt DateTime?
+  termsUpdatedByUserId String?
+  agreementFinalizedAt DateTime?
+  structureTermsStaleAt DateTime?
+  conditionsJson String?
+  notAgreedAt DateTime?
+  reopenedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  closedAt    DateTime?
+  archivedAt  DateTime?
+  request     ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  response    RequestResponse? @relation(fields: [responseId], references: [id])
+  client      User          @relation("ClientChats", fields: [clientId], references: [id])
+  performer   User          @relation("PerformerChats", fields: [performerId], references: [id])
+  messages    ChatMessage[]
+  complaints  Complaint[]
+  agreementVersions AgreementVersion[]
+  agreementContracts AgreementContract[]
+  serviceFeeBatches ServiceFeeAgreementBatch[]
+
+  @@index([clientId])
+  @@index([performerId])
+}
+
+model AgreementVersion {
+  id                       String   @id @default(cuid())
+  requestId                String
+  chatId                   String
+  version                  Int
+  status                   String   @default("draft")
+  recipientType            String?
+  dependentSnapshotJson    String?
+  selectedTasksJson        String
+  scheduleRulesJson        String
+  expandedVisitsJson       String
+  pricingSnapshotJson      String
+  termsComment             String?
+  visitCount               Int
+  totalDurationMinutes     Int
+  totalHelpAmount          Int?
+  customerServiceFeeTotal  Int
+  helperServiceFeeTotal    Int
+  termsHash                String
+  createdByUserId          String
+  customerConfirmedAt      DateTime?
+  helperConfirmedAt        DateTime?
+  finalizedAt              DateTime?
+  supersededAt             DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  request                  ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  chat                     Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  visits                   RequestVisit[]
+  feeBatch                 ServiceFeeAgreementBatch?
+  contract                 AgreementContract?
+
+  @@unique([chatId, version])
+  @@index([requestId, status])
+  @@index([chatId, status])
+}
+
+model AgreementContract {
+  id                 String   @id
+  requestId          String
+  chatId             String
+  agreementVersionId String   @unique
+  templateVersion    String
+  documentVersion    Int
+  status             String   @default("project")
+  title              String
+  contentText        String
+  checksum           String
+  fileName           String
+  storagePath        String
+  mimeType           String   @default("text/plain; charset=utf-8")
+  fileSize           Int
+  createdByUserId    String
+  createdAt          DateTime @default(now())
+  request            ClientRequest    @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  chat               Chat             @relation(fields: [chatId], references: [id], onDelete: Restrict)
+  agreementVersion   AgreementVersion @relation(fields: [agreementVersionId], references: [id], onDelete: Restrict)
+
+  @@unique([chatId, documentVersion])
+  @@index([requestId, createdAt])
+  @@index([checksum])
+}
+
+model RequestVisit {
+  id                       String   @id @default(cuid())
+  requestId                String
+  agreementVersionId       String
+  sequence                 Int
+  scheduledStart           DateTime
+  scheduledEnd             DateTime
+  startTime                String
+  durationMinutes          Int
+  timezone                 String
+  status                   String   @default("scheduled")
+  tasksSnapshotJson        String
+  pricingBreakdownJson     String   @default("{}")
+  helpAmount               Int?
+  customerServiceFeeAmount Int
+  helperServiceFeeAmount   Int
+  autoCloseAt              DateTime?
+  closedAt                 DateTime?
+  disputedAt               DateTime?
+  cancelledAt              DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  request                  ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  agreementVersion         AgreementVersion @relation(fields: [agreementVersionId], references: [id], onDelete: Cascade)
+  allocations              ServiceFeeVisitAllocation[]
+  disputes                 RequestVisitDispute[]
+
+  @@unique([agreementVersionId, sequence])
+  @@index([requestId, scheduledStart])
+  @@index([status, autoCloseAt])
+}
+
+model ServiceFeeAgreementBatch {
+  id                       String   @id @default(cuid())
+  requestId                String
+  chatId                   String
+  agreementVersionId       String   @unique
+  clientId                 String
+  helperId                 String
+  visitCount               Int
+  customerServiceFeeTotal  Int
+  helperServiceFeeTotal    Int
+  status                   String   @default("confirmed")
+  idempotencyKey           String   @unique
+  confirmedAt              DateTime
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  request                  ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  chat                     Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  agreementVersion         AgreementVersion @relation(fields: [agreementVersionId], references: [id], onDelete: Cascade)
+  allocations              ServiceFeeVisitAllocation[]
+
+  @@index([requestId, status])
+  @@index([chatId])
+}
+
+model ServiceFeeVisitAllocation {
+  id                       String   @id @default(cuid())
+  batchId                  String
+  visitId                  String
+  side                     String
+  userId                   String
+  feeAmount                Int
+  mainBalanceAmount        Int      @default(0)
+  bonusBalanceAmount       Int      @default(0)
+  sourceLedgerEntriesJson  String   @default("[]")
+  refundLedgerEntriesJson  String   @default("[]")
+  status                   String   @default("reserved")
+  resolution               String?
+  resolutionComment        String?
+  releasedAt               DateTime?
+  refundedAt               DateTime?
+  disputedAt               DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  batch                    ServiceFeeAgreementBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  visit                    RequestVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+
+  @@unique([visitId, side])
+  @@index([userId, status])
+  @@index([batchId, status])
+}
+
+model RequestVisitDispute {
+  id                       String   @id @default(cuid())
+  requestId                String
+  visitId                  String
+  openedByUserId           String
+  reason                   String
+  description              String?
+  status                   String   @default("open")
+  resolution               String?
+  resolutionComment        String?
+  resolvedByAdminId        String?
+  openedAt                 DateTime @default(now())
+  resolvedAt               DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  request                  ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  visit                    RequestVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, status])
+  @@index([visitId, status])
+}
+
+model ChatMessage {
+  id               String   @id @default(cuid())
+  chatId           String
+  senderId         String?
+  text             String
+  visibility       String   @default("all")
+  isSystem         Boolean  @default(false)
+  moderationStatus String   @default("clean")
+  isHidden         Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  chat             Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender           User?    @relation(fields: [senderId], references: [id])
+
+  @@index([chatId, createdAt])
+  @@index([senderId])
+}
+
+model BalanceTransaction {
+  id               String         @id @default(cuid())
+  userId           String
+  type             String
+  source           String?
+  idempotencyKey   String?        @unique
+  amount           Int
+  balanceKind      String
+  reason           String
+  comment          String?
+  metadataJson     String?
+  balanceBefore    Int?
+  balanceAfter     Int?
+  bonusExpiresAt   DateTime?
+  relatedRequestId String?
+  createdByAdminId String?
+  createdAt        DateTime       @default(now())
+  user             User           @relation("UserBalanceTransactions", fields: [userId], references: [id])
+  createdByAdmin   User?          @relation("AdminCreatedTransactions", fields: [createdByAdminId], references: [id])
+  relatedRequest   ClientRequest? @relation(fields: [relatedRequestId], references: [id])
+  npdTaxEntry      NpdTaxRegisterEntry?
+
+  @@index([userId, createdAt])
+  @@index([type])
+  @@index([createdByAdminId])
+}
+
+model PaymentTransaction {
+  id                   String   @id @default(cuid())
+  userId               String
+  provider             String
+  terminalMode         String?
+  providerPaymentId    String?  @unique
+  orderId              String   @unique
+  amount               Int
+  currency             String   @default("RUB")
+  status               String
+  providerStatus       String?
+  purpose              String   @default("balance_top_up")
+  description          String?
+  paymentUrl           String?
+  successUrl           String?
+  failUrl              String?
+  notificationUrl      String?
+  balanceTransactionId String?  @unique
+  rawInitRequestJson   String?
+  rawInitResponseJson  String?
+  rawStateResponseJson String?
+  rawWebhookJson       String?
+  metadataJson         String?
+  lastSyncedAt         DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  paidAt               DateTime?
+  creditedAt           DateTime?
+  failedAt             DateTime?
+  cancelledAt          DateTime?
+  user                 User     @relation("UserPaymentTransactions", fields: [userId], references: [id])
+  refunds              RefundTransaction[]
+  npdTaxEntry          NpdTaxRegisterEntry?
+  serviceMessages      ServiceMessage[]
+  serviceAttachments   ServiceMessageAttachment[]
+
+  @@index([userId])
+  @@index([provider])
+  @@index([terminalMode])
+  @@index([status])
+  @@index([createdAt])
+  @@index([orderId])
+}
+
+model RefundTransaction {
+  id                   String             @id @default(cuid())
+  paymentTransactionId String             @unique
+  provider             String
+  refundType           String?
+  userId               String?
+  providerRefundId     String?
+  externalRequestId    String             @unique
+  amount               Int
+  currency             String             @default("RUB")
+  status               String             @default("processing")
+  reason               String
+  bankRefundDate       DateTime?
+  bankReference        String?
+  adminComment         String?
+  rawRequestJson       String?
+  rawResponseJson      String?
+  metadataJson         String?
+  balanceTransactionId String?            @unique
+  createdByAdminId     String
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  completedAt          DateTime?
+  failedAt             DateTime?
+  payment              PaymentTransaction @relation(fields: [paymentTransactionId], references: [id])
+  user                 User?              @relation("UserRefundTransactions", fields: [userId], references: [id])
+  createdByAdmin       User               @relation("AdminCreatedRefunds", fields: [createdByAdminId], references: [id])
+  npdTaxEntry          NpdTaxRegisterEntry?
+  serviceMessages      ServiceMessage[]
+  serviceAttachments   ServiceMessageAttachment[]
+
+  @@index([provider])
+  @@index([refundType])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([createdByAdminId])
+}
+
+model NpdTaxRegisterEntry {
+  id                       String             @id @default(cuid())
+  operationType            String
+  paymentTransactionId     String?            @unique
+  refundTransactionId      String?            @unique
+  balanceTransactionId     String?            @unique
+  userId                   String
+  amount                   Int
+  operationDate            DateTime
+  title                    String
+  description              String
+  copyText                 String
+  refundCopyText           String?
+  source                   String
+  isTestOperation          Boolean            @default(false)
+  npdStatus                String             @default("pending")
+  npdRecordedAt            DateTime?
+  npdRecordedByAdminId     String?
+  npdComment               String?
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+  paymentTransaction       PaymentTransaction? @relation(fields: [paymentTransactionId], references: [id], onDelete: Cascade)
+  refundTransaction        RefundTransaction? @relation(fields: [refundTransactionId], references: [id], onDelete: Cascade)
+  balanceTransaction       BalanceTransaction? @relation(fields: [balanceTransactionId], references: [id], onDelete: SetNull)
+  user                     User               @relation("UserNpdTaxEntries", fields: [userId], references: [id], onDelete: Cascade)
+  npdRecordedByAdmin       User?              @relation("AdminRecordedNpdTaxEntries", fields: [npdRecordedByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([operationDate])
+  @@index([npdStatus, operationDate])
+  @@index([userId, operationDate])
+  @@index([operationType])
+}
+
+model Complaint {
+  id              String         @id @default(cuid())
+  publicNumber    String?        @unique
+  type            String         @default("complaint")
+  requestId       String?
+  chatId          String?
+  fromUserId      String
+  againstUserId   String?
+  reason          String
+  description     String?
+  status          String         @default("new")
+  createdAt       DateTime       @default(now())
+  resolvedAt      DateTime?
+  adminComment    String?
+  adminResponse   String?
+  isVisibleToUser Boolean        @default(true)
+  request         ClientRequest? @relation(fields: [requestId], references: [id])
+  chat            Chat?          @relation(fields: [chatId], references: [id])
+  fromUser        User           @relation("ComplaintsFrom", fields: [fromUserId], references: [id])
+  againstUser     User?          @relation("ComplaintsAgainst", fields: [againstUserId], references: [id])
+
+  @@index([status])
+  @@index([fromUserId])
+  @@index([againstUserId])
+}
+
+model UserRiskFlag {
+  id         String    @id @default(cuid())
+  userId     String
+  type       String
+  severity   String    @default("low")
+  reason     String
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, resolvedAt])
+  @@index([type])
+}
+
+model Review {
+  id         String        @id @default(cuid())
+  requestId  String
+  fromUserId String
+  toUserId   String
+  rating     Int
+  text       String?
+  likedText  String?
+  improvementText String?
+  createdAt  DateTime      @default(now())
+  request    ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  fromUser   User          @relation("ReviewsFrom", fields: [fromUserId], references: [id])
+  toUser     User          @relation("ReviewsTo", fields: [toUserId], references: [id])
+
+  @@unique([requestId, fromUserId, toUserId])
+  @@index([toUserId])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  action      String
+  entityType  String
+  entityId    String?
+  payloadJson String?
+  createdAt   DateTime @default(now())
+  actor       User?    @relation("ActorAuditLogs", fields: [actorUserId], references: [id])
+
+  @@index([actorUserId, createdAt])
+  @@index([entityType, entityId])
+}
+
+model ServiceConversation {
+  id                  String           @id @default(cuid())
+  userId              String           @unique
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  lastMessageAt       DateTime?
+  unreadForUserCount  Int              @default(0)
+  unreadForAdminCount Int              @default(0)
+  status              String           @default("active")
+  metadataJson        String?
+  user                User             @relation(fields: [userId], references: [id])
+  messages            ServiceMessage[]
+
+  @@index([lastMessageAt])
+  @@index([status])
+}
+
+model ServiceMessage {
+  id                          String                     @id @default(cuid())
+  clientRequestId             String?                    @unique
+  conversationId              String?
+  userId                      String
+  senderUserId                String?
+  senderRole                  String
+  messageType                 String
+  channel                     String                     @default("in_app")
+  title                       String?
+  body                        String
+  attachmentUrl               String?
+  relatedPaymentTransactionId String?
+  relatedRefundTransactionId  String?
+  relatedRequestId            String?
+  relatedLegalDocumentId      String?
+  relatedRequestDraftSupportCaseId String?
+  broadcastId                 String?
+  isReadByUser                Boolean                    @default(false)
+  readByUserAt                DateTime?
+  createdAt                   DateTime                   @default(now())
+  metadataJson                String?
+  conversation                ServiceConversation?       @relation(fields: [conversationId], references: [id])
+  user                        User                       @relation("ServiceMessageRecipient", fields: [userId], references: [id])
+  sender                      User?                      @relation("ServiceMessageSender", fields: [senderUserId], references: [id], onDelete: SetNull)
+  relatedPayment              PaymentTransaction?       @relation(fields: [relatedPaymentTransactionId], references: [id], onDelete: SetNull)
+  relatedRefund               RefundTransaction?        @relation(fields: [relatedRefundTransactionId], references: [id], onDelete: SetNull)
+  relatedRequest              ClientRequest?            @relation(fields: [relatedRequestId], references: [id], onDelete: SetNull)
+  relatedLegalDocument        LegalDocument?            @relation(fields: [relatedLegalDocumentId], references: [id], onDelete: SetNull)
+  relatedRequestDraftSupportCase RequestDraftSupportCase? @relation(fields: [relatedRequestDraftSupportCaseId], references: [id], onDelete: SetNull)
+  broadcast                   BroadcastCampaign?        @relation(fields: [broadcastId], references: [id], onDelete: SetNull)
+  broadcastRecipient          BroadcastRecipient?
+  attachments                 ServiceMessageAttachment[]
+
+  @@index([userId, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([messageType])
+  @@index([broadcastId])
+  @@index([relatedPaymentTransactionId])
+  @@index([relatedRefundTransactionId])
+  @@index([relatedRequestId])
+  @@index([relatedRequestDraftSupportCaseId])
+}
+
+model BroadcastCampaign {
+  id                      String               @id @default(cuid())
+  title                   String
+  body                    String
+  campaignType            String
+  targetRole              String               @default("all")
+  targetCityId            String?
+  targetRegionId          String?
+  status                  String               @default("draft")
+  createdByAdminId        String
+  clientRequestId         String?              @unique
+  createdAt               DateTime             @default(now())
+  scheduledAt             DateTime?
+  sentAt                  DateTime?
+  requireMarketingConsent Boolean              @default(false)
+  recipientsCount         Int                  @default(0)
+  deliveredCount          Int                  @default(0)
+  skippedCount            Int                  @default(0)
+  failedCount             Int                  @default(0)
+  metadataJson            String?
+  createdByAdmin          User                 @relation("BroadcastCreatedBy", fields: [createdByAdminId], references: [id])
+  targetCity              City?                @relation(fields: [targetCityId], references: [id], onDelete: SetNull)
+  targetRegion            Region?              @relation(fields: [targetRegionId], references: [id], onDelete: SetNull)
+  messages                ServiceMessage[]
+  recipients              BroadcastRecipient[]
+
+  @@index([status, createdAt])
+  @@index([campaignType])
+  @@index([targetCityId])
+  @@index([targetRegionId])
+}
+
+model BroadcastRecipient {
+  id               String            @id @default(cuid())
+  campaignId       String
+  userId           String
+  status           String            @default("pending")
+  serviceMessageId String?           @unique
+  errorMessage     String?
+  createdAt        DateTime          @default(now())
+  deliveredAt      DateTime?
+  campaign         BroadcastCampaign @relation(fields: [campaignId], references: [id])
+  user             User              @relation(fields: [userId], references: [id])
+  serviceMessage   ServiceMessage?   @relation(fields: [serviceMessageId], references: [id], onDelete: SetNull)
+
+  @@unique([campaignId, userId])
+  @@index([campaignId, status])
+  @@index([userId])
+}
+
+model ServiceMessageAttachment {
+  id                          String              @id @default(cuid())
+  messageId                   String
+  userId                      String
+  uploadedByUserId            String
+  fileName                    String
+  originalFileName            String
+  mimeType                    String
+  fileSize                    Int
+  storagePath                 String
+  publicUrl                   String?
+  attachmentType              String              @default("other")
+  relatedPaymentTransactionId String?
+  relatedRefundTransactionId  String?
+  relatedRequestId            String?
+  relatedLegalDocumentId      String?
+  checksum                    String?
+  createdAt                   DateTime            @default(now())
+  metadataJson                String?
+  message                     ServiceMessage      @relation(fields: [messageId], references: [id])
+  user                        User                @relation("ServiceAttachmentOwner", fields: [userId], references: [id])
+  uploadedBy                  User                @relation("ServiceAttachmentUploader", fields: [uploadedByUserId], references: [id])
+  relatedPayment              PaymentTransaction? @relation(fields: [relatedPaymentTransactionId], references: [id], onDelete: SetNull)
+  relatedRefund               RefundTransaction?  @relation(fields: [relatedRefundTransactionId], references: [id], onDelete: SetNull)
+  relatedRequest              ClientRequest?      @relation(fields: [relatedRequestId], references: [id], onDelete: SetNull)
+  relatedLegalDocument        LegalDocument?      @relation(fields: [relatedLegalDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([messageId])
+  @@index([userId, createdAt])
+  @@index([attachmentType])
+  @@index([relatedPaymentTransactionId])
+  @@index([relatedRefundTransactionId])
+  @@index([relatedRequestId])
+}
+
+model Consent {
+  id         String   @id @default(cuid())
+  userId     String
+  type       String
+  version    String
+  acceptedAt DateTime @default(now())
+  ip         String?
+  userAgent  String?
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type, version])
+  @@index([userId])
+}
+
+model LegalDocument {
+  id               String        @id @default(cuid())
+  type             String
+  roleScope        String        @default("all")
+  title            String
+  slug             String
+  version          String
+  contentMarkdown  String
+  contentHash      String
+  isRequired       Boolean       @default(true)
+  isPublished      Boolean       @default(false)
+  isActive         Boolean       @default(true)
+  publishedAt      DateTime?
+  effectiveFrom    DateTime?
+  archivedAt       DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  createdByAdminId String?
+  createdByAdmin   User?         @relation("AdminCreatedLegalDocuments", fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  userConsents     UserConsent[]
+  serviceMessages  ServiceMessage[]
+  serviceAttachments ServiceMessageAttachment[]
+
+  @@unique([type, version])
+  @@unique([slug, version])
+  @@index([type, isActive, isPublished])
+  @@index([roleScope, isRequired])
+}
+
+model UserConsent {
+  id                  String        @id @default(cuid())
+  userId              String
+  documentId          String
+  documentType        String
+  documentVersion     String
+  documentTitle       String
+  documentContentHash String
+  acceptedAt          DateTime      @default(now())
+  ipAddress           String?
+  userAgent           String?
+  source              String        @default("profile")
+  isRequired          Boolean       @default(true)
+  isActive            Boolean       @default(true)
+  revokedAt           DateTime?
+  revocationReason    String?
+  createdAt           DateTime      @default(now())
+  user                User          @relation("UserLegalConsents", fields: [userId], references: [id], onDelete: Cascade)
+  document            LegalDocument @relation(fields: [documentId], references: [id])
+
+  @@unique([userId, documentId])
+  @@index([userId, isActive])
+  @@index([documentType, documentVersion])
+}
+
+model UserConsentAuditLog {
+  id              String   @id @default(cuid())
+  userId          String?
+  adminId         String?
+  action          String
+  documentType    String?
+  documentVersion String?
+  oldValue        String?
+  newValue        String?
+  ipAddress       String?
+  userAgent       String?
+  createdAt       DateTime @default(now())
+  comment         String?
+  user            User?    @relation("UserConsentAuditLogs", fields: [userId], references: [id], onDelete: SetNull)
+  admin           User?    @relation("AdminConsentAuditLogs", fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([adminId, createdAt])
+  @@index([documentType, documentVersion])
+}
+
+model ConsentExportLog {
+  id                String   @id @default(cuid())
+  exportedByAdminId String?
+  exportType        String
+  userId            String?
+  fileName          String
+  exportedAt        DateTime @default(now())
+  ipAddress         String?
+  userAgent         String?
+  comment           String?
+  exportedByAdmin   User?    @relation("AdminConsentExports", fields: [exportedByAdminId], references: [id], onDelete: SetNull)
+  user              User?    @relation("UserConsentExports", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([exportedByAdminId, exportedAt])
+  @@index([userId, exportedAt])
+  @@index([exportType])
+}
+
+model PerformerDocument {
+  id           String    @id @default(cuid())
+  performerId  String
+  type         String
+  fileName     String
+  fileUrl      String
+  originalFileName String?
+  storagePath  String?
+  mimeType     String?
+  fileSize     Int?
+  checksum     String?
+  status       String    @default("uploaded")
+  uploadedAt   DateTime  @default(now())
+  verifiedAt   DateTime?
+  adminComment String?
+  performer    User      @relation(fields: [performerId], references: [id], onDelete: Cascade)
+
+  @@index([performerId, type])
+  @@index([status])
+}
+
+model ServiceSetting {
+  key       String   @id
+  valueJson String
+  label     String
+  group     String   @default("general")
+  updatedAt DateTime @updatedAt
+}
+
+model KnowledgeArticle {
+  id          String   @id @default(cuid())
+  audience    String   @default("all")
+  title       String
+  slug        String   @unique
+  content     String
+  category    String
+  isPublished Boolean  @default(true)
+  sortOrder   Int      @default(100)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([audience, isPublished])
+  @@index([category, sortOrder])
+}

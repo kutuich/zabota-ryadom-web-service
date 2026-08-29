@@ -3,6 +3,7 @@ import type { UserRole } from "./domain";
 declare global {
   namespace Express {
     interface Request {
+      requestId?: string;
       user?: {
         id: string;
         role: UserRole;
@@ -14,6 +15,7 @@ declare global {
         cityId: string | null;
         authTokenVersion: number;
         mustChangePassword: boolean;
+        sessionId: string;
       };
     }
   }

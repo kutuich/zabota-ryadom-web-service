@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import jwt from "jsonwebtoken";
-import bcrypt from "bcryptjs";
-import { createApp } from "../app";
+import { hashPassword } from "../services/passwordService";
+import { test } from "vitest";
+import { createNestApplication } from "../nest/bootstrap";
 import { prisma } from "../db/prisma";
 import { calculatePrice, PRICING_ADDONS } from "../services/pricingService";
 import { moderateChatMessage } from "../services/moderationService";
@@ -97,9 +99,18 @@ import {
 } from "../services/serviceCommunicationService";
 import { prepareServiceAttachments, removeSavedServiceAttachments } from "../services/serviceMessageStorage";
 import { calculateServiceTreeQuote, getEffectiveServiceTree } from "../services/serviceTreeService";
-import { createDraftSupportCase, createRequestDraft, deleteRequestDraft, getRequestDraft, listDraftSupportCases, publishRequestDraft, replyToDraftSupportCase, updateRequestDraft } from "../services/requestDraftService";
+import { createDraftSupportCase, createRequestDraft, deleteRequestDraft, getRequestDraft, listDraftSupportCases, publishRequestDraft, replyToDraftSupportCase, safetyApplies, updateRequestDraft } from "../services/requestDraftService";
+import { assertPerformerDocumentDownloadAccess } from "../nest/domains/controllers/performerDocuments.controller";
+import { assertAgreementContractAccess } from "../nest/domains/controllers/agreementContracts.controller";
 
-async function run() {
+let nestHttpHandler: any = null;
+
+function createApp() {
+  if (!nestHttpHandler) throw new Error("NestJS test application is not initialized");
+  return nestHttpHandler;
+}
+
+async function runBusinessRegressionSuite() {
   assert.deepEqual(parseSemanticVersion("v2.0.1"), { major: 2, minor: 0, patch: 1 });
   assert.equal(normalizeSemanticVersion("v10.12.3"), "10.12.3");
   assert.ok(compareSemanticVersions("2.10", "2.9") > 0);
@@ -517,23 +528,23 @@ async function run() {
   const legalHash = calculateLegalDocumentHash(legalDoc);
   const changedHash = calculateLegalDocumentHash({ ...legalDoc, contentMarkdown: `${legalDoc.contentMarkdown}\nИзменение.` });
   assert.notEqual(legalHash, changedHash);
-  const legalRoutesSource = readFileSync(path.resolve(process.cwd(), "src/routes/legal.ts"), "utf8");
-  const adminRoutesSource = readFileSync(path.resolve(process.cwd(), "src/routes/admin.ts"), "utf8");
+  const legalControllerSource = readFileSync(path.resolve(process.cwd(), "src/nest/domains/controllers/legal.controller.ts"), "utf8");
+  const adminControllerSource = readFileSync(path.resolve(process.cwd(), "src/nest/domains/controllers/admin.controller.ts"), "utf8");
   const schemaSource = readFileSync(path.resolve(process.cwd(), "prisma/schema.prisma"), "utf8");
-  assert.match(legalRoutesSource, /"\/documents"/);
-  assert.match(legalRoutesSource, /"\/documents\/:slug"/);
-  assert.match(legalRoutesSource, /"\/my-consents"/);
-  assert.match(legalRoutesSource, /"\/consents\/accept"/);
-  assert.match(legalRoutesSource, /"\/consents\/revoke-optional"/);
-  assert.match(adminRoutesSource, /adminRouter\.use\(authenticate, requireAdmin\)/);
-  assert.match(adminRoutesSource, /"\/legal\/documents"/);
-  assert.match(adminRoutesSource, /"\/legal\/documents\/:id\/new-version"/);
-  assert.match(adminRoutesSource, /"\/legal\/documents\/:id\/publish"/);
-  assert.match(adminRoutesSource, /"\/legal\/consents"/);
-  assert.match(adminRoutesSource, /"\/legal\/exports\/all\.xlsx"/);
-  assert.match(adminRoutesSource, /"\/legal\/exports\/archive\.zip"/);
-  assert.match(adminRoutesSource, /"\/users\/:userId\/legal\/consents\.xlsx"/);
-  assert.match(adminRoutesSource, /"\/users\/:userId\/legal\/archive\.zip"/);
+  assert.match(legalControllerSource, /@Get\("\/documents"\)/);
+  assert.match(legalControllerSource, /@Get\("\/documents\/:slug"\)/);
+  assert.match(legalControllerSource, /@Get\("\/my-consents"\)/);
+  assert.match(legalControllerSource, /@Post\("\/consents\/accept"\)/);
+  assert.match(legalControllerSource, /@Post\("\/consents\/revoke-optional"\)/);
+  assert.match(adminControllerSource, /@UseGuards\(NestJwtAuthGuard, NestAdminGuard\)/);
+  assert.match(adminControllerSource, /@Get\("\/legal\/documents"\)/);
+  assert.match(adminControllerSource, /@Post\("\/legal\/documents\/:id\/new-version"\)/);
+  assert.match(adminControllerSource, /@Post\("\/legal\/documents\/:id\/publish"\)/);
+  assert.match(adminControllerSource, /@Get\("\/legal\/consents"\)/);
+  assert.match(adminControllerSource, /@Get\("\/legal\/exports\/all\.xlsx"\)/);
+  assert.match(adminControllerSource, /@Get\("\/legal\/exports\/archive\.zip"\)/);
+  assert.match(adminControllerSource, /@Get\("\/users\/:userId\/legal\/consents\.xlsx"\)/);
+  assert.match(adminControllerSource, /@Get\("\/users\/:userId\/legal\/archive\.zip"\)/);
   assert.match(schemaSource, /documentVersion\s+String/);
   assert.match(schemaSource, /documentContentHash\s+String/);
   assert.match(readFileSync(path.resolve(process.cwd(), "src/services/legalService.ts"), "utf8"), /"MISSING_REQUIRED_CONSENT"/);
@@ -557,6 +568,13 @@ async function run() {
   );
   assert.equal(match.status, "not_fit");
   assert.equal(match.reasons[0], "Заявка скрыта, потому что требуется гигиеническая помощь, а в профиле указано «не готов».");
+  assert.equal(safetyApplies({}, {}), true);
+  assert.equal(safetyApplies(null, {}), true);
+  assert.doesNotThrow(() => assertPerformerDocumentDownloadAccess({ id: "helper-1", realRole: "performer" }, { performerId: "helper-1" }));
+  assert.doesNotThrow(() => assertPerformerDocumentDownloadAccess({ id: "admin-1", realRole: "superadmin" }, { performerId: "helper-1" }));
+  assert.throws(() => assertPerformerDocumentDownloadAccess({ id: "helper-2", realRole: "performer" }, { performerId: "helper-1" }), /Нет доступа/);
+  assert.doesNotThrow(() => assertAgreementContractAccess({ id: "customer-1", realRole: "client" }, { clientId: "customer-1", performerId: "helper-1" }));
+  assert.throws(() => assertAgreementContractAccess({ id: "customer-2", realRole: "client" }, { clientId: "customer-1", performerId: "helper-1" }), /Нет доступа/);
   assert.equal(hasAvailableBalance({ balance: 0, bonusBalance: 50 }, 50, true), true);
   assert.equal(hasAvailableBalance({ balance: 0, bonusBalance: 50 }, 50, false), false);
 
@@ -570,6 +588,7 @@ async function run() {
   assert.equal(calculateRecommendedAmount(900, 1500, "once"), 1200);
   assert.equal(calculateRecommendedAmount(700, 1600, "unknown"), 1200);
   assert.equal(calculateRecommendedAmount(900, 1500, "urgent_today"), 1500);
+  await ensureFederalCategoryStructure();
 
   const moderated = moderateChatMessage("Мой телефон 89001234567");
   assert.equal(moderated.status, "hidden");
@@ -651,6 +670,9 @@ async function runServiceTreeAndDraftTests() {
       { nodeSlug: "dishes", recommendedMinPrice: 700, recommendedMaxPrice: 700 },
       { nodeSlug: "household", recommendedMinPrice: 400, recommendedMaxPrice: 400 },
       { nodeSlug: "walk", recommendedMinPrice: 500, recommendedMaxPrice: 500 }
+    ],
+    nodeSafetyRules: [
+      { nodeSlug: "walk", ruleKey: "walk-always-blocked", title: "Прогулка временно недоступна", description: "Правило применяется всегда.", severity: "forbidden", isBlocking: true, applicability: {} }
     ]
   };
   const invalidCycle = structuredClone(payload); invalidCycle.nodes[0].parentSlug = "trash-bags";
@@ -659,7 +681,8 @@ async function runServiceTreeAndDraftTests() {
   assert.equal(validateCategoryImport(invalidOrphan).valid, false);
   const invalidDuplicate = structuredClone(payload); invalidDuplicate.nodes.push({ ...invalidDuplicate.nodes[2] });
   assert.equal(validateCategoryImport(invalidDuplicate).valid, false);
-  assert.equal(validateCategoryImport(payload).summary.maxDepth, 5);
+    assert.equal(validateCategoryImport(payload).summary.maxDepth, 5);
+    assert.equal(validateCategoryImport(payload).valid, true, "Пустая applicability допустима для всегда применимого blocking-rule");
 
   let structureId = "";
   const draftIds: string[] = [];
@@ -686,6 +709,8 @@ async function runServiceTreeAndDraftTests() {
     await assert.rejects(calculateServiceTreeQuote({ cityId: city.id, selectedNodeSlugs: ["ironing"], visits: [visit] }), (error: any) => error?.code === "service_node_required");
     await assert.rejects(calculateServiceTreeQuote({ cityId: city.id, selectedNodeSlugs: ["cleaning", "walk"], dynamicFieldValues: { walk: { minutes: 60 } }, visits: [visit] }), (error: any) => error?.code === "service_node_excluded");
     await assert.rejects(calculateServiceTreeQuote({ cityId: city.id, selectedNodeSlugs: ["walk"], visits: [visit] }), (error: any) => error?.code === "service_node_fields_invalid");
+    const alwaysBlockedQuote = await calculateServiceTreeQuote({ cityId: city.id, selectedNodeSlugs: ["walk"], dynamicFieldValues: { walk: { minutes: 60 } }, visits: [visit] });
+    assert.ok(alwaysBlockedQuote.safetyResults.some((rule: any) => rule.ruleKey === "walk-always-blocked" && rule.isBlocking && Object.keys(rule.applicability).length === 0));
 
     const emptyDraft = await createRequestDraft(customer.id, {}); draftIds.push(emptyDraft.id);
     assert.deepEqual(emptyDraft.selectedNodeSlugs, []);
@@ -695,6 +720,21 @@ async function runServiceTreeAndDraftTests() {
     await assert.rejects(updateRequestDraft(customer.id, partial.id, { revision: 1, title: "Конфликт" }), (error: any) => error?.code === "request_draft_revision_conflict");
     await assert.rejects(updateRequestDraft(otherCustomer.id, partial.id, { revision: 2 }), (error: any) => error?.code === "request_draft_not_found");
     await assert.rejects(publishRequestDraft(customer.id, partial.id, updated.revision), (error: any) => error?.code === "request_draft_publish_validation_failed");
+
+    const safetyBlockedDraft = await createRequestDraft(customer.id, {
+      cityId: city.id,
+      title: "Заблокированная прогулка",
+      selectedNodeSlugs: ["walk"],
+      dynamicFieldValues: { walk: { minutes: 60 } },
+      formData: { cityId: city.id, contactName: customer.displayName, contactPhone: customer.phone, recipientType: "self", dependentMainState: "independent", frequency: "once", address: { street: "Мира", house: "1" } },
+      scheduleDraft: { frequency: "once", startDate: "2030-01-10", slots: [visit] },
+      addressDraft: { street: "Мира", house: "1" }
+    });
+    draftIds.push(safetyBlockedDraft.id);
+    await assert.rejects(
+      publishRequestDraft(customer.id, safetyBlockedDraft.id, safetyBlockedDraft.revision),
+      (error: any) => error?.code === "request_safety_blocked" && error?.details?.blockingRules?.some((rule: any) => rule.ruleKey === "walk-always-blocked")
+    );
 
     const complete = await createRequestDraft(customer.id, { cityId: city.id, title: "Готовая заявка", selectedNodeSlugs: ["cleaning", "trash"], formData: { cityId: city.id, contactName: customer.displayName, contactPhone: customer.phone, recipientType: "self", dependentMainState: "independent", frequency: "once", address: { street: "Мира", house: "1" }, comment: "Тест" }, scheduleDraft: { frequency: "once", startDate: "2030-01-10", slots: [visit] }, addressDraft: { street: "Мира", house: "1" } }); draftIds.push(complete.id);
     const published = await publishRequestDraft(customer.id, complete.id, complete.revision); requestIds.push(published.requestId);
@@ -736,7 +776,7 @@ async function runUserManagementSecurityTests() {
   const superadmin = await prisma.user.findFirstOrThrow({ where: { role: "superadmin", status: "active" } });
   assert.equal(await prisma.user.count({ where: { role: "superadmin", status: "active" } }), 1);
   const suffix = Date.now();
-  const passwordHash = await bcrypt.hash("Original!Pass2026", 10);
+  const passwordHash = await hashPassword("Original!Pass2026");
   const target = await prisma.user.create({
     data: {
       role: "manager",
@@ -1002,6 +1042,8 @@ async function runServiceCommunicationTests() {
     assert.equal(sent.message.attachments[0].originalFileName, "receipt.pdf");
     assert.doesNotMatch(sent.message.attachments[0].fileName, /\.\./);
     assert.equal(sent.message.attachments[0].userId, customer.id);
+    assert.match(sent.message.attachments[0].storagePath, /^service-message-attachments\/[0-9a-f-]{36}$/);
+    assert.doesNotMatch(sent.message.attachments[0].storagePath, new RegExp(customer.id));
     storagePaths.push(sent.message.attachments[0].storagePath);
     const payment = await prisma.paymentTransaction.create({ data: { userId: customer.id, provider: "mock", orderId: `message-payment-${suffix}`, amount: 150, status: "succeeded" } });
     const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]).toString("base64");
@@ -1103,9 +1145,9 @@ async function runCategoryStructureTests() {
   assert.deepEqual(cityAccompaniment.formFields, federalAccompaniment.formFields);
   assert.deepEqual(cityAccompaniment.durationEffect, federalAccompaniment.durationEffect);
   assert.ok(federalV2.safetyRules.length >= 7);
-  const admin = await prisma.user.findFirstOrThrow({ where: { role: "superadmin" } });
-  const helper = await prisma.user.findFirstOrThrow({ where: { role: "performer" } });
-  const customer = await prisma.user.findFirstOrThrow({ where: { role: "client" } });
+  const admin = await prisma.user.findUniqueOrThrow({ where: { email: "admin@zabota.local" } });
+  const helper = await prisma.user.findUniqueOrThrow({ where: { email: "performer@zabota.local" } });
+  const customer = await prisma.user.findUniqueOrThrow({ where: { email: "client@zabota.local" } });
   const legacyCategory = await prisma.serviceCategory.findFirstOrThrow();
   const yugorsk = await prisma.city.findFirstOrThrow({ where: { slug: "yugorsk" } });
   const yugorskCatalog = await categoriesForCity(yugorsk.id, "customer");
@@ -1393,9 +1435,8 @@ async function runCategoryStructureTests() {
       taskTemplates: [{ categorySlug: "dynamic", taskSlug: "dynamic-task", title: "Динамическая задача", formFields: [{ id: "destination", label: "Место", type: "text", required: true }] }]
     }).valid, true);
     assert.equal(validateCategoryImport({ scope: { type: "city", cityId: city.id }, categories: [{ slug: "legacy-safe", title: "Старая структура" }], safetyRules: [{ categorySlug: "legacy-safe", title: "Информация", description: "Не блокирует", isBlocking: false }] }).valid, true);
-    const invalidBlockingRule = validateCategoryImport({ scope: { type: "city", cityId: city.id }, categories: [{ slug: "unsafe-rule", title: "Проверка" }], safetyRules: [{ categorySlug: "unsafe-rule", ruleKey: "unsafe", title: "Блокировка", description: "Нет условия", isBlocking: true }] });
-    assert.equal(invalidBlockingRule.valid, false);
-    assert.ok(invalidBlockingRule.errors.some((error) => error.includes("машиночитаемое условие")));
+    const alwaysBlockingRule = validateCategoryImport({ scope: { type: "city", cityId: city.id }, categories: [{ slug: "unsafe-rule", title: "Проверка" }], safetyRules: [{ categorySlug: "unsafe-rule", ruleKey: "unsafe", title: "Блокировка", description: "Нет условия", isBlocking: true }] });
+    assert.equal(alwaysBlockingRule.valid, true);
 
     const structure = await prisma.categoryStructure.findUniqueOrThrow({ where: { id: cityDraft.id }, include: { categories: true } });
     const rootCategory = structure.categories.find((category) => !category.parentId)!;
@@ -1612,7 +1653,7 @@ async function runCategoryStructureTests() {
 
     const manager = await prisma.user.findFirst({ where: { role: "manager" } });
     if (manager) {
-      const managerAccessToken = jwt.sign({ sub: manager.id, role: "manager", tokenVersion: manager.authTokenVersion }, env.jwtSecret);
+      const managerAccessToken = tokenFor(manager.id, "manager");
       const denied = await apiRequest(createApp(), "/api/admin/category-structures/create-from-parent", { method: "POST", token: managerAccessToken, body: { scopeType: "city", cityId: city.id } });
       assert.equal(denied.status, 403);
       const deniedDelete = await apiRequest(createApp(), `/api/admin/category-structures/${rollbackDraft.id}`, { method: "DELETE", token: managerAccessToken, body: { comment: "Нет прав" } });
@@ -1801,9 +1842,13 @@ async function runManagerRoleTests() {
   const startedAt = new Date();
   const [admin, candidate, target] = await Promise.all([
     prisma.user.findFirstOrThrow({ where: { role: { in: ["admin", "superadmin"] }, status: "active" } }),
-    prisma.user.findFirstOrThrow({ where: { role: "client", status: "active", passwordHash: { not: null } } }),
+    prisma.user.findUniqueOrThrow({ where: { email: "client@zabota.local" } }),
     prisma.user.findFirstOrThrow({ where: { role: "performer", status: "active" } })
   ]);
+  assert.equal(candidate.role, "client");
+  assert.equal(candidate.status, "active");
+  assert.ok(candidate.passwordHash);
+  assert.ok(candidate.phone);
   const originalCandidate = {
     role: candidate.role,
     rolesJson: candidate.rolesJson,
@@ -1838,7 +1883,7 @@ async function runManagerRoleTests() {
     assert.equal(response.payload.roleBeforeManager, "client");
 
     const manager = await prisma.user.findUniqueOrThrow({ where: { id: candidate.id } });
-    const managerToken = jwt.sign({ sub: manager.id, role: "manager", tokenVersion: manager.authTokenVersion }, env.jwtSecret);
+    const managerToken = tokenFor(manager.id, "manager");
     const [activeCity, activeCategory] = await Promise.all([
       prisma.city.findFirstOrThrow({ where: { isActive: true, serviceStatus: "active", directoryStatus: { notIn: ["hidden", "duplicate"] } } }),
       prisma.serviceCategory.findFirstOrThrow({ where: { isActive: true } })
@@ -2109,13 +2154,11 @@ async function runAdminActingModeTests() {
     });
     assert.equal(response.status, 403);
 
-    const forgedToken = jwt.sign({
-      sub: customer.id,
-      role: "client",
+    const forgedToken = await materializeTestToken(tokenFor(customer.id, "client"), {
       realRole: "client",
       actingRole: "performer",
       isActingAsRole: true
-    }, env.jwtSecret);
+    });
     response = await apiRequest(app, "/api/auth/me", { method: "GET", token: forgedToken });
     assert.equal(response.status, 401);
 
@@ -2396,6 +2439,7 @@ async function runUserLifecycleTests() {
     await prisma.auditLog.deleteMany({ where: { entityType: "user", entityId: { in: createdUserIds } } });
     if (requestId) {
       await prisma.complaint.deleteMany({ where: { requestId } });
+      await prisma.agreementContract.deleteMany({ where: { requestId } });
       await prisma.chatMessage.deleteMany({ where: { chat: { requestId } } });
       await prisma.chat.deleteMany({ where: { requestId } });
       await prisma.requestResponse.deleteMany({ where: { requestId } });
@@ -2670,6 +2714,7 @@ async function runOAuthPendingCancellationTests() {
       where: { OR: [{ actorUserId: { in: createdUserIds } }, { entityType: "user", entityId: { in: createdUserIds } }] }
     });
     for (const requestId of createdRequestIds) {
+      await prisma.agreementContract.deleteMany({ where: { requestId } });
       await prisma.chatMessage.deleteMany({ where: { chat: { requestId } } });
       await prisma.chat.deleteMany({ where: { requestId } });
       await prisma.requestResponse.deleteMany({ where: { requestId } });
@@ -2690,13 +2735,16 @@ async function runUploadStorageTests() {
       performerId: "performer-test",
       type: "self_employed",
       fileName: "../../private document.pdf",
-      fileData: `data:application/pdf;base64,${Buffer.from("test-pdf").toString("base64")}`
+      fileData: `data:application/pdf;base64,${Buffer.from("%PDF-1.4\ntest-pdf").toString("base64")}`
     }, root);
-    assert.match(saved.fileUrl, /^\/uploads\/performer-documents\/performer-test\//);
-    assert.equal(saved.fileUrl.includes("/app/backend/uploads"), false);
-    const storedDirectory = path.join(root, "performer-documents", "performer-test");
+    assert.match(saved.storagePath, /^performer-documents[\\/][0-9a-f-]{36}$/);
+    assert.doesNotMatch(saved.storagePath.split(/[\\/]/).at(-1) ?? "", /performer-test|private|document/i);
+    assert.equal(path.isAbsolute(saved.storagePath), false);
+    assert.equal(saved.originalFileName, "private document.pdf");
+    assert.match(saved.checksum, /^[a-f0-9]{64}$/);
+    const storedDirectory = path.join(root, "performer-documents");
     assert.equal(existsSync(storedDirectory), true);
-    assert.equal(readdirSync(storedDirectory).length, 1);
+    assert.equal(readdirSync(storedDirectory).length, 2, "object and local metadata sidecar must be stored");
     assert.throws(() => resolveStoragePath(root, "..", "outside.pdf"), /Недопустимый путь файла/);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -2732,6 +2780,93 @@ async function runLegalBootstrapTests() {
     const response = await apiRequest(app, `/api/legal/documents/${definition.slug}`, { method: "GET" });
     assert.equal(response.status, 200, `Документ ${definition.type} должен открываться по ссылке`);
     assert.equal(response.payload.type, definition.type);
+  }
+
+  const admin = await prisma.user.findFirstOrThrow({ where: { role: "superadmin", status: "active" } });
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const documentType = `characterization_${suffix}`;
+  const documentSlug = `characterization-${suffix}`;
+  const user = await prisma.user.create({
+    data: {
+      role: "client",
+      rolesJson: '["client"]',
+      displayName: `Legal characterization ${suffix}`,
+      status: "active"
+    }
+  });
+  const documentIds: string[] = [];
+  try {
+    let response = await apiRequest(app, "/api/admin/legal/documents", {
+      method: "POST",
+      token: tokenFor(admin.id, admin.role),
+      body: {
+        type: documentType,
+        roleScope: "customer",
+        title: "Документ characterization-теста",
+        slug: documentSlug,
+        version: "1.0",
+        contentMarkdown: "Первая опубликованная версия документа для characterization-теста.",
+        isRequired: false
+      }
+    });
+    assert.equal(response.status, 201);
+    documentIds.push(response.payload.id);
+
+    response = await apiRequest(app, `/api/admin/legal/documents/${response.payload.id}/publish`, {
+      method: "POST",
+      token: tokenFor(admin.id, admin.role)
+    });
+    assert.equal(response.status, 200);
+    const publishedDocument = response.payload;
+
+    response = await apiRequest(app, `/api/admin/legal/documents/${publishedDocument.id}`, {
+      method: "PATCH",
+      token: tokenFor(admin.id, admin.role),
+      body: { title: "Недопустимое изменение опубликованной версии" }
+    });
+    assert.equal(response.status, 400);
+    assert.equal(response.payload.code, "published_legal_document_locked");
+
+    response = await apiRequest(app, `/api/admin/legal/documents/${publishedDocument.id}/new-version`, {
+      method: "POST",
+      token: tokenFor(admin.id, admin.role),
+      body: {
+        version: "1.1",
+        contentMarkdown: "Вторая отдельная версия документа для characterization-теста."
+      }
+    });
+    assert.equal(response.status, 201);
+    documentIds.push(response.payload.id);
+    assert.notEqual(response.payload.id, publishedDocument.id);
+    assert.equal(response.payload.isPublished, false);
+    assert.notEqual(response.payload.contentHash, publishedDocument.contentHash);
+    const unchangedPublishedDocument = await prisma.legalDocument.findUniqueOrThrow({ where: { id: publishedDocument.id } });
+    assert.equal(unchangedPublishedDocument.contentHash, publishedDocument.contentHash);
+    assert.equal(unchangedPublishedDocument.contentMarkdown, publishedDocument.contentMarkdown);
+
+    await acceptLatestLegalDocuments({
+      userId: user.id,
+      documentTypes: [documentType],
+      source: "characterization_test",
+      ipAddress: "127.0.0.1",
+      userAgent: "vitest"
+    });
+    const proof = await prisma.userConsent.findFirstOrThrow({
+      where: { userId: user.id, documentId: publishedDocument.id }
+    });
+    assert.equal(proof.documentVersion, publishedDocument.version);
+    assert.equal(proof.documentContentHash, publishedDocument.contentHash);
+    assert.equal(proof.source, "characterization_test");
+    assert.ok(proof.acceptedAt);
+    assert.match(proof.documentContentHash, /^[a-f0-9]{64}$/);
+  } finally {
+    await prisma.userConsent.deleteMany({ where: { userId: user.id } });
+    await prisma.userConsentAuditLog.deleteMany({
+      where: { OR: [{ userId: user.id }, { documentType }] }
+    });
+    await prisma.auditLog.deleteMany({ where: { entityType: "legal_document", entityId: { in: documentIds } } });
+    await prisma.legalDocument.deleteMany({ where: { id: { in: documentIds } } });
+    await prisma.user.delete({ where: { id: user.id } });
   }
 }
 
@@ -2789,36 +2924,24 @@ async function runStaticRoutingTests() {
     const routePaths = expressRoutePaths(app);
     assert.ok(routePaths.includes("/api/health"));
     assert.ok(routePaths.includes("/"));
-    assert.ok(routePaths.includes("/prices.html"));
-    assert.ok(routePaths.includes("/payment.html"));
-    assert.ok(routePaths.includes("/refund.html"));
-    assert.ok(routePaths.includes("/security.html"));
-    assert.ok(routePaths.includes("/contacts.html"));
-    assert.ok(routePaths.includes("/faq.html"));
-    assert.ok(routePaths.includes("/how-it-works.html"));
-    assert.ok(routePaths.includes("/legal.html"));
     assert.ok(routePaths.includes("/app"));
-    assert.ok(routePaths.includes("/app/*"));
+    assert.ok(routePaths.includes("/app/*path"));
     assert.ok(routePaths.includes("/legal"));
-    assert.ok(routePaths.includes("/legal/*"));
-    assert.ok(routePaths.includes("*.php"));
-    assert.ok(routePaths.includes("/admin"));
-    assert.ok(routePaths.includes("/admin/*"));
-    assert.ok(routePaths.includes("/includes"));
-    assert.ok(routePaths.includes("/includes/*"));
-    assert.ok(routePaths.includes("/data"));
-    assert.ok(routePaths.includes("/data/*"));
-    assert.ok(routePaths.includes("*.html"));
+    assert.ok(routePaths.includes("/legal/*path"));
+    assert.ok(routePaths.includes("/uploads/*path"));
+    assert.ok(routePaths.includes("/*path"));
     assert.ok(routeIndex(app, "/api/health") < routeIndex(app, "/app"));
     assert.ok(routeIndex(app, "/api/health") < routeIndex(app, "/"));
 
-    const appSource = readFileSync(path.join(projectRoot, "backend/src/app.ts"), "utf8");
-    assert.match(appSource, /app\.use\("\/uploads", express\.static\(uploadsRoot\)\)/);
-    assert.match(appSource, /app\.use\("\/app\/assets", express\.static\(frontendAssetsPath/);
-    assert.match(appSource, /app\.use\("\/css", express\.static\(landingCssPath/);
-    assert.match(appSource, /app\.use\("\/js", express\.static\(landingJsPath/);
-    assert.match(appSource, /app\.use\("\/assets", express\.static\(landingAssetsPath/);
-    assert.match(appSource, /app\.get\(\["\/app", "\/app\/\*", "\/legal", "\/legal\/\*"\]/);
+    const staticControllerSource = readFileSync(path.join(projectRoot, "backend/src/nest/static/static-delivery.controller.ts"), "utf8");
+    assert.doesNotMatch(staticControllerSource, /express\.static/);
+    assert.match(staticControllerSource, /@Get\("uploads\/\*path"\)/);
+    assert.match(staticControllerSource, /@Get\(\["app", "app\/\*path", "legal", "legal\/\*path"\]\)/);
+    assert.match(staticControllerSource, /request\.path\.startsWith\("\/api"\)/);
+    assert.match(staticControllerSource, /request\.path\.startsWith\("\/admin"\)/);
+    assert.match(staticControllerSource, /request\.path\.startsWith\("\/includes"\)/);
+    assert.match(staticControllerSource, /request\.path\.startsWith\("\/data"\)/);
+    assert.match(staticControllerSource, /isPathInsideRoot/);
   } finally {
     env.nodeEnv = originalNodeEnv;
   }
@@ -2827,6 +2950,8 @@ async function runStaticRoutingTests() {
 async function runProductionStartupTests() {
   const projectRoot = testProjectRoot();
   const startupScript = readFileSync(path.join(projectRoot, "scripts/start-preview.mjs"), "utf8");
+  const dockerfile = readFileSync(path.join(projectRoot, "Dockerfile"), "utf8");
+  const productionCompose = readFileSync(path.join(projectRoot, "compose.production.yml"), "utf8");
   const productionBootstrapScript = readFileSync(path.join(projectRoot, "scripts/bootstrap-production-admin.mjs"), "utf8");
   const productionEnvExample = readFileSync(path.join(projectRoot, ".env.production.example"), "utf8");
 
@@ -2834,9 +2959,18 @@ async function runProductionStartupTests() {
   assert.match(startupScript, /backend\/dist\/prisma\/seed\.js/);
   assert.match(startupScript, /scripts\/bootstrap-production-admin\.mjs/);
   assert.match(startupScript, /bootstrapCityDirectory\.js/);
+  assert.doesNotMatch(startupScript, /run\("npx", \["prisma"/);
+  assert.doesNotMatch(startupScript, /"db", "push"/);
+  assert.match(startupScript, /DATABASE_URL must point to PostgreSQL/);
   assert.match(startupScript, /PRODUCTION_ADMIN_EMAIL/);
   assert.match(startupScript, /PRODUCTION_ADMIN_PASSWORD/);
   assert.match(startupScript, /PRODUCTION_ADMIN_PHONE/);
+
+  assert.match(dockerfile, /FROM dependencies AS migration/);
+  assert.match(dockerfile, /CMD \["npm", "run", "db:migrate:deploy"\]/);
+  assert.match(dockerfile, /node_modules\/deepmerge-ts/);
+  assert.match(productionCompose, /migrate:/);
+  assert.match(productionCompose, /condition: service_completed_successfully/);
 
   assert.match(productionBootstrapScript, /normalizeRussianPhone/);
   assert.match(productionBootstrapScript, /role: "superadmin"/);
@@ -2849,6 +2983,7 @@ async function runProductionStartupTests() {
   assert.doesNotMatch(productionBootstrapScript, /password123/);
 
   assert.match(productionEnvExample, /SEED_DEMO_DATA=false/);
+  assert.match(productionEnvExample, /DATABASE_URL="postgresql:\/\//);
   assert.match(productionEnvExample, /PRODUCTION_ADMIN_EMAIL=/);
   assert.match(productionEnvExample, /PRODUCTION_ADMIN_PASSWORD=/);
   assert.match(productionEnvExample, /PRODUCTION_ADMIN_PHONE=/);
@@ -2912,7 +3047,7 @@ async function runSettlementDirectoryTests() {
   const user = await prisma.user.create({
     data: { role: "client", rolesJson: '["client"]', displayName: "Тест городов", status: "active" }
   });
-  const token = jwt.sign({ sub: user.id, role: "client" }, env.jwtSecret);
+  const token = tokenFor(user.id, "client");
   const suggestedName = `Посёлок Проверочный ${suffix}`;
   const suggested = await apiRequest(app, "/api/settlements/suggest", {
     method: "POST",
@@ -3055,7 +3190,7 @@ async function runSettlementDirectoryTests() {
       visibilityStatus: "city_visible"
     }
   });
-  const helperToken = jwt.sign({ sub: helper.id, role: "performer" }, env.jwtSecret);
+  const helperToken = tokenFor(helper.id, "performer");
   const helperRequests = await apiRequest(app, "/api/requests", { method: "GET", token: helperToken });
   assert.equal(helperRequests.status, 200);
   assert.ok(helperRequests.payload.some((request: any) => request.id === visibleRequest.id));
@@ -3328,6 +3463,7 @@ async function runBonusServiceFeeTests() {
 
     const clientToken = tokenFor(client.id, "client");
     const performerToken = tokenFor(performer.id, "performer");
+    const requestDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
     let response = await apiRequest(app, "/api/requests", {
       method: "POST",
       token: clientToken,
@@ -3338,6 +3474,10 @@ async function runBonusServiceFeeTests() {
         description: "Бытовая помощь для проверки баланса",
         addressStreet: "ул. Мира",
         addressHouse: "10",
+        date: requestDate,
+        timeFrom: "12:00",
+        timeTo: "14:00",
+        expectedDurationHours: 2,
         additionalActions: [],
         dependentState: []
       }
@@ -3345,8 +3485,26 @@ async function runBonusServiceFeeTests() {
     assert.equal(response.status, 201, "Создание заявки не должно требовать 150 ₽");
     const zeroBalanceRequestId = response.payload.id;
     requestIds.push(zeroBalanceRequestId);
+    assert.equal(await countServiceFeeTransactions(zeroBalanceRequestId), 0);
     response = await apiRequest(app, `/api/requests/${zeroBalanceRequestId}/publish`, { method: "POST", token: clientToken });
     assert.equal(response.status, 200);
+    const originalHygieneReadiness = (await prisma.performerProfile.findUniqueOrThrow({ where: { userId: performer.id } })).readyForHygieneHelp;
+    await Promise.all([
+      prisma.clientRequest.update({ where: { id: zeroBalanceRequestId }, data: { needsHygieneHelp: true } }),
+      prisma.performerProfile.update({ where: { userId: performer.id }, data: { readyForHygieneHelp: false } })
+    ]);
+    response = await apiRequest(app, `/api/requests/${zeroBalanceRequestId}/respond`, {
+      method: "POST",
+      token: performerToken,
+      body: { message: "Недопустимый отклик" }
+    });
+    assert.equal(response.status, 403);
+    assert.equal(response.payload.code, "request_match_blocked");
+    assert.equal(await prisma.requestResponse.count({ where: { requestId: zeroBalanceRequestId, performerId: performer.id } }), 0);
+    await Promise.all([
+      prisma.clientRequest.update({ where: { id: zeroBalanceRequestId }, data: { needsHygieneHelp: false } }),
+      prisma.performerProfile.update({ where: { userId: performer.id }, data: { readyForHygieneHelp: originalHygieneReadiness } })
+    ]);
     response = await apiRequest(app, `/api/requests/${zeroBalanceRequestId}/respond`, {
       method: "POST",
       token: performerToken,
@@ -3354,24 +3512,47 @@ async function runBonusServiceFeeTests() {
     });
     assert.equal(response.status, 201, "Отклик с нулевым балансом не должен требовать 150 ₽");
     const responseId = response.payload.response.id;
+    assert.equal(await countServiceFeeTransactions(zeroBalanceRequestId), 0);
     response = await apiRequest(app, `/api/requests/responses/${responseId}/accept`, { method: "POST", token: clientToken });
     assert.equal(response.status, 200, "Открытие чата не должно требовать 150 ₽");
     const chatId = response.payload.chat.id;
+    assert.equal(await countServiceFeeTransactions(zeroBalanceRequestId), 0);
 
     response = await apiRequest(app, `/api/chats/${chatId}/terms`, {
       method: "PATCH",
       token: clientToken,
-      body: { agreedHelperAmount: 700, agreedDurationMinutes: 120, agreedTermsComment: "Бытовая помощь по заявке" }
+      body: {
+        agreedHelperAmount: 700,
+        agreedDurationMinutes: 120,
+        agreedTermsComment: "Бытовая помощь по заявке"
+      }
     });
     assert.equal(response.status, 200, JSON.stringify(response.payload));
 
     response = await apiRequest(app, `/api/chats/${chatId}/client-confirm`, { method: "POST", token: clientToken });
     assert.equal(response.status, 200);
+    assert.equal(await countServiceFeeTransactions(zeroBalanceRequestId), 0);
     response = await apiRequest(app, `/api/chats/${chatId}/performer-confirm`, { method: "POST", token: performerToken });
     assert.equal(response.status, 200);
     assert.equal(response.payload.status, "waiting_client_balance");
     assert.equal((await prisma.clientRequest.findUniqueOrThrow({ where: { id: zeroBalanceRequestId } })).status, "waiting_client_balance");
     assert.equal(await countServiceFeeTransactions(zeroBalanceRequestId), 0);
+
+    await Promise.all([
+      prisma.user.update({ where: { id: client.id }, data: { balance: 0, bonusBalance: 100 } }),
+      prisma.user.update({ where: { id: performer.id }, data: { balance: 0, bonusBalance: 0 } })
+    ]);
+    await apiRequest(app, `/api/chats/${chatId}/client-confirm`, { method: "POST", token: clientToken });
+    response = await apiRequest(app, `/api/chats/${chatId}/performer-confirm`, { method: "POST", token: performerToken });
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.status, "waiting_performer_balance");
+    assert.deepEqual(
+      await prisma.user.findUniqueOrThrow({ where: { id: client.id }, select: { balance: true, bonusBalance: true } }),
+      { balance: 0, bonusBalance: 100 }
+    );
+    assert.equal(await countServiceFeeTransactions(zeroBalanceRequestId), 0);
+    assert.equal(await prisma.serviceFeeAgreementBatch.count({ where: { requestId: zeroBalanceRequestId } }), 0);
+    assert.equal(await prisma.requestVisit.count({ where: { requestId: zeroBalanceRequestId } }), 0);
 
     await Promise.all([
       prisma.user.update({ where: { id: client.id }, data: { balance: 0, bonusBalance: 100 } }),
@@ -3443,13 +3624,23 @@ async function runBonusServiceFeeTests() {
         status: "open"
       }
     });
-    await apiRequest(app, `/api/chats/${combinedChat.id}/terms`, {
+    response = await apiRequest(app, `/api/chats/${combinedChat.id}/terms`, {
       method: "PATCH",
       token: clientToken,
-      body: { agreedHelperAmount: 700 }
+      body: {
+        agreedHelperAmount: 700,
+        schedule: {
+          frequency: "once",
+          startDate: requestDate,
+          slots: [{ id: "combined-fee", startTime: "12:00", durationMinutes: 120 }]
+        }
+      }
     });
-    await apiRequest(app, `/api/chats/${combinedChat.id}/client-confirm`, { method: "POST", token: clientToken });
+    assert.equal(response.status, 200, JSON.stringify(response.payload));
+    response = await apiRequest(app, `/api/chats/${combinedChat.id}/client-confirm`, { method: "POST", token: clientToken });
+    assert.equal(response.status, 200, JSON.stringify(response.payload));
     response = await apiRequest(app, `/api/chats/${combinedChat.id}/performer-confirm`, { method: "POST", token: performerToken });
+    assert.equal(response.status, 200, JSON.stringify(response.payload));
     assert.equal(response.payload.status, "in_work");
     assert.deepEqual(
       await prisma.user.findUniqueOrThrow({ where: { id: client.id }, select: { balance: true, bonusBalance: true } }),
@@ -3589,6 +3780,14 @@ async function runBonusServiceFeeTests() {
     assert.equal(response.payload.agreementVersion.totalDurationMinutes, 30 * 60);
     assert.equal(response.payload.agreementVersion.totalHelpAmount, quotedTotalHelpAmount);
     assert.deepEqual(response.payload.agreementVersion.expandedVisits.slice(0, 3).map((visit: any) => visit.agreedHelpAmount), quotedVisits.slice(0, 3).map((visit: any) => visit.calculatedHelpPrice));
+    assert.equal(response.payload.agreementVersion.contract.templateVersion, "1.0");
+    assert.equal(response.payload.agreementVersion.contract.documentVersion, response.payload.agreementVersion.version);
+    assert.match(response.payload.agreementVersion.contract.checksum, /^[a-f0-9]{64}$/);
+    const storedContract = await prisma.agreementContract.findUniqueOrThrow({ where: { agreementVersionId: response.payload.agreementVersion.id } });
+    assert.equal(storedContract.checksum, response.payload.agreementVersion.contract.checksum);
+    assert.match(storedContract.storagePath, /^agreement-contracts\/[0-9a-f-]{36}$/);
+    assert.match(storedContract.contentText, /Пять дней по три визита/);
+    assert.match(storedContract.contentText, new RegExp(response.payload.agreementVersion.termsHash));
     const agreementVersionId = response.payload.agreementVersion.id;
     const agreementTermsHash = response.payload.agreementVersion.termsHash;
     await prisma.agreementVersion.update({ where: { id: agreementVersionId }, data: { termsHash: "tampered" } });
@@ -3625,12 +3824,34 @@ async function runBonusServiceFeeTests() {
       await prisma.user.findUniqueOrThrow({ where: { id: performer.id }, select: { balance: true, bonusBalance: true } }),
       { balance: 0, bonusBalance: 0 }
     );
+    const finalizedAgreementBeforeRepeat = await prisma.agreementVersion.findUniqueOrThrow({ where: { id: agreementVersionId } });
     await Promise.all([
       apiRequest(app, `/api/chats/${scheduleChat.id}/client-confirm`, { method: "POST", token: clientToken }),
       apiRequest(app, `/api/chats/${scheduleChat.id}/performer-confirm`, { method: "POST", token: performerToken })
     ]);
     assert.equal(await prisma.serviceFeeAgreementBatch.count({ where: { requestId: scheduleRequest.id } }), 1);
     assert.equal(await countServiceFeeTransactions(scheduleRequest.id), 4);
+    const finalizedAgreementAfterRepeat = await prisma.agreementVersion.findUniqueOrThrow({ where: { id: agreementVersionId } });
+    assert.deepEqual(
+      {
+        status: finalizedAgreementAfterRepeat.status,
+        selectedTasksJson: finalizedAgreementAfterRepeat.selectedTasksJson,
+        scheduleRulesJson: finalizedAgreementAfterRepeat.scheduleRulesJson,
+        expandedVisitsJson: finalizedAgreementAfterRepeat.expandedVisitsJson,
+        pricingSnapshotJson: finalizedAgreementAfterRepeat.pricingSnapshotJson,
+        termsHash: finalizedAgreementAfterRepeat.termsHash,
+        finalizedAt: finalizedAgreementAfterRepeat.finalizedAt?.toISOString()
+      },
+      {
+        status: finalizedAgreementBeforeRepeat.status,
+        selectedTasksJson: finalizedAgreementBeforeRepeat.selectedTasksJson,
+        scheduleRulesJson: finalizedAgreementBeforeRepeat.scheduleRulesJson,
+        expandedVisitsJson: finalizedAgreementBeforeRepeat.expandedVisitsJson,
+        pricingSnapshotJson: finalizedAgreementBeforeRepeat.pricingSnapshotJson,
+        termsHash: finalizedAgreementBeforeRepeat.termsHash,
+        finalizedAt: finalizedAgreementBeforeRepeat.finalizedAt?.toISOString()
+      }
+    );
 
     const firstVisit = await prisma.requestVisit.findFirstOrThrow({ where: { requestId: scheduleRequest.id }, orderBy: { sequence: "asc" } });
     const dispute = await openVisitDispute(firstVisit.id, { id: client.id, role: "client" }, "helper_no_show", "Проверка спора по одному визиту");
@@ -3650,6 +3871,7 @@ async function runBonusServiceFeeTests() {
   } finally {
     if (requestIds.length) {
       await prisma.balanceTransaction.deleteMany({ where: { relatedRequestId: { in: requestIds } } });
+      await prisma.agreementContract.deleteMany({ where: { requestId: { in: requestIds } } });
       await prisma.chatMessage.deleteMany({ where: { chat: { requestId: { in: requestIds } } } });
       await prisma.chat.deleteMany({ where: { requestId: { in: requestIds } } });
       await prisma.requestResponse.deleteMany({ where: { requestId: { in: requestIds } } });
@@ -3809,6 +4031,11 @@ async function runCriticalSafetyTests() {
         agreedAddons: ["shopping"],
         agreedDurationMinutes: 120,
         agreedScheduledAt: "2030-08-01T10:00:00.000Z",
+        schedule: {
+          frequency: "once",
+          startDate: "2030-08-01",
+          slots: [{ id: "critical-safety", startTime: "10:00", durationMinutes: 120 }]
+        },
         agreedTermsComment: "Две бытовые задачи и покупки"
       }
     });
@@ -3939,6 +4166,7 @@ async function runCriticalSafetyTests() {
     env.allowLegacyMockTopUp = originalEnv.allowLegacyMockTopUp;
     if (requestId) {
       await prisma.balanceTransaction.deleteMany({ where: { relatedRequestId: requestId } });
+      await prisma.agreementContract.deleteMany({ where: { requestId } });
       await prisma.chatMessage.deleteMany({ where: { chat: { requestId } } });
       await prisma.chat.deleteMany({ where: { requestId } });
       await prisma.requestResponse.deleteMany({ where: { requestId } });
@@ -5633,7 +5861,30 @@ function cookieHeader(setCookie: unknown, cookieName?: string) {
 }
 
 function tokenFor(userId: string, role: string) {
-  return jwt.sign({ sub: userId, role }, env.jwtSecret);
+  return `test-session:${userId}:${role}`;
+}
+
+async function materializeTestToken(token: string, payloadOverrides: Record<string, unknown> = {}) {
+  if (!token.startsWith("test-session:")) return token;
+  const [, userId, role] = token.split(":");
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  const session = await prisma.authSession.create({
+    data: {
+      familyId: crypto.randomUUID(),
+      userId,
+      tokenHash: crypto.randomBytes(32).toString("base64url"),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      idleExpiresAt: new Date(Date.now() + 60 * 60 * 1000)
+    }
+  });
+  return jwt.sign({
+    sub: userId,
+    role,
+    tokenVersion: user.authTokenVersion,
+    sessionId: session.id,
+    jti: session.id,
+    ...payloadOverrides
+  }, env.jwtSecret, { expiresIn: "10m" });
 }
 
 function firstFileName(directoryPath: string) {
@@ -5658,14 +5909,14 @@ function directoryExists(directoryPath: string) {
 }
 
 function expressRoutePaths(app: ReturnType<typeof createApp>) {
-  return ((app as any)._router?.stack ?? []).flatMap((layer: any) => {
+  return ((app as any).router?.stack ?? (app as any)._router?.stack ?? []).flatMap((layer: any) => {
     if (!layer.route) return [];
     return Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
   });
 }
 
 function routeIndex(app: ReturnType<typeof createApp>, expectedPath: string) {
-  return ((app as any)._router?.stack ?? []).findIndex((layer: any) => {
+  return ((app as any).router?.stack ?? (app as any)._router?.stack ?? []).findIndex((layer: any) => {
     if (!layer.route) return false;
     const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
     return paths.includes(expectedPath);
@@ -5704,7 +5955,7 @@ async function rawAppRequest(
     headers["content-type"] = "application/json";
     headers["content-length"] = String(Buffer.byteLength(bodyText));
   }
-  if (options.token) headers.authorization = `Bearer ${options.token}`;
+  if (options.token) headers.authorization = `Bearer ${await materializeTestToken(options.token)}`;
 
   let bodyPushed = false;
   const req = new Readable({
@@ -5774,7 +6025,25 @@ async function rawAppRequest(
   };
 }
 
-run().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+const businessTestScope = process.env.BUSINESS_TEST_SCOPE?.trim();
+
+test(businessTestScope === "manager-role"
+  ? "manager role authentication and authorization characterization"
+  : businessTestScope === "storage"
+    ? "file storage characterization"
+    : "current backend business and API characterization baseline", async () => {
+  const nestApplication = await createNestApplication({ startScheduler: false });
+  nestHttpHandler = nestApplication.getHttpAdapter().getInstance();
+  try {
+    if (businessTestScope === "manager-role") {
+      await runManagerRoleTests();
+    } else if (businessTestScope === "storage") {
+      await runUploadStorageTests();
+    } else {
+      await runBusinessRegressionSuite();
+    }
+  } finally {
+    await nestApplication.close();
+    nestHttpHandler = null;
+  }
+}, 180_000);

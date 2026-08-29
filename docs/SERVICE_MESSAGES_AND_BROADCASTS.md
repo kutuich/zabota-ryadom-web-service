@@ -31,9 +31,7 @@
 
 ## Вложения и хранение
 
-Вложения хранятся в persistent storage:
-
-`/data/uploads/service-messages/<userId>/<year>/<month>/<messageId>/<safeFileName>`
+Вложения хранятся через общий private object storage с opaque key `service-message-attachments/<random UUID>`. Key не содержит user id или original filename; локальный adapter остаётся для dev/test и rollback, целевой production provider — S3-compatible. Детали описаны в [`OBJECT_STORAGE.md`](OBJECT_STORAGE.md).
 
 Каталог не публикуется через `/uploads`. Скачивание выполняется только через `/api/service-message-attachments/:id/download` после проверки владельца и роли.
 

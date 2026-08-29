@@ -1,5 +1,5 @@
 import path from "node:path";
-import bcrypt from "bcryptjs";
+import { hashPassword } from "../src/services/passwordService";
 import dotenv from "dotenv";
 import { PrismaClient } from "@prisma/client";
 import type { City, ServiceCategory, User } from "@prisma/client";
@@ -26,7 +26,7 @@ type DemoUsers = {
 export async function seedDemoDatabase({ reset }: { reset: boolean }) {
   await cleanupDemoData(reset);
 
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await hashPassword(password);
   const { yugorsk, sovetsky } = await seedCities();
   const categories = await seedCategories();
   const users = await seedUsers(passwordHash, yugorsk.id);
