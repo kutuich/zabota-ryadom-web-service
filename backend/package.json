@@ -11,6 +11,7 @@
     "test": "vitest run --config vitest.config.ts",
     "api:openapi": "node --import tsx src/scripts/generateOpenApi.ts",
     "auth:credential-inventory": "node --import tsx src/scripts/credentialInventory.ts",
+    "auth:reset-superadmin": "node dist/src/scripts/resetSuperadminPassword.js",
     "storage:inventory": "node --import tsx src/scripts/storageInventory.ts",
     "storage:migrate": "node --import tsx src/scripts/migrateLocalObjectsToS3.ts",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma && prisma generate --schema prisma/sqlite-source/schema.prisma",

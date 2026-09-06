@@ -69,8 +69,10 @@ COPY --from=build /app/backend/dist ./backend/dist
 COPY --from=build /app/frontend/dist ./frontend/dist
 COPY --from=build /app/landing-public ./landing-public
 COPY --from=build /app/scripts ./scripts
+COPY --from=build /app/scripts/reset-superadmin-password.sh /usr/local/bin/reset-superadmin-password
 
-RUN chown -R node:node /app /data
+RUN chmod 0755 /usr/local/bin/reset-superadmin-password \
+  && chown -R node:node /app /data
 
 USER node
 

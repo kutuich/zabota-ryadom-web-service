@@ -88,6 +88,16 @@ docker compose --env-file .env.production -f compose.production.yml up -d --no-d
 
 Application startup по-прежнему выполняет только безопасный bootstrap системных данных и опциональный явно включённый seed/bootstrap администратора; Prisma CLI он не вызывает. `db push`, reset и изменение migration history в production запрещены.
 
+## Аварийное восстановление доступа superadmin
+
+Начиная с image, в который включён `reset-superadmin-password`, пароль существующего active `superadmin` можно заменить без изменения JWT/session secrets и без прямого SQL. Перед операцией подтвердить наличие актуального backup PostgreSQL и выполнять команду только из интерактивной SSH-сессии в каталоге актуального Compose release:
+
+```bash
+docker compose --project-name zabota-production --env-file .env.production -f compose.production.yml exec backend reset-superadmin-password
+```
+
+Пароль вводится скрыто дважды и не поддерживается как argument/env/pipe. Команда требует ровно один active `superadmin`; для неоднозначной базы допустим только несекретный `--user-id <id>`. Успешная операция ставит обязательную штатную смену временного пароля, отзывает все сессии выбранного пользователя и пишет безопасный audit event. Подробные инварианты: [USER_MANAGEMENT_AND_SECURITY.md](USER_MANAGEMENT_AND_SECURITY.md).
+
 ## Health и smoke
 
 ```bash

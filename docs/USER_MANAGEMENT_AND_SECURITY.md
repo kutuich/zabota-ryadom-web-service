@@ -34,6 +34,24 @@ Default TTL:
 
 Пока `mustChangePassword=true`, backend разрешает только `/api/auth/me` и `/api/auth/change-temporary-password`. После смены временного пароля все прежние сессии отзываются и создаётся новая.
 
+### Аварийный сброс пароля superadmin
+
+Для восстановления доступа к существующему active `superadmin` служит административная CLI-команда `reset-superadmin-password`. Это не web-сценарий и не замена обычной смены пароля. Команда:
+
+- автоматически выбирает пользователя только когда в базе ровно один active `superadmin`; при неоднозначности требует несекретный `--user-id` и повторно проверяет роль/status;
+- принимает новый временный пароль и подтверждение только через hidden TTY input; CLI arguments, environment variables и pipe для передачи пароля не поддерживаются;
+- применяет ту же password policy и Argon2id implementation, что runtime auth;
+- атомарно меняет только password/security state выбранного пользователя, устанавливает `mustChangePassword`, срок временного пароля, увеличивает `authTokenVersion` и отзывает все его `AuthSession`;
+- создаёт `SUPERADMIN_PASSWORD_RESET_VIA_CLI` в `AuditLog` без password/hash и не меняет JWT/session secrets, роль, status или данные других пользователей.
+
+В production после deploy image, содержащего команду, запускать из каталога актуального Compose release в интерактивной SSH-сессии:
+
+```bash
+docker compose --project-name zabota-production --env-file .env.production -f compose.production.yml exec backend reset-superadmin-password
+```
+
+Если active `superadmin` больше одного, сначала получить целевой internal user ID разрешённым административным способом и добавить `--user-id <id>`. Не передавать пароль в командной строке, env, shell history, тикете или чате. После успешного сброса superadmin входит временным паролем и штатно меняет его через обязательный экран; до этого остальные защищённые маршруты возвращают `temporary_password_change_required`.
+
 Обычный пароль: 12-128 символов, строчная и заглавная буквы, цифра и специальный символ. Пароль не должен содержать телефон, email или никнейм. Все новые hashes создаются централизованно через Argon2id (`m=19456 KiB`, `t=2`, `p=1`, hash length 32).
 
 Bcrypt удалён из active runtime и bootstrap paths. Совместимость входа по bcrypt намеренно не сохранена: такой credential получает `password_reset_required`, без проверки bcrypt и без автоматического rehash. Hash нельзя безопасно конвертировать без исходного пароля. Перед будущим production release необходимо на авторизованной копии БД выполнить `npm run auth:credential-inventory`, сделать backup и организовать контролируемый reset всех `unsupported` credentials. Скрипт выводит только количества и завершает работу с кодом 2 при наличии неподдерживаемых hashes; сами hashes и пользователи не выводятся.
@@ -53,7 +71,7 @@ Bcrypt удалён из active runtime и bootstrap paths. Совместимо
 
 ## Аудит и сообщения
 
-Security-события: `USER_PASSWORD_RESET_BY_SUPERADMIN`, `USER_TEMPORARY_PASSWORD_LOGIN`, `USER_TEMPORARY_PASSWORD_CHANGED`, `USER_PASSWORD_CHANGED`, `USER_SESSIONS_REVOKED`, `USER_DISPLAY_NAME_CHANGED`, `AUTH_SESSION_LOGOUT`, `AUTH_REFRESH_REPLAY_DETECTED`. Существующие manager/block events сохраняются для обратной совместимости.
+Security-события: `USER_PASSWORD_RESET_BY_SUPERADMIN`, `SUPERADMIN_PASSWORD_RESET_VIA_CLI`, `USER_TEMPORARY_PASSWORD_LOGIN`, `USER_TEMPORARY_PASSWORD_CHANGED`, `USER_PASSWORD_CHANGED`, `USER_SESSIONS_REVOKED`, `USER_DISPLAY_NAME_CHANGED`, `AUTH_SESSION_LOGOUT`, `AUTH_REFRESH_REPLAY_DETECTED`. Существующие manager/block events сохраняются для обратной совместимости.
 
 Audit payload может содержать actor/target, роль, reasonCode, безопасный комментарий, IP, User-Agent и результат. Пароли, hashes, JWT, cookies и Authorization header не сохраняются. Уведомления о сбросе и смене пароля отправляются через существующие Service Communications без пароля.
 

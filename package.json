@@ -23,6 +23,7 @@
     "security:audit-ci": "node scripts/check-production-audit.mjs",
     "api:openapi": "npm run api:openapi -w backend",
     "auth:credential-inventory": "npm run auth:credential-inventory -w backend",
+    "auth:reset-superadmin": "npm run auth:reset-superadmin -w backend",
     "storage:inventory": "npm run storage:inventory -w backend",
     "storage:migrate": "npm run storage:migrate -w backend",
     "visual:audit": "node scripts/visual-audit.mjs",
