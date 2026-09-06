@@ -1,7 +1,7 @@
 # AGENTS.md — обязательные правила работы с репозиторием
 
 > Статус: ACTIVE PROCESS
-> Актуализировано: 2026-08-20
+> Актуализировано: 2026-09-06
 
 ## 1. Роль этого файла
 
@@ -84,17 +84,20 @@ Codex не должен восстанавливать продуктовую а
 
 - Не читать и не менять production secrets без отдельной необходимости и явного разрешения.
 - Не менять live T-Bank, production flags, published legal documents или active structures как побочный эффект другой задачи.
-- Миграции БД должны иметь безопасный план, backup/rollback и проверку данных.
-- Текущая SQLite/однопроцессная конфигурация является фактом текущей реализации, а не целевой архитектурной нормой. Целевое состояние определяется Notion.
+- Production сейчас работает через Caddy → loopback backend `127.0.0.1:4100`, Docker Compose project `zabota-production`, PostgreSQL 16 и private S3-compatible object storage.
+- SQLite после Production 12B является только историческим/rollback/audit asset. Forward-only boundary уже пройден; автоматический возврат production к SQLite запрещён, если после cutover появились новые PostgreSQL/S3 writes.
+- Перед рискованным production-изменением обязателен свежий проверенный backup и понятная rollback boundary.
+- Prisma migrations в production выполняются отдельным one-shot migration service до запуска новой application version; application startup не должен вызывать Prisma CLI.
+- `finance_bot` — отдельный production workload. Не перезапускать и не изменять его как побочный эффект deploy web-service.
+- Push, merge, deploy и изменение production credentials выполняются только после отдельного явного разрешения пользователя.
 
-## 9. Минимальные проверки
+## 9. Проверки
 
-```bash
-npm run check
-npm test
-npm run build
-git diff --check
-```
+Проверки выбираются по риску и этапу, а не запускаются полным циклом после каждого небольшого изменения:
+
+- после локального изменения — targeted typecheck/tests затронутого домена и `git diff --check`;
+- в значимой контрольной точке — `npm run check`, релевантный regression/integration suite и при необходимости build;
+- перед release/deploy — один финальный цикл, достаточный для изменённого риска: обычно `npm run check`, `npm test`, `npm run build`, `git diff --check` и критический smoke/E2E.
 
 При изменении Prisma schema выполнить generate и необходимые безопасные проверки миграции. Не направлять destructive DB-команды на production. Для UI запускать доступный visual/E2E audit, соответствующий риску изменения.
 

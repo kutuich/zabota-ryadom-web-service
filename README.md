@@ -95,7 +95,20 @@ npm run db:generate
 
 ## Production
 
-Текущая архитектура: Caddy принимает 80/443, контейнер `zabota-web` доступен только на `127.0.0.1:4000`, `/opt/zabota/data` монтируется в `/data`. Текущее заявленное платёжное состояние и безопасные read-only проверки зафиксированы в [`docs/PRODUCTION_CURRENT_STATE.md`](docs/PRODUCTION_CURRENT_STATE.md). Deploy выполняется только по отдельной команде пользователя.
+Текущая production-топология после Production 12B:
+
+- Caddy принимает 80/443 и проксирует web-service на `127.0.0.1:4100`;
+- application работает как service `backend` Docker Compose project `zabota-production`;
+- PostgreSQL 16 работает в private Docker network с persistent volume;
+- файлы хранятся в private S3-compatible object storage через backend adapter;
+- Prisma migrations выполняются отдельным one-shot service до запуска новой application version;
+- SQLite и старый local uploads-контур сохранены только как исторические/rollback assets и не являются активным production data source;
+- после первой production-записи в PostgreSQL/S3 действует forward-only boundary: автоматический rollback к SQLite недопустим;
+- `finance_bot` является отдельным workload и не входит в deploy web-service.
+
+Текущее заявленное платёжное состояние и безопасные read-only проверки фиксируются в [`docs/PRODUCTION_CURRENT_STATE.md`](docs/PRODUCTION_CURRENT_STATE.md). Deploy выполняется только по отдельной команде пользователя.
+
+Для аварийного восстановления доступа superadmin после deploy версии, содержащей соответствующий tooling, используется интерактивная server-side команда `reset-superadmin-password`. Она не принимает пароль через CLI argument/env/pipe, отзывает сессии целевого superadmin и требует штатной смены временного пароля после входа.
 
 Инструкции:
 
@@ -109,7 +122,7 @@ npm run db:generate
 - изменение уже финализированного графика с финансовой дельтой не реализовано;
 - соглашение о графике остаётся техническим черновиком до юридического утверждения;
 - частичный банковский возврат требует ручной проверки;
-- текущий production остаётся на SQLite до отдельного контролируемого cutover; код этого этапа нельзя деплоить до миграции production данных;
+- production reconciliation scheduler в текущей конфигурации выключен (`VISIT_RECONCILIATION_ENABLED=false`) до отдельного решения по его включению;
 - runtime ownership всех HTTP endpoints перенесён в NestJS; полный inventory зафиксирован в [`docs/NESTJS_MIGRATION.md`](docs/NESTJS_MIGRATION.md);
 - встроенное геокодирование Яндекс.Карт не подключено;
 - внешняя отправка сервисных сообщений по email/SMS не реализована.

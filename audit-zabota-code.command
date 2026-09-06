@@ -481,12 +481,33 @@ docker system df
 echo "=== du -h --max-depth=2 $PRODUCTION_PATH ==="
 du -h --max-depth=2 "$PRODUCTION_PATH" 2>&1 | sort -h | tail -n 80
 
-echo "=== docker ps --filter name=zabota-web ==="
-docker ps --filter name=zabota-web --format '{{.Names}} | {{.Status}} | {{.Image}}'
-if docker ps --filter name=zabota-web --format '{{.Names}}' | grep -qx 'zabota-web'; then
+COMPOSE_DIR="$PRODUCTION_PATH/repo"
+if [ -f "$COMPOSE_DIR/compose.production.yml" ] && [ -f "$COMPOSE_DIR/.env.production" ]; then
+  cd "$COMPOSE_DIR" || exit 31
+  COMPOSE="docker compose --project-name zabota-production --env-file .env.production -f compose.production.yml"
+  backend_container_id="$($COMPOSE ps -q backend 2>/dev/null | head -n 1)"
+  postgres_container_id="$($COMPOSE ps -q postgres 2>/dev/null | head -n 1)"
+else
+  backend_container_id=""
+  postgres_container_id=""
+fi
+
+echo "=== production compose containers ==="
+docker ps --filter name=zabota-production --format '{{.Names}} | {{.Status}} | {{.Image}}'
+if [ -n "$backend_container_id" ] && docker ps -q --no-trunc | grep -q "^${backend_container_id}$"; then
   echo "container_running=yes"
 else
   echo "container_running=no"
+fi
+if [ -n "$postgres_container_id" ] && docker ps -q --no-trunc | grep -q "^${postgres_container_id}$"; then
+  echo "postgres_running=yes"
+else
+  echo "postgres_running=no"
+fi
+if docker ps --filter 'name=^/finance_bot$' --format '{{.Names}}' | grep -qx 'finance_bot'; then
+  echo "finance_bot_running=yes"
+else
+  echo "finance_bot_running=no"
 fi
 
 echo "=== du -h /var/lib/docker/containers/*/*-json.log ==="
@@ -494,9 +515,14 @@ du -h /var/lib/docker/containers/*/*-json.log 2>&1
 max_log_kb=$(find /var/lib/docker/containers -type f -name '*-json.log' -exec du -k {} \; 2>/dev/null | sort -nr | awk 'NR==1 {print $1}')
 echo "max_docker_log_kb=${max_log_kb:-0}"
 
-echo "=== docker logs --tail=120 zabota-web: pattern counts only ==="
-production_logs="$(docker logs --tail=120 zabota-web 2>&1)"
-logs_exit=$?
+echo "=== backend logs --tail=120: pattern counts only ==="
+if [ -n "$backend_container_id" ]; then
+  production_logs="$(docker logs --tail=120 "$backend_container_id" 2>&1)"
+  logs_exit=$?
+else
+  production_logs=""
+  logs_exit=1
+fi
 echo "docker_logs_exit=$logs_exit"
 echo "log_error_count=$(printf '%s\n' "$production_logs" | grep -Eic 'error' || true)"
 echo "log_failed_count=$(printf '%s\n' "$production_logs" | grep -Eic 'failed' || true)"
@@ -526,7 +552,16 @@ REMOTE_AUDIT
 
     if ! grep -q '^container_running=yes$' "$SSH_AUDIT_FILE"; then
       PRODUCTION_SSH_STATUS="ошибка"
-      add_critical "Production-контейнер \`zabota-web\` не найден среди запущенных контейнеров."
+      add_critical "Production Compose backend не найден среди запущенных контейнеров."
+    fi
+
+    if ! grep -q '^postgres_running=yes$' "$SSH_AUDIT_FILE"; then
+      PRODUCTION_SSH_STATUS="ошибка"
+      add_critical "Production PostgreSQL service не найден среди запущенных контейнеров."
+    fi
+
+    if ! grep -q '^finance_bot_running=yes$' "$SSH_AUDIT_FILE"; then
+      add_warning "Отдельный workload `finance_bot` не найден среди запущенных контейнеров."
     fi
 
     MAX_DOCKER_LOG_KB="$(sed -n 's/^max_docker_log_kb=//p' "$SSH_AUDIT_FILE" | tail -n 1)"
@@ -541,7 +576,7 @@ REMOTE_AUDIT
     LOGS_EXIT="$(sed -n 's/^docker_logs_exit=//p' "$SSH_AUDIT_FILE" | tail -n 1)"
     if [ "$LOGS_EXIT" != "0" ]; then
       PRODUCTION_SSH_STATUS="ошибка"
-      add_important "Не удалось прочитать последние 120 строк логов контейнера \`zabota-web\`."
+      add_important "Не удалось прочитать последние 120 строк логов production backend."
     else
       LOG_ERROR_COUNT="$(sed -n 's/^log_error_count=//p' "$SSH_AUDIT_FILE" | tail -n 1)"
       LOG_FAILED_COUNT="$(sed -n 's/^log_failed_count=//p' "$SSH_AUDIT_FILE" | tail -n 1)"
@@ -570,6 +605,7 @@ else
     http://localhost:4000/ \
     http://localhost:4000/app \
     http://localhost:4000/api/health \
+    http://localhost:4000/api/ready \
     http://localhost:4000/prices.html \
     http://localhost:4000/security.html \
     http://localhost:4000/contacts.html \
@@ -587,6 +623,7 @@ check_url_group "Production HTTPS" \
   https://zabota-ugorsk.ru/ \
   https://zabota-ugorsk.ru/app \
   https://zabota-ugorsk.ru/api/health \
+  https://zabota-ugorsk.ru/api/ready \
   https://zabota-ugorsk.ru/prices.html \
   https://zabota-ugorsk.ru/security.html \
   https://zabota-ugorsk.ru/contacts.html \
@@ -599,7 +636,8 @@ if [ "$URL_FAILURES" -gt 0 ]; then
   check_url_group "Production HTTP fallback" \
     http://zabota-ugorsk.ru/ \
     http://zabota-ugorsk.ru/app \
-    http://zabota-ugorsk.ru/api/health
+    http://zabota-ugorsk.ru/api/health \
+    http://zabota-ugorsk.ru/api/ready
 fi
 
 detail_heading "HTTP-проверки ключевого содержимого"
@@ -610,6 +648,8 @@ if [ "$LOCAL_STATUS" != "пропущено" ]; then
   [ "$CONTENT_CHECK_RESULT" = "успешно" ] || add_important "Localhost: /app не содержит ожидаемую оболочку приложения."
   check_content_marker "Localhost: /api/health возвращает status ok" "http://localhost:4000/api/health" '"status"[[:space:]]*:[[:space:]]*"ok"'
   [ "$CONTENT_CHECK_RESULT" = "успешно" ] || add_important "Localhost: /api/health не вернул \`status: ok\`."
+  check_content_marker "Localhost: /api/ready возвращает status ok" "http://localhost:4000/api/ready" '"status"[[:space:]]*:[[:space:]]*"ok"'
+  [ "$CONTENT_CHECK_RESULT" = "успешно" ] || add_important "Localhost: /api/ready не вернул \`status: ok\`."
   check_index_html_runtime "Localhost" "http://localhost:4000/index.html"
 fi
 
@@ -627,6 +667,11 @@ check_content_marker "Production: /api/health возвращает status ok" "h
 if [ "$CONTENT_CHECK_RESULT" != "успешно" ] && [ "$PRODUCTION_URL_FAILURES" -eq 0 ]; then
   PRODUCTION_STATUS="ошибка"
   add_critical "Production: /api/health не вернул \`status: ok\`."
+fi
+check_content_marker "Production: /api/ready возвращает status ok" "https://zabota-ugorsk.ru/api/ready" '"status"[[:space:]]*:[[:space:]]*"ok"'
+if [ "$CONTENT_CHECK_RESULT" != "успешно" ] && [ "$PRODUCTION_URL_FAILURES" -eq 0 ]; then
+  PRODUCTION_STATUS="ошибка"
+  add_critical "Production: /api/ready не вернул \`status: ok\`."
 fi
 check_index_html_runtime "Production" "https://zabota-ugorsk.ru/index.html"
 
