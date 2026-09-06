@@ -17,9 +17,10 @@ PRODUCTION_DOMAIN="${PRODUCTION_DOMAIN:-zabota-ugorsk.ru}"
 
 STATUS_FILE="$(mktemp -t zabota-git-status.XXXXXX)"
 SSH_LOG_FILE="$(mktemp -t zabota-deploy-ssh.XXXXXX)"
+CI_STATUS_FILE="$(mktemp -t zabota-github-ci.XXXXXX)"
 
 cleanup() {
-  rm -f "$STATUS_FILE" "$SSH_LOG_FILE"
+  rm -f "$STATUS_FILE" "$SSH_LOG_FILE" "$CI_STATUS_FILE"
 }
 trap cleanup EXIT INT TERM
 
@@ -67,8 +68,16 @@ is_dangerous_path() {
 echo "Этап 1 из 4. Локальная preflight-проверка release"
 
 command -v git >/dev/null 2>&1 || fail "preflight не выполнен" "git не найден"
+command -v node >/dev/null 2>&1 || fail "preflight не выполнен" "node не найден"
 command -v npm >/dev/null 2>&1 || fail "preflight не выполнен" "npm не найден"
+command -v curl >/dev/null 2>&1 || fail "preflight не выполнен" "curl не найден"
+command -v python3 >/dev/null 2>&1 || fail "preflight не выполнен" "python3 не найден"
 command -v ssh >/dev/null 2>&1 || fail "preflight не выполнен" "ssh не найден"
+
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null)" || \
+  fail "preflight не выполнен" "не удалось определить версию Node.js"
+[ "$NODE_MAJOR" = "22" ] || \
+  fail "preflight не выполнен" "production release требует Node.js 22, сейчас: $(node --version)"
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   fail "preflight не выполнен" "папка со скриптом не является git-репозиторием"
@@ -103,38 +112,52 @@ done < <(git ls-files)
 
 git diff --check || fail "preflight не выполнен" "git diff --check завершился с ошибкой"
 
-echo "  npm run check..."
-npm run check || fail "preflight не выполнен" "npm run check завершился с ошибкой"
-
-echo "  npm test..."
-npm test || fail "preflight не выполнен" "npm test завершился с ошибкой"
-
-echo "  npm run build..."
-npm run build || fail "preflight не выполнен" "npm run build завершился с ошибкой"
-
-echo "Этап 2 из 4. Синхронизация main с GitHub"
+echo "Этап 2 из 4. GitHub release gate и локальная проверка"
 
 git fetch origin main || fail "GitHub sync не выполнен" "git fetch origin main завершился с ошибкой"
 
 LOCAL_SHA="$(git rev-parse HEAD)"
 REMOTE_SHA="$(git rev-parse origin/main)"
 
-if [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
-  echo "Локальный main уже совпадает с origin/main: $LOCAL_SHA"
-elif git merge-base --is-ancestor "$REMOTE_SHA" "$LOCAL_SHA"; then
-  echo "Локальный main опережает origin/main. Публикую release..."
-  git push origin main || fail "GitHub sync не выполнен" "git push origin main завершился с ошибкой"
-  git fetch origin main || fail "GitHub sync не выполнен" "не удалось подтвердить origin/main после push"
-  [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || \
-    fail "GitHub sync не выполнен" "после push локальный main не совпадает с origin/main"
-elif git merge-base --is-ancestor "$LOCAL_SHA" "$REMOTE_SHA"; then
-  fail "GitHub sync не выполнен" "локальный main отстаёт от origin/main; сначала безопасно синхронизируйте рабочую копию"
-else
-  fail "GitHub sync не выполнен" "локальный main и origin/main разошлись; автоматический merge запрещён"
-fi
+[ "$LOCAL_SHA" = "$REMOTE_SHA" ] || \
+  fail "GitHub sync не выполнен" "локальный main должен точно совпадать с origin/main; deploy-команда не выполняет push/merge"
 
 RELEASE_SHA="$(git rev-parse origin/main)"
 echo "Release SHA: $RELEASE_SHA"
+
+CI_API_URL="https://api.github.com/repos/kutuich/zabota-ryadom-web-service/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=${RELEASE_SHA}&per_page=10"
+curl -fsSL --max-time 20 \
+  -H 'Accept: application/vnd.github+json' \
+  -H 'X-GitHub-Api-Version: 2022-11-28' \
+  "$CI_API_URL" >"$CI_STATUS_FILE" || \
+  fail "GitHub CI gate не выполнен" "не удалось получить GitHub Actions status"
+
+CI_RUN_URL="$(python3 - "$CI_STATUS_FILE" "$RELEASE_SHA" <<'PY'
+import json
+import sys
+
+status_file, release_sha = sys.argv[1:]
+with open(status_file, encoding="utf-8") as source:
+    runs = json.load(source).get("workflow_runs", [])
+
+successful = [
+    run for run in runs
+    if run.get("head_sha") == release_sha
+    and run.get("status") == "completed"
+    and run.get("conclusion") == "success"
+]
+if not successful:
+    raise SystemExit(1)
+print(successful[0].get("html_url", "success"))
+PY
+)" || fail "GitHub CI gate не выполнен" "для release SHA нет завершённого успешного workflow CI"
+echo "GitHub CI подтверждён: $CI_RUN_URL"
+
+echo "  npm run check..."
+npm run check || fail "preflight не выполнен" "npm run check завершился с ошибкой"
+
+echo "  npm run build..."
+npm run build || fail "preflight не выполнен" "npm run build завершился с ошибкой"
 
 echo "Этап 3 из 4. Backup, migration и deploy production"
 

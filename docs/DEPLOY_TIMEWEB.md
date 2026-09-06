@@ -61,10 +61,10 @@ T-Bank URLs используют HTTPS. Credentials и JWT существуют 
 
 ## Перед deploy
 
-1. Проверить `git status` и release diff.
-2. Выполнить `npm run check`, `npm test`, `npm run build`, Docker build.
-3. До PostgreSQL cutover создать timestamped backup `/opt/zabota/data/zabota.db` и `.env.production` без печати содержимого; после cutover использовать проверенный PostgreSQL backup плюс backup uploads.
-4. Проверить свободное место и существование `/opt/zabota/data/uploads`.
+1. Полный release gate выполняет GitHub Actions `CI` для точного `main` SHA: PostgreSQL regression/contract tests, production build, OpenAPI, dependency audit, Docker targets и critical Playwright E2E должны завершиться успешно.
+2. `deploy-zabota-production.command` работает только из clean `main`, точно совпадающего с `origin/main`, и fail-closed проверяет успешный GitHub `CI` для этого SHA. Скрипт не делает push/merge.
+3. Локальный preflight требует Node.js 22 и выполняет `git diff --check`, `npm run check` и `npm run build`. Локальный `npm test` не дублируется: database-dependent suite уже прошёл в authoritative GitHub CI с PostgreSQL 16.
+4. Перед изменением production скрипт сохраняет rollback image и создаёт fresh PostgreSQL backup с `pg_restore --list` и checksum verification.
 5. Не запускать prune с volumes и не удалять data directory.
 
 ## Migration и application rollout
