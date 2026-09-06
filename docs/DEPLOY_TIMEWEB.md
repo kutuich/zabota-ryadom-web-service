@@ -2,20 +2,19 @@
 
 > Статус: OPERATIONAL. Выполнять только по отдельному разрешению. Текущее состояние: [PRODUCTION_CURRENT_STATE.md](PRODUCTION_CURRENT_STATE.md).
 
-> Важно: текущий production остаётся на SQLite, а основной Prisma provider репозитория подготовлен для PostgreSQL. Обычный deploy этой версии запрещён до отдельного production migration/cutover. Локальная репетиция описана в [POSTGRESQL_MIGRATION_REHEARSAL.md](POSTGRESQL_MIGRATION_REHEARSAL.md).
+> Важно: после Production 12B production работает на PostgreSQL 16 и private S3-compatible storage. Forward-only boundary пройден; SQLite остаётся только historical/rollback/audit asset и не является deploy target.
 
 ## Архитектура
 
 ```text
-Internet -> Caddy :80/:443 -> 127.0.0.1:4000 -> Compose backend:4000
-                                             -> /opt/zabota/data:/data
+GitHub main -> /opt/zabota/releases/<release-sha>
+Internet -> Caddy :80/:443 -> 127.0.0.1:4100 -> Compose backend:4000
                               Compose postgres -> persistent Docker volume
                               Compose migrate  -> one-shot prisma migrate deploy
+                              Backend storage  -> private S3-compatible bucket
 ```
 
-Application container отдаёт landing `/`, React `/app`, legal `/legal/*` и API `/api/*`. Caddyfile: `/etc/caddy/Caddyfile`. PostgreSQL data и uploads не входят в image. Текущий live production всё ещё остаётся на описанной в `PRODUCTION_CURRENT_STATE.md` SQLite-схеме до отдельного cutover.
-
-Код поддерживает S3-compatible provider, но этот документ не включает его в production автоматически. До отдельного object-storage cutover действуют текущие backup/checks для `/data/uploads`; процедура copy, verification, DB mapping и rollback boundary описана в [`OBJECT_STORAGE.md`](OBJECT_STORAGE.md).
+Application container отдаёт landing `/`, React `/app`, legal `/legal/*` и API `/api/*`. Caddyfile: `/etc/caddy/Caddyfile`. PostgreSQL data находятся в persistent volume, а private objects — в S3; они не входят в application image и release directory.
 
 ## Матрица сред
 
@@ -30,7 +29,7 @@ Application container отдаёт landing `/`, React `/app`, legal `/legal/*` �
 
 ## Production env без секретов
 
-`.env.production.example` показывает имена переменных и текущие флаги. Реальный `/opt/zabota/repo/.env.production` не читается и не коммитится.
+`.env.production.example` показывает имена переменных и текущие флаги. Реальный `/opt/zabota/releases/<active-sha>/.env.production` имеет mode `0600`, не входит в Git и без вывода значений переносится только в новый release directory. Historical `/opt/zabota/repo` не является production config source.
 
 Обязательные несекретные значения:
 
@@ -44,7 +43,7 @@ POSTGRES_USER=APP_USER
 POSTGRES_PASSWORD=REPLACE_ME
 POSTGRES_DB=zabota
 APP_ENV_FILE=.env.production
-APP_HOST_PORT=4000
+APP_HOST_PORT=4100
 ZABOTA_DATA_PATH=/opt/zabota/data
 CORS_ORIGIN=https://zabota-ugorsk.ru
 UPLOADS_DIR=/data/uploads
@@ -65,7 +64,7 @@ T-Bank URLs используют HTTPS. Credentials и JWT существуют 
 2. `deploy-zabota-production.command` работает только из clean `main`, точно совпадающего с `origin/main`, и fail-closed проверяет успешный GitHub `CI` для этого SHA. Скрипт не делает push/merge.
 3. Локальный preflight требует Node.js 22 и выполняет `git diff --check`, `npm run check` и `npm run build`. Локальный `npm test` не дублируется: database-dependent suite уже прошёл в authoritative GitHub CI с PostgreSQL 16.
 4. Перед изменением production скрипт сохраняет rollback image и создаёт fresh PostgreSQL backup с `pg_restore --list` и checksum verification.
-5. Не запускать prune с volumes и не удалять data directory.
+5. До создания release/build/backup требуется не менее 3 GiB свободного места. Скрипт никогда не запускает prune и не удаляет images, backups, releases, volumes или data.
 
 ## Migration и application rollout
 
@@ -78,13 +77,15 @@ T-Bank URLs используют HTTPS. Credentials и JWT существуют 
 Контролируемый порядок deployment:
 
 ```bash
-docker compose --env-file .env.production -f compose.production.yml build migrate backend
-docker compose --env-file .env.production -f compose.production.yml up -d --wait postgres
-docker compose --env-file .env.production -f compose.production.yml run --rm migrate
-docker compose --env-file .env.production -f compose.production.yml up -d --no-deps backend
+docker compose --project-name zabota-production --env-file .env.production -f compose.production.yml build migrate backend
+docker compose --project-name zabota-production --env-file .env.production -f compose.production.yml up -d --wait postgres
+docker compose --project-name zabota-production --env-file .env.production -f compose.production.yml run --rm migrate
+docker compose --project-name zabota-production --env-file .env.production -f compose.production.yml up -d --no-deps backend
 ```
 
-`deploy-zabota-production.command` использует этот порядок только после отдельного разрешения и PostgreSQL cutover. Он не останавливает предыдущий standalone application container до успешного завершения migration step. Любая ошибка `migrate deploy` возвращает non-zero и прерывает rollout до запуска новой версии backend. `depends_on.condition: service_healthy` обеспечивает DB readiness, а `service_completed_successfully` не позволяет Compose запустить backend после failed migration.
+`deploy-zabota-production.command` определяет active release только из Compose-label реально запущенного backend и проверяет путь `/opt/zabota/releases/<full-sha>`. Новый approved GitHub SHA клонируется в новый неперезаписываемый release directory. Любая ошибка `migrate deploy` возвращает non-zero и прерывает rollout до переключения backend. `depends_on.condition: service_healthy` обеспечивает DB readiness, а `service_completed_successfully` не позволяет Compose запустить backend после failed migration.
+
+Время успешного запуска нового backend фиксируется как консервативная `FORWARD_ONLY_BOUNDARY_UTC`: с этого момента новая версия может принимать PostgreSQL/S3 writes, поэтому автоматический DB rollback за эту границу запрещён.
 
 Application startup по-прежнему выполняет только безопасный bootstrap системных данных и опциональный явно включённый seed/bootstrap администратора; Prisma CLI он не вызывает. `db push`, reset и изменение migration history в production запрещены.
 
@@ -101,9 +102,9 @@ docker compose --project-name zabota-production --env-file .env.production -f co
 ## Health и smoke
 
 ```bash
-curl -i http://127.0.0.1:4000/api/health
+curl -i http://127.0.0.1:4100/api/health
 curl -i https://zabota-ugorsk.ru/api/health
-curl -i http://127.0.0.1:4000/api/ready
+curl -i http://127.0.0.1:4100/api/ready
 curl -i https://zabota-ugorsk.ru/api/ready
 curl -I http://zabota-ugorsk.ru
 ```
@@ -115,7 +116,7 @@ curl -I http://zabota-ugorsk.ru
 ```caddyfile
 zabota-ugorsk.ru {
     encode gzip
-    reverse_proxy 127.0.0.1:4000
+    reverse_proxy 127.0.0.1:4100
     header {
         X-Content-Type-Options nosniff
         X-Frame-Options DENY
@@ -154,6 +155,6 @@ journalctl -u caddy --no-pager -n 100
 4. При несовместимой schema остановить application и восстановить проверенный PostgreSQL backup вместе с предыдущим image по отдельно утверждённому rollback-плану.
 5. Не изменять и не удалять `/opt/zabota/data` или PostgreSQL volume; проверить local/public health и Caddy.
 
-Временная публикация container на внешнем 80 допустима только как аварийная ручная мера после остановки Caddy; после восстановления вернуть `127.0.0.1:4000`.
+Временная публикация container на внешнем 80 допустима только как аварийная ручная мера после остановки Caddy; после восстановления вернуть `127.0.0.1:4100`.
 
 Запрещены `docker volume prune`, `docker system prune -a --volumes`, destructive Prisma push и любые команды удаления `/opt/zabota/data`.

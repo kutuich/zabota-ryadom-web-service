@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # Controlled production deploy button for macOS.
-# Current topology: GitHub main -> /opt/zabota/repo -> Compose project zabota-production
-# -> PostgreSQL 16 + backend on 127.0.0.1:4100 -> Caddy.
+# Current topology: GitHub main -> immutable /opt/zabota/releases/<release-sha>
+# -> Compose project zabota-production -> PostgreSQL 16 + backend on
+# 127.0.0.1:4100 -> Caddy.
 # The script never resets passwords and never touches finance_bot.
 # Compatible with the Bash version shipped with macOS.
 
@@ -12,7 +13,7 @@ cd "$(dirname "$0")" || exit 1
 
 EXPECTED_ORIGIN="https://github.com/kutuich/zabota-ryadom-web-service.git"
 PRODUCTION_HOST="${PRODUCTION_HOST:-root@104.171.139.243}"
-PRODUCTION_PATH="${PRODUCTION_PATH:-/opt/zabota/repo}"
+PRODUCTION_ROOT="/opt/zabota"
 PRODUCTION_DOMAIN="${PRODUCTION_DOMAIN:-zabota-ugorsk.ru}"
 
 STATUS_FILE="$(mktemp -t zabota-git-status.XXXXXX)"
@@ -161,12 +162,16 @@ npm run build || fail "preflight не выполнен" "npm run build заве�
 
 echo "Этап 3 из 4. Backup, migration и deploy production"
 
-ssh "$PRODUCTION_HOST" "bash -s -- '$PRODUCTION_PATH' '$PRODUCTION_DOMAIN' '$RELEASE_SHA'" <<'REMOTE_SCRIPT' 2>&1 | tee "$SSH_LOG_FILE"
+ssh "$PRODUCTION_HOST" "bash -s -- '$PRODUCTION_ROOT' '$PRODUCTION_DOMAIN' '$RELEASE_SHA' '$EXPECTED_ORIGIN'" <<'REMOTE_SCRIPT' 2>&1 | tee "$SSH_LOG_FILE"
 set -u
 
-PRODUCTION_PATH="$1"
+PRODUCTION_ROOT="$1"
 PRODUCTION_DOMAIN="$2"
 EXPECTED_RELEASE_SHA="$3"
+EXPECTED_ORIGIN="$4"
+RELEASES_ROOT="$PRODUCTION_ROOT/releases"
+BACKUP_ROOT="$PRODUCTION_ROOT/backups"
+MIN_FREE_KIB=3145728
 
 server_error() {
   echo "DEPLOY_STAGE=server_error"
@@ -180,33 +185,85 @@ check_error() {
   exit 22
 }
 
-cd "$PRODUCTION_PATH" || server_error "на сервере нет каталога $PRODUCTION_PATH"
+[ -d "$PRODUCTION_ROOT" ] || server_error "на сервере нет production root $PRODUCTION_ROOT"
+[ -d "$RELEASES_ROOT" ] || server_error "на сервере нет releases root $RELEASES_ROOT"
 
-for required_file in Dockerfile compose.production.yml package.json package-lock.json .env.production; do
-  [ -f "$required_file" ] || server_error "не найден обязательный production-файл $required_file"
-done
+# Discover the active release from the one running Compose backend. Never pick a
+# directory by mtime/name and never trust the historical /opt/zabota/repo checkout.
+BACKEND_CONTAINERS="$(docker ps \
+  --filter 'label=com.docker.compose.project=zabota-production' \
+  --filter 'label=com.docker.compose.service=backend' \
+  --format '{{.ID}}')"
+BACKEND_COUNT="$(printf '%s\n' "$BACKEND_CONTAINERS" | sed '/^$/d' | wc -l | tr -d ' ')"
+[ "$BACKEND_COUNT" = "1" ] || \
+  server_error "ожидался ровно один running backend Compose project zabota-production, найдено: $BACKEND_COUNT"
+BACKEND_CONTAINER_BEFORE="$(printf '%s\n' "$BACKEND_CONTAINERS" | head -n 1)"
 
-ENV_MODE="$(stat -c '%a' .env.production 2>/dev/null || true)"
-case "$ENV_MODE" in
-  600|400) ;;
-  *) server_error ".env.production должен иметь mode 0600/0400, сейчас: ${ENV_MODE:-unknown}" ;;
+ACTIVE_RELEASE_DIR="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$BACKEND_CONTAINER_BEFORE" 2>/dev/null || true)"
+ACTIVE_RELEASE_DIR="$(readlink -f "$ACTIVE_RELEASE_DIR" 2>/dev/null || true)"
+CANONICAL_RELEASES_ROOT="$(readlink -f "$RELEASES_ROOT" 2>/dev/null || true)"
+[ -n "$ACTIVE_RELEASE_DIR" ] && [ -n "$CANONICAL_RELEASES_ROOT" ] || \
+  server_error "не удалось однозначно определить active release directory из backend container"
+case "$ACTIVE_RELEASE_DIR" in
+  "$CANONICAL_RELEASES_ROOT"/*) ;;
+  *) server_error "active backend не привязан к каталогу в $CANONICAL_RELEASES_ROOT" ;;
 esac
-
-COMPOSE="docker compose --project-name zabota-production --env-file .env.production -f compose.production.yml"
-
-# finance_bot is a separate workload and must not be restarted by this deploy.
-FINANCE_BOT_ID_BEFORE="$(docker ps -q --filter 'name=^/finance_bot$' | head -n 1)"
-BACKEND_CONTAINER_BEFORE="$($COMPOSE ps -q backend 2>/dev/null | head -n 1)"
-POSTGRES_CONTAINER="$($COMPOSE ps -q postgres 2>/dev/null | head -n 1)"
-TIMESTAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
-
-[ -n "$BACKEND_CONTAINER_BEFORE" ] || server_error "текущий production backend не найден; deploy остановлен до изменения topology"
-[ -n "$POSTGRES_CONTAINER" ] || server_error "текущий production PostgreSQL не найден; backup невозможен"
-docker inspect -f '{{.State.Running}}' "$POSTGRES_CONTAINER" 2>/dev/null | grep -qx true || \
-  server_error "текущий production PostgreSQL не запущен; backup невозможен"
+ACTIVE_RELEASE_SHA="${ACTIVE_RELEASE_DIR##*/}"
+printf '%s\n' "$ACTIVE_RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}$' || \
+  server_error "active release directory не имеет имя в формате full Git SHA"
 
 OLD_IMAGE_ID="$(docker inspect -f '{{.Image}}' "$BACKEND_CONTAINER_BEFORE" 2>/dev/null || true)"
 [ -n "$OLD_IMAGE_ID" ] || server_error "не удалось определить текущий application image"
+ACTIVE_RELEASE_IMAGE_TAG="zabota-web-service:release-${ACTIVE_RELEASE_SHA}"
+docker image inspect "$OLD_IMAGE_ID" -f '{{range .RepoTags}}{{println .}}{{end}}' 2>/dev/null \
+  | grep -Fxq "$ACTIVE_RELEASE_IMAGE_TAG" || \
+  server_error "running backend image не имеет immutable tag, соответствующий active release SHA"
+
+for required_file in Dockerfile compose.production.yml package.json package-lock.json .env.production; do
+  [ -f "$ACTIVE_RELEASE_DIR/$required_file" ] || \
+    server_error "active release не содержит обязательный production-файл $required_file"
+done
+
+ACTIVE_ENV_MODE="$(stat -c '%a' "$ACTIVE_RELEASE_DIR/.env.production" 2>/dev/null || true)"
+case "$ACTIVE_ENV_MODE" in
+  600|400) ;;
+  *) server_error "active .env.production должен иметь mode 0600/0400, сейчас: ${ACTIVE_ENV_MODE:-unknown}" ;;
+esac
+
+# finance_bot is a separate workload and must not be restarted by this deploy.
+FINANCE_BOT_ID_BEFORE="$(docker ps -q --filter 'name=^/finance_bot$' | head -n 1)"
+POSTGRES_CONTAINERS="$(docker ps \
+  --filter 'label=com.docker.compose.project=zabota-production' \
+  --filter 'label=com.docker.compose.service=postgres' \
+  --format '{{.ID}}')"
+POSTGRES_COUNT="$(printf '%s\n' "$POSTGRES_CONTAINERS" | sed '/^$/d' | wc -l | tr -d ' ')"
+[ "$POSTGRES_COUNT" = "1" ] || \
+  server_error "ожидался ровно один running PostgreSQL Compose project zabota-production, найдено: $POSTGRES_COUNT"
+POSTGRES_CONTAINER="$(printf '%s\n' "$POSTGRES_CONTAINERS" | head -n 1)"
+TIMESTAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
+
+docker inspect -f '{{.State.Running}}' "$POSTGRES_CONTAINER" 2>/dev/null | grep -qx true || \
+  server_error "текущий production PostgreSQL не запущен; backup невозможен"
+
+# Fail before creating a tag, release, build, or backup. Cleanup is always a
+# separate operator decision; this script never prunes production assets.
+AVAILABLE_KIB="$(df -Pk "$PRODUCTION_ROOT" 2>/dev/null | awk 'NR == 2 { print $4 }')"
+case "$AVAILABLE_KIB" in
+  ''|*[!0-9]*) server_error "не удалось определить свободное место для $PRODUCTION_ROOT" ;;
+esac
+[ "$AVAILABLE_KIB" -ge "$MIN_FREE_KIB" ] || \
+  server_error "для deploy требуется не менее 3 GiB свободного места; cleanup автоматически не выполняется"
+echo "Active release: $ACTIVE_RELEASE_SHA"
+echo "Disk preflight: $AVAILABLE_KIB KiB available"
+
+NEW_RELEASE_DIR="$RELEASES_ROOT/$EXPECTED_RELEASE_SHA"
+RELEASE_IMAGE_TAG="zabota-web-service:release-${EXPECTED_RELEASE_SHA}"
+[ ! -e "$NEW_RELEASE_DIR" ] || \
+  server_error "release directory $NEW_RELEASE_DIR уже существует; автоматическая перезапись запрещена"
+if docker image inspect "$RELEASE_IMAGE_TAG" >/dev/null 2>&1; then
+  server_error "release image tag $RELEASE_IMAGE_TAG уже существует; перезапись запрещена"
+fi
+
 ROLLBACK_TAG="zabota-web-service:predeploy-${TIMESTAMP}"
 if docker image inspect "$ROLLBACK_TAG" >/dev/null 2>&1; then
   server_error "rollback tag уже существует; существующий immutable checkpoint не будет перезаписан"
@@ -214,7 +271,6 @@ fi
 docker tag "$OLD_IMAGE_ID" "$ROLLBACK_TAG" || server_error "не удалось сохранить rollback image"
 echo "Rollback image сохранён: $ROLLBACK_TAG"
 
-BACKUP_ROOT="/opt/zabota/backups"
 BACKUP_DIR="$BACKUP_ROOT/pre-deploy-${TIMESTAMP}"
 BACKUP_FILE="$BACKUP_DIR/zabota-postgresql.dump"
 mkdir -p "$BACKUP_ROOT" || server_error "не удалось подготовить backup root"
@@ -237,28 +293,39 @@ docker exec -i "$POSTGRES_CONTAINER" pg_restore --list <"$BACKUP_FILE" >/dev/nul
 BACKUP_SIZE="$(wc -c <"$BACKUP_FILE" | tr -d ' ')"
 echo "Fresh PostgreSQL backup: $BACKUP_FILE (${BACKUP_SIZE} bytes)"
 
-# Only after the current database and application image are recoverably captured may
-# the production checkout or Compose services be reconciled with the new release.
-git diff --quiet && git diff --cached --quiet || \
-  server_error "production checkout содержит tracked changes; reset запрещён"
-git fetch origin main || server_error "git fetch origin main завершился с ошибкой"
-git reset --hard origin/main || server_error "git reset --hard origin/main завершился с ошибкой"
-SERVER_SHA="$(git rev-parse HEAD)" || server_error "не удалось определить production SHA"
+# Materialize the approved commit as a new release. Existing release directories
+# are immutable checkpoints and are never overwritten or selected by recency.
+git clone --no-checkout "$EXPECTED_ORIGIN" "$NEW_RELEASE_DIR" || \
+  server_error "не удалось создать новый release directory из GitHub"
+REMOTE_MAIN_SHA="$(git -C "$NEW_RELEASE_DIR" rev-parse refs/remotes/origin/main 2>/dev/null || true)"
+[ "$REMOTE_MAIN_SHA" = "$EXPECTED_RELEASE_SHA" ] || \
+  server_error "origin/main на сервере не совпал с approved release SHA"
+git -C "$NEW_RELEASE_DIR" checkout --detach "$EXPECTED_RELEASE_SHA" || \
+  server_error "не удалось checkout approved release SHA"
+SERVER_SHA="$(git -C "$NEW_RELEASE_DIR" rev-parse HEAD 2>/dev/null || true)"
 [ "$SERVER_SHA" = "$EXPECTED_RELEASE_SHA" ] || server_error "production checkout SHA не совпал с release SHA"
 
 for required_directory in backend frontend landing-public scripts; do
-  [ -d "$required_directory" ] || server_error "после checkout не найдена папка $required_directory"
+  [ -d "$NEW_RELEASE_DIR/$required_directory" ] || server_error "в новом release не найдена папка $required_directory"
 done
-for required_file in Dockerfile compose.production.yml package.json package-lock.json .env.production; do
-  [ -f "$required_file" ] || server_error "после checkout не найден обязательный production-файл $required_file"
+for required_file in Dockerfile compose.production.yml package.json package-lock.json; do
+  [ -f "$NEW_RELEASE_DIR/$required_file" ] || server_error "в новом release не найден обязательный файл $required_file"
 done
 
-ENV_MODE="$(stat -c '%a' .env.production 2>/dev/null || true)"
-case "$ENV_MODE" in
-  600|400) ;;
-  *) server_error ".env.production должен сохранить mode 0600/0400 после checkout" ;;
+if git -C "$NEW_RELEASE_DIR" ls-files --error-unmatch .env.production >/dev/null 2>&1; then
+  server_error ".env.production неожиданно отслеживается Git; production secrets не копируются"
+fi
+install -m 600 "$ACTIVE_RELEASE_DIR/.env.production" "$NEW_RELEASE_DIR/.env.production" || \
+  server_error "не удалось безопасно перенести production env из active release"
+ENV_MODE="$(stat -c '%a' "$NEW_RELEASE_DIR/.env.production" 2>/dev/null || true)"
+[ "$ENV_MODE" = "600" ] || server_error ".env.production в новом release должен иметь mode 0600"
+
+cd "$NEW_RELEASE_DIR" || server_error "не удалось войти в новый release directory"
+APP_ENV_FILE_VALUE="$(sed -n 's/^[[:space:]]*APP_ENV_FILE[[:space:]]*=[[:space:]]*//p' .env.production | tail -n 1 | tr -d '[:space:]')"
+case "$APP_ENV_FILE_VALUE" in
+  ''|.env.production) ;;
+  *) server_error "APP_ENV_FILE должен указывать только на .env.production внутри active release model" ;;
 esac
-
 APP_HOST_PORT_VALUE="$(sed -n 's/^[[:space:]]*APP_HOST_PORT[[:space:]]*=[[:space:]]*//p' .env.production | tail -n 1 | tr -d '[:space:]')"
 [ "$APP_HOST_PORT_VALUE" = "4100" ] || server_error "APP_HOST_PORT должен быть равен 4100 для текущего Caddy topology"
 
@@ -274,6 +341,10 @@ grep -Eq 'reverse_proxy[[:space:]]+127\.0\.0\.1:4100([[:space:]]|$)' /etc/caddy/
 echo "Собираю migration/application images..."
 $COMPOSE build migrate backend || server_error "не удалось собрать migration/application images"
 
+NEW_IMAGE_ID="$(docker image inspect zabota-production-backend -f '{{.Id}}' 2>/dev/null || true)"
+[ -n "$NEW_IMAGE_ID" ] || server_error "не удалось определить собранный backend image"
+docker tag "$NEW_IMAGE_ID" "$RELEASE_IMAGE_TAG" || server_error "не удалось сохранить immutable release image"
+
 $COMPOSE up -d --wait postgres || server_error "PostgreSQL не достиг состояния ready"
 
 echo "Выполняю one-shot Prisma migrations..."
@@ -281,6 +352,7 @@ $COMPOSE run --rm migrate || server_error "prisma migrate deploy заверши�
 
 echo "Запускаю новую application version..."
 $COMPOSE up -d --no-deps --wait backend || server_error "не удалось запустить/дождаться healthy backend"
+FORWARD_ONLY_BOUNDARY_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
 echo "Этап 4 из 4. Production smoke"
 
@@ -309,6 +381,13 @@ fi
 
 BACKEND_CONTAINER_AFTER="$($COMPOSE ps -q backend 2>/dev/null | head -n 1)"
 [ -n "$BACKEND_CONTAINER_AFTER" ] || check_error "backend container id не определён после deploy"
+BACKEND_RELEASE_DIR_AFTER="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$BACKEND_CONTAINER_AFTER" 2>/dev/null || true)"
+BACKEND_RELEASE_DIR_AFTER="$(readlink -f "$BACKEND_RELEASE_DIR_AFTER" 2>/dev/null || true)"
+[ "$BACKEND_RELEASE_DIR_AFTER" = "$NEW_RELEASE_DIR" ] || \
+  check_error "running backend после deploy не привязан к новому release directory"
+BACKEND_IMAGE_AFTER="$(docker inspect -f '{{.Image}}' "$BACKEND_CONTAINER_AFTER" 2>/dev/null || true)"
+[ "$BACKEND_IMAGE_AFTER" = "$NEW_IMAGE_ID" ] || \
+  check_error "running backend после deploy не использует собранный release image"
 
 FINANCE_BOT_ID_AFTER="$(docker ps -q --filter 'name=^/finance_bot$' | head -n 1)"
 if [ -n "$FINANCE_BOT_ID_BEFORE" ]; then
@@ -317,7 +396,10 @@ if [ -n "$FINANCE_BOT_ID_BEFORE" ]; then
 fi
 
 echo "PRODUCTION_RELEASE_SHA=$SERVER_SHA"
+echo "PRODUCTION_RELEASE_DIR=$NEW_RELEASE_DIR"
+echo "PRODUCTION_RELEASE_IMAGE=$RELEASE_IMAGE_TAG"
 echo "PRODUCTION_BACKUP=$BACKUP_FILE"
+echo "FORWARD_ONLY_BOUNDARY_UTC=$FORWARD_ONLY_BOUNDARY_UTC"
 echo "PRODUCTION_BACKEND_CONTAINER=$BACKEND_CONTAINER_AFTER"
 echo "DEPLOY_RESULT=success"
 REMOTE_SCRIPT
@@ -344,6 +426,6 @@ echo "Health/readiness/HTTPS smoke - успешно"
 echo "Пароль superadmin НЕ изменялся"
 echo
 echo "Следующий отдельный шаг для восстановления superadmin:"
-echo "  cd $PRODUCTION_PATH"
+echo "  cd $PRODUCTION_ROOT/releases/$RELEASE_SHA"
 echo "  docker compose --project-name zabota-production --env-file .env.production -f compose.production.yml exec backend reset-superadmin-password"
 pause_and_exit 0
