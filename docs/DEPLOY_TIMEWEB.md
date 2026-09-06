@@ -85,6 +85,8 @@ docker compose --project-name zabota-production --env-file .env.production -f co
 
 `deploy-zabota-production.command` определяет active release только из Compose-label реально запущенного backend и проверяет путь `/opt/zabota/releases/<full-sha>`. Новый approved GitHub SHA клонируется в новый неперезаписываемый release directory. Любая ошибка `migrate deploy` возвращает non-zero и прерывает rollout до переключения backend. `depends_on.condition: service_healthy` обеспечивает DB readiness, а `service_completed_successfully` не позволяет Compose запустить backend после failed migration.
 
+Если запуск остановился после создания release directory, повтор для того же SHA fail-closed остановится и не перезапишет каталог. Только после read-only подтверждения, что каталог не является active release и не используется container/image, его можно удалить отдельной ручной recovery-операцией. Rollback tags и verified backups не удаляются: они имеют timestamped имена и не блокируют следующий release SHA.
+
 Время успешного запуска нового backend фиксируется как консервативная `FORWARD_ONLY_BOUNDARY_UTC`: с этого момента новая версия может принимать PostgreSQL/S3 writes, поэтому автоматический DB rollback за эту границу запрещён.
 
 Application startup по-прежнему выполняет только безопасный bootstrap системных данных и опциональный явно включённый seed/bootstrap администратора; Prisma CLI он не вызывает. `db push`, reset и изменение migration history в production запрещены.

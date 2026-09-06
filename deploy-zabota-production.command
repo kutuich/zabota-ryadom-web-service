@@ -321,7 +321,13 @@ ENV_MODE="$(stat -c '%a' "$NEW_RELEASE_DIR/.env.production" 2>/dev/null || true)
 [ "$ENV_MODE" = "600" ] || server_error ".env.production в новом release должен иметь mode 0600"
 
 cd "$NEW_RELEASE_DIR" || server_error "не удалось войти в новый release directory"
-APP_ENV_FILE_VALUE="$(sed -n 's/^[[:space:]]*APP_ENV_FILE[[:space:]]*=[[:space:]]*//p' .env.production | tail -n 1 | tr -d '[:space:]')"
+APP_ENV_FILE_VALUE="$(sed -n 's/^[[:space:]]*APP_ENV_FILE[[:space:]]*=[[:space:]]*//p' .env.production \
+  | tail -n 1 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+case "$APP_ENV_FILE_VALUE" in
+  \"*\") APP_ENV_FILE_VALUE="${APP_ENV_FILE_VALUE#\"}"; APP_ENV_FILE_VALUE="${APP_ENV_FILE_VALUE%\"}" ;;
+  \'*\') APP_ENV_FILE_VALUE="${APP_ENV_FILE_VALUE#\'}"; APP_ENV_FILE_VALUE="${APP_ENV_FILE_VALUE%\'}" ;;
+  \"*|*\"|\'*|*\') server_error "APP_ENV_FILE содержит несогласованные кавычки" ;;
+esac
 case "$APP_ENV_FILE_VALUE" in
   ''|.env.production) ;;
   *) server_error "APP_ENV_FILE должен указывать только на .env.production внутри active release model" ;;
